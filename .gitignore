@@ -1,0 +1,7 @@
+node_modules/
+.firebase/
+firebase-debug.log
+*.log
+.env
+deploy-output.txt
+Multibranch-Pharmacy-system/

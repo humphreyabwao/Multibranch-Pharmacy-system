@@ -1,0 +1,1047 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Rider Dashboard</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-light: #eff6ff;
+            --green: #059669;
+            --green-bg: #d1fae5;
+            --orange: #f59e0b;
+            --orange-bg: #fef3c7;
+            --red: #dc2626;
+            --red-bg: #fee2e2;
+            --blue: #3b82f6;
+            --blue-bg: #dbeafe;
+            --gray: #64748b;
+            --gray-bg: #f1f5f9;
+            --text: #1e293b;
+            --text-sub: #64748b;
+            --border: #e2e8f0;
+            --bg: #f8fafc;
+            --card: #ffffff;
+            --radius: 10px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* ═══ HEADER ═══ */
+        .rh-header {
+            background: linear-gradient(135deg, #1e3a8a, #2563eb);
+            color: #fff;
+            padding: 16px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        .rh-header-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .rh-header h1 {
+            font-size: 1.05rem;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 700;
+        }
+        .rh-header-sub {
+            font-size: 0.72rem;
+            opacity: 0.8;
+            margin-top: 2px;
+        }
+        .rh-tab-bar {
+            display: flex;
+            gap: 4px;
+            margin-top: 12px;
+        }
+        .rh-tab {
+            flex: 1;
+            padding: 8px 6px;
+            border: none;
+            border-radius: 8px;
+            background: rgba(255,255,255,0.15);
+            color: rgba(255,255,255,0.8);
+            font-size: 0.72rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+            transition: all 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .rh-tab.active {
+            background: #fff;
+            color: var(--primary);
+        }
+        .rh-tab-count {
+            background: rgba(255,255,255,0.3);
+            padding: 1px 7px;
+            border-radius: 10px;
+            font-size: 0.65rem;
+        }
+        .rh-tab.active .rh-tab-count {
+            background: var(--primary-light);
+            color: var(--primary);
+        }
+
+        /* ═══ RIDER INFO ═══ */
+        .rh-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 16px;
+            background: var(--card);
+            border-bottom: 1px solid var(--border);
+        }
+        .rh-avatar {
+            width: 42px; height: 42px;
+            border-radius: 50%;
+            background: var(--primary);
+            color: #fff;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 0.95rem; font-weight: 700;
+            flex-shrink: 0;
+        }
+        .rh-info-text { flex: 1; min-width: 0; }
+        .rh-info-name {
+            font-size: 0.9rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .rh-info-meta {
+            font-size: 0.75rem;
+            color: var(--text-sub);
+            margin-top: 1px;
+        }
+        .rh-date {
+            padding: 4px 10px;
+            border-radius: 16px;
+            background: var(--primary-light);
+            color: var(--primary);
+            font-size: 0.68rem;
+            font-weight: 600;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+
+        /* ═══ STATS ═══ */
+        .rh-stats {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 6px;
+            padding: 10px 12px;
+        }
+        .rh-stat {
+            text-align: center;
+            padding: 8px 4px;
+            background: var(--card);
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+        }
+        .rh-stat-num {
+            font-size: 1.2rem;
+            font-weight: 800;
+            display: block;
+            line-height: 1.2;
+        }
+        .rh-stat-label {
+            font-size: 0.6rem;
+            color: var(--text-sub);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-top: 2px;
+        }
+
+        /* ═══ COMPANY GROUP ═══ */
+        .rh-company-group {
+            margin: 8px 12px;
+        }
+        .rh-company-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: linear-gradient(135deg, #1e3a8a, #3b82f6);
+            color: #fff;
+            border-radius: var(--radius) var(--radius) 0 0;
+            font-size: 0.78rem;
+            font-weight: 700;
+        }
+        .rh-company-header i { font-size: 0.7rem; opacity: 0.8; }
+        .rh-company-count {
+            margin-left: auto;
+            background: rgba(255,255,255,0.25);
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.65rem;
+        }
+        .rh-company-orders {
+            border: 1px solid var(--border);
+            border-top: none;
+            border-radius: 0 0 var(--radius) var(--radius);
+            overflow: hidden;
+        }
+
+        /* ═══ ORDER CARD ═══ */
+        .rh-order {
+            background: var(--card);
+            border-bottom: 1px solid var(--border);
+            transition: background 0.15s;
+        }
+        .rh-order:last-child { border-bottom: none; }
+        .rh-order-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 12px 0;
+        }
+        .rh-order-id {
+            font-family: 'Courier New', monospace;
+            font-weight: 700;
+            font-size: 0.78rem;
+            color: var(--primary);
+        }
+        .rh-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.62rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+        .rh-badge--dispatched { background: var(--orange-bg); color: #92400e; }
+        .rh-badge--in-transit { background: var(--blue-bg); color: #1d4ed8; }
+        .rh-badge--delivered { background: var(--green-bg); color: #047857; }
+
+        .rh-order-body { padding: 8px 12px 10px; }
+        .rh-customer {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 4px;
+        }
+        .rh-customer-name {
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+        .rh-customer-phone {
+            margin-left: auto;
+        }
+        .rh-customer-phone a {
+            color: var(--primary);
+            text-decoration: none;
+            font-size: 0.75rem;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            background: var(--primary-light);
+            padding: 4px 10px;
+            border-radius: 14px;
+            font-weight: 600;
+        }
+        .rh-address {
+            font-size: 0.75rem;
+            color: var(--text-sub);
+            display: flex;
+            align-items: flex-start;
+            gap: 6px;
+            margin-bottom: 6px;
+            padding-left: 2px;
+        }
+        .rh-address i { margin-top: 2px; font-size: 0.7rem; color: var(--orange); }
+
+        .rh-order-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            font-size: 0.75rem;
+            color: var(--text-sub);
+            margin-bottom: 4px;
+        }
+        .rh-order-meta span {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .rh-order-meta i { font-size: 0.7rem; }
+
+        .rh-amount {
+            font-size: 0.92rem;
+            font-weight: 800;
+            color: var(--text);
+        }
+        .rh-payment-badge {
+            font-size: 0.62rem;
+            padding: 2px 7px;
+            border-radius: 8px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+        .rh-payment-badge.paid { background: var(--green-bg); color: #047857; }
+        .rh-payment-badge.unpaid { background: var(--red-bg); color: #991b1b; }
+        .rh-payment-badge.partial { background: var(--orange-bg); color: #92400e; }
+
+        .rh-notes {
+            margin-top: 6px;
+            padding: 6px 10px;
+            background: #fffbeb;
+            border-radius: 6px;
+            font-size: 0.72rem;
+            color: #92400e;
+            border: 1px solid #fde68a;
+        }
+        .rh-notes i { margin-right: 4px; }
+
+        /* ═══ ITEM LIST (expandable) ═══ */
+        .rh-items-toggle {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            border: none;
+            background: var(--gray-bg);
+            width: 100%;
+            cursor: pointer;
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: var(--text-sub);
+            transition: background 0.15s;
+        }
+        .rh-items-toggle:hover { background: #e2e8f0; }
+        .rh-items-toggle i.arrow { margin-left: auto; transition: transform 0.2s; font-size: 0.65rem; }
+        .rh-items-toggle.open i.arrow { transform: rotate(180deg); }
+        .rh-items-list {
+            display: none;
+            padding: 0 12px 8px;
+            background: var(--gray-bg);
+        }
+        .rh-items-list.open { display: block; }
+        .rh-item-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 5px 0;
+            border-bottom: 1px dashed #e2e8f0;
+            font-size: 0.72rem;
+        }
+        .rh-item-row:last-child { border-bottom: none; }
+        .rh-item-name { flex: 1; color: var(--text); font-weight: 500; }
+        .rh-item-qty { color: var(--text-sub); white-space: nowrap; margin-left: 8px; }
+
+        /* ═══ ORDER ACTIONS ═══ */
+        .rh-actions {
+            display: flex;
+            gap: 6px;
+            padding: 8px 12px;
+            border-top: 1px solid var(--border);
+        }
+        .rh-act-btn {
+            flex: 1;
+            padding: 10px 6px;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+            transition: all 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+        .rh-act-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .rh-act-btn:active:not(:disabled) { transform: scale(0.97); }
+        .rh-btn-transit { background: var(--blue-bg); color: #1d4ed8; }
+        .rh-btn-transit:hover:not(:disabled) { background: var(--blue); color: #fff; }
+        .rh-btn-deliver { background: var(--green-bg); color: #047857; }
+        .rh-btn-deliver:hover:not(:disabled) { background: var(--green); color: #fff; }
+        .rh-btn-call {
+            background: var(--gray-bg);
+            color: var(--text-sub);
+            flex: 0 0 42px;
+        }
+        .rh-btn-call:hover { background: var(--green-bg); color: var(--green); }
+
+        /* ═══ HISTORY TAB ═══ */
+        .rh-history-section { padding: 12px; }
+        .rh-history-date-group { margin-bottom: 16px; }
+        .rh-history-date {
+            font-size: 0.72rem;
+            font-weight: 700;
+            color: var(--text-sub);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 8px;
+        }
+        .rh-history-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            background: var(--card);
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+            margin-bottom: 6px;
+        }
+        .rh-history-icon {
+            width: 36px; height: 36px;
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 0.8rem;
+            flex-shrink: 0;
+        }
+        .rh-history-icon.delivered { background: var(--green-bg); color: var(--green); }
+        .rh-history-icon.cancelled { background: var(--red-bg); color: var(--red); }
+        .rh-history-info { flex: 1; min-width: 0; }
+        .rh-history-customer {
+            font-size: 0.82rem;
+            font-weight: 600;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .rh-history-meta {
+            font-size: 0.7rem;
+            color: var(--text-sub);
+        }
+        .rh-history-amount {
+            font-size: 0.85rem;
+            font-weight: 800;
+            white-space: nowrap;
+        }
+        .rh-history-empty {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-sub);
+        }
+        .rh-history-empty i { font-size: 2rem; margin-bottom: 8px; display: block; opacity: 0.3; }
+        .rh-history-summary {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 6px;
+            padding: 0 0 12px;
+        }
+
+        /* ═══ STATES ═══ */
+        .rh-loading {
+            text-align: center;
+            padding: 80px 20px;
+            color: var(--text-sub);
+        }
+        .rh-loading i { font-size: 2rem; margin-bottom: 12px; display: block; color: var(--primary); }
+        .rh-error {
+            text-align: center;
+            padding: 80px 20px;
+        }
+        .rh-error i { font-size: 2.5rem; margin-bottom: 12px; display: block; color: var(--red); }
+        .rh-error h3 { color: var(--red); margin-bottom: 4px; font-size: 1rem; }
+        .rh-error p { color: var(--text-sub); font-size: 0.82rem; line-height: 1.5; }
+        .rh-empty {
+            text-align: center;
+            padding: 50px 20px;
+            color: var(--text-sub);
+        }
+        .rh-empty i { font-size: 2rem; margin-bottom: 8px; display: block; opacity: 0.3; }
+        .rh-empty p { font-size: 0.85rem; }
+
+        /* ═══ TOAST ═══ */
+        .rh-toast {
+            position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(20px);
+            padding: 10px 24px; border-radius: 25px; color: #fff;
+            font-size: 0.78rem; font-weight: 600; z-index: 9999;
+            opacity: 0; transition: all 0.3s; pointer-events: none;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+            max-width: 90vw; text-align: center;
+        }
+        .rh-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+        .rh-toast.success { background: var(--green); }
+        .rh-toast.error { background: var(--red); }
+
+        /* ═══ LIVE INDICATOR ═══ */
+        .rh-live {
+            display: flex; align-items: center; justify-content: center; gap: 6px;
+            padding: 4px;
+            font-size: 0.65rem;
+            color: var(--green);
+            font-weight: 600;
+        }
+        .rh-live-dot {
+            width: 6px; height: 6px;
+            border-radius: 50%;
+            background: var(--green);
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.3;} }
+
+        /* ═══ RESPONSIVE ═══ */
+        @media (max-width: 380px) {
+            .rh-stats { grid-template-columns: repeat(2, 1fr); }
+            .rh-date { display: none; }
+            .rh-tab { font-size: 0.65rem; padding: 7px 4px; }
+        }
+        @media (min-width: 600px) {
+            .rh-stats { max-width: 500px; margin: 10px auto; }
+            .rh-company-group { max-width: 560px; margin: 8px auto; }
+            .rh-history-section { max-width: 560px; margin: 0 auto; }
+        }
+    </style>
+</head>
+<body>
+    <div id="rider-app">
+        <div class="rh-loading" id="rider-loading">
+            <i class="fas fa-spinner fa-spin"></i>
+            <p>Loading your deliveries...</p>
+        </div>
+    </div>
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+
+    <script>
+    (function() {
+        'use strict';
+
+        firebase.initializeApp({
+            apiKey: "AIzaSyDao6sLkfp-b3bHpbJYUV7Pgidpp2MUMI8",
+            authDomain: "multitenant-pharamcy-system.firebaseapp.com",
+            projectId: "multitenant-pharamcy-system",
+            storageBucket: "multitenant-pharamcy-system.firebasestorage.app",
+            messagingSenderId: "387741125014",
+            appId: "1:387741125014:web:9aa841106bc29e647135b7"
+        });
+
+        var db = firebase.firestore();
+        var app = document.getElementById('rider-app');
+        var token = new URLSearchParams(window.location.search).get('token');
+        var session = null;
+        var orders = [];
+        var listeners = [];
+        var businessNames = {}; // businessId → name
+        var activeTab = 'today';
+
+        if (!token) {
+            showError('Invalid Link', 'No rider token found. Please ask your dispatcher for a valid link.');
+            return;
+        }
+
+        loadSession();
+
+        // ═══════════════════════════════
+        // SESSION LOADER
+        // ═══════════════════════════════
+        function loadSession() {
+            db.collection('rider_sessions').doc(token).get().then(function(doc) {
+                if (!doc.exists) {
+                    showError('Link Not Found', 'This rider link was not found. Please request a new link from your dispatcher.');
+                    return;
+                }
+                session = doc.data();
+
+                var today = new Date().toISOString().split('T')[0];
+                if (session.date !== today) {
+                    showError('Link Expired', 'This link was for ' + session.date + '. Please request a new link for today\u2019s deliveries.');
+                    return;
+                }
+
+                // Load business names from session data (no auth required)
+                var bizIds = session.businessIds || (session.businessId ? [session.businessId] : []);
+                businessNames = session.businessNames || {};
+                // Ensure all bizIds have a name
+                bizIds.forEach(function(bid) {
+                    if (!businessNames[bid]) businessNames[bid] = bid;
+                });
+
+                renderApp();
+                subscribeOrders();
+            }).catch(function(err) {
+                console.error('Session load error:', err);
+                showError('Connection Error', 'Could not load your session. Check your internet and try again.');
+            });
+        }
+
+        // ═══════════════════════════════
+        // MAIN RENDER
+        // ═══════════════════════════════
+        function renderApp() {
+            var typeIcons = { motorbike: '\uD83C\uDFCD\uFE0F', van: '\uD83D\uDE90', truck: '\uD83D\uDE9B', plane: '\u2708\uFE0F', cargo: '\uD83D\uDEA2', overseas: '\uD83C\uDF0D' };
+            var icon = typeIcons[session.agentType] || '\uD83D\uDE9A';
+            var initials = (session.riderName || 'R').split(' ').map(function(n) { return n[0]; }).join('').toUpperCase().slice(0, 2);
+            var dateLabel = new Date().toLocaleDateString('en-KE', { weekday: 'short', day: 'numeric', month: 'short' });
+
+            // Use first business name as brand
+            var bizIds = session.businessIds || (session.businessId ? [session.businessId] : []);
+            var brandName = (bizIds.length === 1 && businessNames[bizIds[0]]) ? businessNames[bizIds[0]] : 'PharmaFlow';
+
+            document.title = brandName + ' \u2014 Rider Dashboard';
+
+            app.innerHTML =
+                '<div class="rh-header">' +
+                '  <div class="rh-header-top">' +
+                '    <div><h1><i class="fas fa-motorcycle"></i> ' + esc(session.riderName) + '</h1>' +
+                '    <div class="rh-header-sub">' + icon + ' ' + esc(ucfirst(session.agentType || 'Rider')) + ' \u00B7 ' + esc(session.riderPhone || '') + '</div></div>' +
+                '  </div>' +
+                '  <div class="rh-tab-bar">' +
+                '    <button class="rh-tab active" data-tab="today"><i class="fas fa-route"></i> Today <span class="rh-tab-count" id="tab-today-count">0</span></button>' +
+                '    <button class="rh-tab" data-tab="history"><i class="fas fa-clock-rotate-left"></i> History</button>' +
+                '  </div>' +
+                '</div>' +
+                '<div class="rh-info">' +
+                '  <div class="rh-avatar">' + initials + '</div>' +
+                '  <div class="rh-info-text">' +
+                '    <div class="rh-info-name">' + icon + ' Delivery Dashboard</div>' +
+                '    <div class="rh-info-meta">' + (bizIds.length > 1 ? bizIds.length + ' companies' : esc(brandName)) + ' \u00B7 Live updates</div>' +
+                '  </div>' +
+                '  <span class="rh-date"><i class="fas fa-calendar-day"></i> ' + dateLabel + '</span>' +
+                '</div>' +
+                '<div class="rh-stats" id="rh-stats"></div>' +
+                '<div class="rh-live"><span class="rh-live-dot"></span> Live \u2014 updates automatically</div>' +
+                '<div id="rh-tab-today"></div>' +
+                '<div id="rh-tab-history" style="display:none;"></div>';
+
+            // Tab switching
+            var tabs = app.querySelectorAll('.rh-tab');
+            tabs.forEach(function(tab) {
+                tab.addEventListener('click', function() {
+                    tabs.forEach(function(t) { t.classList.remove('active'); });
+                    tab.classList.add('active');
+                    activeTab = tab.dataset.tab;
+                    document.getElementById('rh-tab-today').style.display = activeTab === 'today' ? 'block' : 'none';
+                    document.getElementById('rh-tab-history').style.display = activeTab === 'history' ? 'block' : 'none';
+                    if (activeTab === 'history') loadHistory();
+                });
+            });
+
+            updateStats();
+        }
+
+        // ═══════════════════════════════
+        // SUBSCRIBE TO TODAY'S ORDERS
+        // ═══════════════════════════════
+        function subscribeOrders() {
+            listeners.forEach(function(unsub) { unsub(); });
+            listeners = [];
+            orders = [];
+
+            // Use deliveries array (multi-business) or fallback to legacy format
+            var deliveries = session.deliveries || [];
+            if (deliveries.length === 0 && session.orderIds && session.businessId) {
+                deliveries = session.orderIds.map(function(oid) {
+                    return { businessId: session.businessId, orderId: oid };
+                });
+            }
+
+            if (deliveries.length === 0) {
+                renderTodayOrders();
+                return;
+            }
+
+            var loaded = 0;
+            var total = deliveries.length;
+
+            deliveries.forEach(function(d) {
+                var unsub = db.collection('businesses').doc(d.businessId)
+                    .collection('wholesale_orders').doc(d.orderId)
+                    .onSnapshot(function(doc) {
+                        if (doc.exists) {
+                            var data = Object.assign({ id: doc.id, _businessId: d.businessId }, doc.data());
+                            var idx = orders.findIndex(function(o) { return o.id === doc.id && o._businessId === d.businessId; });
+                            if (idx >= 0) orders[idx] = data;
+                            else orders.push(data);
+                        }
+                        loaded++;
+                        if (loaded >= total || orders.length > 0) renderTodayOrders();
+                    }, function(err) {
+                        console.error('Order listen error:', d.orderId, err);
+                        loaded++;
+                        if (loaded >= total) renderTodayOrders();
+                    });
+                listeners.push(unsub);
+            });
+        }
+
+        // ═══════════════════════════════
+        // RENDER TODAY'S ORDERS (grouped by company)
+        // ═══════════════════════════════
+        function renderTodayOrders() {
+            var container = document.getElementById('rh-tab-today');
+            if (!container) return;
+
+            updateStats();
+
+            // Update tab count
+            var countEl = document.getElementById('tab-today-count');
+            if (countEl) countEl.textContent = orders.length;
+
+            if (orders.length === 0) {
+                container.innerHTML = '<div class="rh-empty"><i class="fas fa-inbox"></i><p>No deliveries assigned yet</p></div>';
+                return;
+            }
+
+            // Group by business
+            var groups = {};
+            orders.forEach(function(o) {
+                var bid = o._businessId || session.businessId || 'unknown';
+                if (!groups[bid]) groups[bid] = [];
+                groups[bid].push(o);
+            });
+
+            // Sort each group: pending first then delivered
+            var statusOrder = { dispatched: 0, 'in-transit': 1, delivered: 2 };
+            Object.keys(groups).forEach(function(bid) {
+                groups[bid].sort(function(a, b) {
+                    var aS = (a.dispatch && a.dispatch.status) || 'dispatched';
+                    var bS = (b.dispatch && b.dispatch.status) || 'dispatched';
+                    return (statusOrder[aS] || 0) - (statusOrder[bS] || 0);
+                });
+            });
+
+            var html = '';
+            var bizKeys = Object.keys(groups);
+
+            bizKeys.forEach(function(bid) {
+                var bizName = businessNames[bid] || bid;
+                var bizOrders = groups[bid];
+                var pendingCount = bizOrders.filter(function(o) { var s = (o.dispatch && o.dispatch.status) || 'dispatched'; return s !== 'delivered'; }).length;
+
+                html += '<div class="rh-company-group">';
+                html += '<div class="rh-company-header"><i class="fas fa-building"></i> ' + esc(bizName) +
+                    '<span class="rh-company-count">' + bizOrders.length + ' order' + (bizOrders.length !== 1 ? 's' : '') +
+                    (pendingCount > 0 ? ' \u00B7 ' + pendingCount + ' pending' : '') + '</span></div>';
+                html += '<div class="rh-company-orders">';
+
+                bizOrders.forEach(function(o) {
+                    html += renderOrderCard(o, bid);
+                });
+
+                html += '</div></div>';
+            });
+
+            container.innerHTML = html;
+
+            // Bind item toggle buttons
+            container.querySelectorAll('.rh-items-toggle').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    var list = btn.nextElementSibling;
+                    btn.classList.toggle('open');
+                    list.classList.toggle('open');
+                });
+            });
+        }
+
+        function renderOrderCard(o, businessId) {
+            var d = o.dispatch || {};
+            var status = d.status || 'dispatched';
+            var statusLabel = status === 'in-transit' ? 'In Transit' : ucfirst(status);
+            var items = o.items || [];
+            var itemCount = items.length;
+            var totalQty = items.reduce(function(s, it) { return s + (it.quantity || 0); }, 0);
+            var phone = (o.customer && o.customer.phone) || '';
+            var address = (o.customer && o.customer.address) || '';
+            var payStatus = o.paymentStatus || 'unpaid';
+
+            var notesHtml = d.notes ?
+                '<div class="rh-notes"><i class="fas fa-sticky-note"></i>' + esc(d.notes) + '</div>' : '';
+
+            // Item list (expandable)
+            var itemsHtml = '';
+            if (itemCount > 0) {
+                itemsHtml += '<button class="rh-items-toggle"><i class="fas fa-list"></i> ' + itemCount + ' items \u00B7 ' + totalQty + ' units <i class="fas fa-chevron-down arrow"></i></button>';
+                itemsHtml += '<div class="rh-items-list">';
+                items.forEach(function(it) {
+                    itemsHtml += '<div class="rh-item-row"><span class="rh-item-name">' + esc(it.name || it.itemName || 'Item') + '</span>' +
+                        '<span class="rh-item-qty">\u00D7' + (it.quantity || 0) + '</span></div>';
+                });
+                itemsHtml += '</div>';
+            }
+
+            // Actions
+            var actionsHtml = '';
+            if (status !== 'delivered') {
+                actionsHtml = '<div class="rh-actions">';
+                if (phone) {
+                    actionsHtml += '<a href="tel:' + esc(phone) + '" class="rh-act-btn rh-btn-call"><i class="fas fa-phone"></i></a>';
+                }
+                if (status === 'dispatched') {
+                    actionsHtml += '<button class="rh-act-btn rh-btn-transit" onclick="window._ru(\'' + esc(o.id) + '\',\'' + esc(businessId) + '\',\'in-transit\')">' +
+                        '<i class="fas fa-shipping-fast"></i> In Transit</button>';
+                }
+                actionsHtml += '<button class="rh-act-btn rh-btn-deliver" onclick="window._ru(\'' + esc(o.id) + '\',\'' + esc(businessId) + '\',\'delivered\')">' +
+                    '<i class="fas fa-check-circle"></i> Delivered</button>';
+                actionsHtml += '</div>';
+            }
+
+            return '<div class="rh-order" id="order-' + o.id + '">' +
+                '<div class="rh-order-top">' +
+                '  <span class="rh-order-id">#' + esc(o.orderId || o.id) + '</span>' +
+                '  <span class="rh-badge rh-badge--' + status + '"><i class="fas fa-circle" style="font-size:5px"></i> ' + statusLabel + '</span>' +
+                '</div>' +
+                '<div class="rh-order-body">' +
+                '  <div class="rh-customer">' +
+                '    <span class="rh-customer-name"><i class="fas fa-user" style="color:var(--primary);font-size:0.75rem;margin-right:6px"></i>' + esc((o.customer && o.customer.name) || 'Customer') + '</span>' +
+                (phone ? '    <span class="rh-customer-phone"><a href="tel:' + esc(phone) + '"><i class="fas fa-phone"></i> Call</a></span>' : '') +
+                '  </div>' +
+                (address ? '  <div class="rh-address"><i class="fas fa-map-marker-alt"></i> ' + esc(address) + '</div>' : '') +
+                '  <div class="rh-order-meta">' +
+                '    <span><i class="fas fa-boxes-stacked"></i> ' + itemCount + ' items</span>' +
+                '    <span><i class="fas fa-cubes"></i> ' + totalQty + ' units</span>' +
+                '  </div>' +
+                '  <div><span class="rh-amount">KSH ' + formatNum(o.grandTotal || 0) + '</span>' +
+                '  <span class="rh-payment-badge ' + payStatus + '">' + ucfirst(payStatus) + '</span></div>' +
+                notesHtml +
+                '</div>' +
+                itemsHtml +
+                actionsHtml +
+                '</div>';
+        }
+
+        // ═══════════════════════════════
+        // UPDATE STATUS (global handler)
+        // ═══════════════════════════════
+        window._ru = function(orderId, businessId, newStatus) {
+            if (!session) return;
+
+            var order = orders.find(function(o) { return o.id === orderId; });
+            if (!order) return;
+
+            var btn = event.target.closest('.rh-act-btn');
+            if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'; }
+
+            var updateData = {
+                'dispatch.status': newStatus,
+                updatedAt: new Date().toISOString()
+            };
+            if (newStatus === 'delivered') {
+                updateData['dispatch.deliveredAt'] = new Date().toISOString();
+            }
+
+            db.collection('businesses').doc(businessId)
+                .collection('wholesale_orders').doc(orderId)
+                .update(updateData).then(function() {
+                    showToast(newStatus === 'delivered' ? 'Delivered!' : 'In transit!', 'success');
+
+                    if (newStatus === 'delivered' && order.dispatch && order.dispatch.riderId) {
+                        db.collection('businesses').doc(businessId)
+                            .collection('riders').doc(order.dispatch.riderId)
+                            .update({
+                                deliveryCount: firebase.firestore.FieldValue.increment(1),
+                                status: 'available',
+                                updatedAt: new Date().toISOString()
+                            }).catch(function() {});
+                    }
+                }).catch(function(err) {
+                    showToast('Failed: ' + err.message, 'error');
+                    if (btn) { btn.disabled = false; }
+                });
+        };
+
+        // ═══════════════════════════════
+        // STATS
+        // ═══════════════════════════════
+        function updateStats() {
+            var el = document.getElementById('rh-stats');
+            if (!el) return;
+            var total = orders.length;
+            var delivered = orders.filter(function(o) { return o.dispatch && o.dispatch.status === 'delivered'; }).length;
+            var transit = orders.filter(function(o) { return o.dispatch && o.dispatch.status === 'in-transit'; }).length;
+            var pending = total - delivered - transit;
+            var companies = new Set(orders.map(function(o) { return o._businessId; })).size;
+
+            el.innerHTML =
+                '<div class="rh-stat"><span class="rh-stat-num">' + total + '</span><span class="rh-stat-label">Total</span></div>' +
+                '<div class="rh-stat"><span class="rh-stat-num" style="color:var(--orange)">' + pending + '</span><span class="rh-stat-label">Pending</span></div>' +
+                '<div class="rh-stat"><span class="rh-stat-num" style="color:var(--blue)">' + transit + '</span><span class="rh-stat-label">Transit</span></div>' +
+                '<div class="rh-stat"><span class="rh-stat-num" style="color:var(--green)">' + delivered + '</span><span class="rh-stat-label">Delivered</span></div>';
+        }
+
+        // ═══════════════════════════════
+        // DELIVERY HISTORY
+        // ═══════════════════════════════
+        var historyLoaded = false;
+        function loadHistory() {
+            if (historyLoaded) return;
+            historyLoaded = true;
+
+            var container = document.getElementById('rh-tab-history');
+            if (!container) return;
+            container.innerHTML = '<div class="rh-loading"><i class="fas fa-spinner fa-spin"></i><p>Loading history...</p></div>';
+
+            if (!session || !session.riderId) {
+                container.innerHTML = '<div class="rh-history-empty"><i class="fas fa-clock-rotate-left"></i><p>No history available</p></div>';
+                return;
+            }
+
+            // Query all rider_sessions for this rider (by riderId)
+            db.collection('rider_sessions')
+                .where('riderId', '==', session.riderId)
+                .get().then(function(snap) {
+                    if (snap.empty) {
+                        container.innerHTML = '<div class="rh-history-empty"><i class="fas fa-clock-rotate-left"></i><p>No previous deliveries found</p></div>';
+                        return;
+                    }
+
+                    // Collect all sessions sorted by date desc
+                    var sessions = [];
+                    snap.forEach(function(doc) {
+                        var d = doc.data();
+                        d._token = doc.id;
+                        sessions.push(d);
+                    });
+                    sessions.sort(function(a, b) { return (b.date || '').localeCompare(a.date || ''); });
+
+                    // For each session, fetch the orders
+                    var allDeliveries = [];
+                    var fetchPromises = [];
+
+                    sessions.forEach(function(sess) {
+                        var sessNames = sess.businessNames || {};
+                        // Merge session names into global map
+                        Object.keys(sessNames).forEach(function(bid) {
+                            if (!businessNames[bid]) businessNames[bid] = sessNames[bid];
+                        });
+                        var deliveries = sess.deliveries || [];
+                        if (deliveries.length === 0 && sess.orderIds && sess.businessId) {
+                            deliveries = sess.orderIds.map(function(oid) { return { businessId: sess.businessId, orderId: oid }; });
+                        }
+                        deliveries.forEach(function(del) {
+                            var p = db.collection('businesses').doc(del.businessId)
+                                .collection('wholesale_orders').doc(del.orderId)
+                                .get().then(function(odoc) {
+                                    if (odoc.exists) {
+                                        var od = odoc.data();
+                                        allDeliveries.push({
+                                            date: sess.date,
+                                            orderId: od.orderId || odoc.id,
+                                            customer: od.customer ? od.customer.name : 'Unknown',
+                                            amount: od.grandTotal || 0,
+                                            status: od.dispatch ? od.dispatch.status : 'unknown',
+                                            businessId: del.businessId,
+                                            businessName: businessNames[del.businessId] || del.businessId,
+                                            deliveredAt: od.dispatch ? od.dispatch.deliveredAt : null
+                                        });
+                                    }
+                                }).catch(function() {});
+                            fetchPromises.push(p);
+                        });
+                    });
+
+                    Promise.all(fetchPromises).then(function() {
+                        renderHistory(container, allDeliveries, sessions);
+                    });
+                }).catch(function(err) {
+                    console.error('History load error:', err);
+                    container.innerHTML = '<div class="rh-error"><i class="fas fa-exclamation-triangle"></i><h3>Error</h3><p>Could not load history.</p></div>';
+                });
+        }
+
+        function renderHistory(container, deliveries, sessions) {
+            if (deliveries.length === 0) {
+                container.innerHTML = '<div class="rh-history-section"><div class="rh-history-empty"><i class="fas fa-clock-rotate-left"></i><p>No delivery history yet</p></div></div>';
+                return;
+            }
+
+            // Summary stats
+            var totalDelivered = deliveries.filter(function(d) { return d.status === 'delivered'; }).length;
+            var totalAmount = deliveries.reduce(function(s, d) { return s + (d.status === 'delivered' ? d.amount : 0); }, 0);
+
+            // Group by date
+            var dateGroups = {};
+            deliveries.forEach(function(d) {
+                if (!dateGroups[d.date]) dateGroups[d.date] = [];
+                dateGroups[d.date].push(d);
+            });
+            var sortedDates = Object.keys(dateGroups).sort(function(a, b) { return b.localeCompare(a); });
+
+            var html = '<div class="rh-history-section">';
+
+            // Summary
+            html += '<div class="rh-history-summary">' +
+                '<div class="rh-stat"><span class="rh-stat-num">' + sessions.length + '</span><span class="rh-stat-label">Sessions</span></div>' +
+                '<div class="rh-stat"><span class="rh-stat-num" style="color:var(--green)">' + totalDelivered + '</span><span class="rh-stat-label">Delivered</span></div>' +
+                '<div class="rh-stat"><span class="rh-stat-num" style="color:var(--primary)">KSH ' + formatNum(totalAmount) + '</span><span class="rh-stat-label">Value</span></div>' +
+                '</div>';
+
+            sortedDates.forEach(function(date) {
+                var items = dateGroups[date];
+                var dateObj = new Date(date + 'T00:00:00');
+                var dateStr = dateObj.toLocaleDateString('en-KE', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+
+                html += '<div class="rh-history-date-group">';
+                html += '<div class="rh-history-date"><i class="fas fa-calendar-day" style="margin-right:6px"></i>' + dateStr + ' \u00B7 ' + items.length + ' deliveries</div>';
+
+                items.forEach(function(d) {
+                    var iconClass = d.status === 'delivered' ? 'delivered' : 'cancelled';
+                    var iconName = d.status === 'delivered' ? 'fa-check' : 'fa-clock';
+                    html += '<div class="rh-history-item">' +
+                        '<div class="rh-history-icon ' + iconClass + '"><i class="fas ' + iconName + '"></i></div>' +
+                        '<div class="rh-history-info">' +
+                        '  <div class="rh-history-customer">' + esc(d.customer) + '</div>' +
+                        '  <div class="rh-history-meta">' + esc(d.businessName) + ' \u00B7 #' + esc(d.orderId) + '</div>' +
+                        '</div>' +
+                        '<div class="rh-history-amount">KSH ' + formatNum(d.amount) + '</div>' +
+                        '</div>';
+                });
+
+                html += '</div>';
+            });
+
+            html += '</div>';
+            container.innerHTML = html;
+        }
+
+        // ═══════════════════════════════
+        // UTILITIES
+        // ═══════════════════════════════
+        function showError(title, msg) {
+            app.innerHTML =
+                '<div class="rh-header"><div class="rh-header-top"><h1><i class="fas fa-motorcycle"></i> Rider</h1></div></div>' +
+                '<div class="rh-error"><i class="fas fa-link-slash"></i><h3>' + esc(title) + '</h3><p>' + esc(msg) + '</p></div>';
+        }
+
+        function showToast(msg, type) {
+            var old = document.querySelector('.rh-toast');
+            if (old) old.remove();
+            var t = document.createElement('div');
+            t.className = 'rh-toast ' + (type || 'success');
+            t.textContent = msg;
+            document.body.appendChild(t);
+            setTimeout(function() { t.classList.add('show'); }, 10);
+            setTimeout(function() { t.classList.remove('show'); setTimeout(function() { t.remove(); }, 300); }, 3000);
+        }
+
+        function esc(str) { var d = document.createElement('div'); d.textContent = str || ''; return d.innerHTML; }
+        function ucfirst(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : ''; }
+        function formatNum(n) { return new Intl.NumberFormat('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0); }
+    })();
+    </script>
+</body>
+</html>

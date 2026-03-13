@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PharmaFlow - Pharmacy Management System</title>
+    <link rel="stylesheet" href="css/styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <script>
+        // Restore branding from localStorage instantly to avoid flash
+        (function () {
+            try {
+                var n = localStorage.getItem('pf_brand_name');
+                var t = localStorage.getItem('pf_brand_tagline');
+                if (n) document.title = n + ' - ' + (t || 'Pharmacy Management System');
+            } catch (e) { /* ignore */ }
+        })();
+    </script>
+</head>
+<body>
+    <div class="app-wrapper" id="app-wrapper">
+        <!-- ===== SIDEBAR ===== -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-logo">
+                    <i class="fas fa-capsules"></i>
+                    <span class="logo-text">PharmaFlow</span>
+                </div>
+            </div>
+
+            <div class="sidebar-body">
+                <nav class="sidebar-nav" id="sidebar-nav">
+                    <!-- Navigation items rendered by sidebar.js -->
+                </nav>
+            </div>
+
+            <div class="sidebar-footer">
+                <nav class="sidebar-nav sidebar-nav-footer" id="sidebar-nav-footer">
+                    <!-- Settings rendered at bottom by sidebar.js -->
+                </nav>
+            </div>
+        </aside>
+
+        <!-- ===== MAIN CONTENT AREA ===== -->
+        <div class="main-area">
+            <!-- ===== TOP BAR ===== -->
+            <header class="topbar" id="topbar">
+                <div class="topbar-left">
+                    <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle sidebar">
+                        <i class="fas fa-bars"></i>
+                    </button>
+                    <h1 class="topbar-title">PharmaFlow</h1>
+                </div>
+
+                <div class="topbar-right">
+                    <!-- Franchise Selector (visible to superadmin) -->
+                    <div class="franchise-selector" id="franchise-selector" style="display:none;">
+                        <select id="franchise-select" class="franchise-select">
+                            <option value="">Select Business</option>
+                        </select>
+                    </div>
+
+                    <!-- Dark/Light Mode Toggle -->
+                    <button class="topbar-btn" id="theme-toggle" aria-label="Toggle theme">
+                        <i class="fas fa-moon" id="theme-icon"></i>
+                    </button>
+
+                    <!-- Messages --> 
+                    <button class="topbar-btn" id="messages-btn" aria-label="Messages">
+                        <i class="fas fa-envelope"></i>
+                        <span class="badge" id="messages-badge" style="display:none;">0</span>
+                    </button>
+
+                    <!-- Notifications -->
+                    <button class="topbar-btn" id="notifications-btn" aria-label="Notifications">
+                        <i class="fas fa-bell"></i>
+                        <span class="badge" id="notifications-badge" style="display:none;">0</span>
+                    </button>
+
+                    <!-- Profile Dropdown -->
+                    <div class="profile-dropdown" id="profile-dropdown">
+                        <button class="profile-btn" id="profile-btn">
+                            <div class="profile-avatar" id="profile-avatar">
+                                <i class="fas fa-user"></i>
+                            </div>
+                            <span class="profile-name" id="profile-name">User</span>
+                            <i class="fas fa-chevron-down"></i>
+                        </button>
+                        <div class="dropdown-menu" id="profile-menu">
+                            <div class="dropdown-header">
+                                <strong id="dropdown-user-name">User</strong>
+                                <small id="dropdown-user-role">Role</small>
+                            </div>
+                            <div class="dropdown-divider"></div>
+                            <a href="#" class="dropdown-item" data-action="profile">
+                                <i class="fas fa-user-circle"></i>
+                                <span>My Profile</span>
+                            </a>
+                            <a href="#" class="dropdown-item" data-action="settings">
+                                <i class="fas fa-cog"></i>
+                                <span>Settings</span>
+                            </a>
+                            <div class="dropdown-divider"></div>
+                            <a href="#" class="dropdown-item text-danger" data-action="logout">
+                                <i class="fas fa-sign-out-alt"></i>
+                                <span>Logout</span>
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <!-- ===== CONTENT AREA ===== -->
+            <main class="content-area" id="content-area">
+                <!-- Sub-module tabs (shown when a module has sub-modules) -->
+                <div class="content-tabs" id="content-tabs" style="display:none;">
+                    <!-- Tabs rendered dynamically by router.js -->
+                </div>
+
+                <!-- Page content rendered here by router.js -->
+                <div class="content-body" id="content-body">
+                    <div class="page-placeholder">
+                        <i class="fas fa-capsules"></i>
+                        <h2>Welcome to PharmaFlow</h2>
+                        <p>Select a module from the sidebar to get started.</p>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- Messages Panel (slide-out) -->
+    <div class="slide-panel" id="messages-panel">
+        <div class="slide-panel-header">
+            <h3><i class="fas fa-envelope"></i> Messages</h3>
+            <button class="slide-panel-close" data-panel="messages-panel"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="slide-panel-body" id="messages-list">
+            <div class="empty-state-small">
+                <i class="fas fa-envelope-open"></i>
+                <p>No messages</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notifications Panel (slide-out) -->
+    <div class="slide-panel" id="notifications-panel">
+        <div class="slide-panel-header">
+            <h3><i class="fas fa-bell"></i> Notifications</h3>
+            <button class="slide-panel-close" data-panel="notifications-panel"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="slide-panel-body" id="notifications-list">
+            <div class="empty-state-small">
+                <i class="fas fa-bell-slash"></i>
+                <p>No notifications</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Overlay for panels --> 
+    <div class="overlay" id="overlay"></div>
+
+    <!-- Instant branding from localStorage (before modules load) -->
+    <script>
+        (function () {
+            try {
+                var n = localStorage.getItem('pf_brand_name');
+                var icon = localStorage.getItem('pf_brand_icon');
+                if (n) {
+                    var lt = document.querySelector('.logo-text');
+                    if (lt) lt.textContent = n;
+                    var tt = document.querySelector('.topbar-title');
+                    if (tt) tt.textContent = n;
+                }
+                if (icon) {
+                    var li = document.querySelector('.sidebar-logo > i');
+                    if (li) li.className = icon;
+                }
+            } catch (e) { /* ignore */ }
+        })();
+    </script>
+
+    <!-- Export Libraries -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.1/jspdf.plugin.autotable.min.js"></script>
+
+    <script src="js/firebase-config.js"></script>
+    <script src="js/auth.js"></script>
+    <script src="js/sidebar.js"></script>
+    <script src="js/dashboard.js"></script>
+    <script src="js/inventory.js"></script>
+    <script src="js/pos.js"></script>
+    <script src="js/todays-sales.js"></script>
+    <script src="js/all-sales.js"></script>
+    <script src="js/prescription.js"></script>
+    <script src="js/dda-register.js"></script>
+    <script src="js/supplier.js"></script>
+    <script src="js/my-orders.js"></script>
+    <script src="js/expense.js"></script>
+    <script src="js/admin-panel.js"></script>
+    <script src="js/wholesale.js"></script>
+    <script src="js/patients.js"></script>
+    <script src="js/reports.js"></script>
+    <script src="js/accounts.js"></script>
+    <script src="js/activity-logs.js"></script>
+    <script src="js/medication-refill.js"></script>
+    <script src="js/settings.js"></script>
+    <script src="js/router.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,256 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===== HELPER FUNCTIONS =====
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function getUserProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function hasRole(role) {
+      return isAuthenticated() && getUserProfile().role == role;
+    }
+
+    function isSuperAdmin() {
+      return hasRole('superadmin');
+    }
+
+    function isAdminOrAbove() {
+      return hasRole('superadmin') || hasRole('admin');
+    }
+
+    function belongsToBusiness(businessId) {
+      return isAuthenticated() && getUserProfile().businessId == businessId;
+    }
+
+    function canAccessBusiness(businessId) {
+      return isSuperAdmin() || belongsToBusiness(businessId);
+    }
+
+    // ===== USER PROFILES =====
+    match /users/{userId} {
+      // Admins+ can read all user profiles (needed for admin panel user management)
+      allow read: if isAuthenticated() && (
+        request.auth.uid == userId ||
+        isAdminOrAbove()
+      );
+
+      allow create: if isAuthenticated() && (
+        request.auth.uid == userId ||
+        isAdminOrAbove()
+      );
+
+      allow update: if isAuthenticated() && (
+        (request.auth.uid == userId
+          && !('role' in request.resource.data && request.resource.data.role != resource.data.role)
+          && !('permissions' in request.resource.data && request.resource.data.permissions != resource.data.permissions)
+        ) ||
+        isSuperAdmin() ||
+        (hasRole('admin') && resource.data.businessId == getUserProfile().businessId
+          && request.resource.data.role != 'superadmin')
+      );
+
+      allow delete: if isSuperAdmin();
+    }
+
+    // ===== BUSINESSES (Franchises) =====
+    match /businesses/{businessId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isSuperAdmin() || (isAdminOrAbove() && belongsToBusiness(businessId));
+      allow delete: if isSuperAdmin();
+
+      // ── Sales (POS) — all staff can create, admin+ to edit/delete ──
+      match /sales/{saleId} {
+        allow read: if canAccessBusiness(businessId);
+        allow create: if canAccessBusiness(businessId);
+        allow update, delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+      }
+
+      // ── Inventory — all staff can create & update stock, admin+ to delete ──
+      match /inventory/{itemId} {
+        allow read: if canAccessBusiness(businessId);
+        allow create, update: if canAccessBusiness(businessId);
+        allow delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+      }
+
+      // ── Patients — all staff can register & update, admin+ to delete ──
+      match /patients/{patientId} {
+        allow read: if canAccessBusiness(businessId);
+        allow create, update: if canAccessBusiness(businessId);
+        allow delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+      }
+
+      // ── Patient Bills — all staff can create & update, admin+ to delete ──
+      match /patient_bills/{billId} {
+        allow read: if canAccessBusiness(businessId);
+        allow create, update: if canAccessBusiness(businessId);
+        allow delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+      }
+
+      // ── Patient Records (clinical) — all staff can create & update ──
+      match /patient_records/{recordId} {
+        allow read: if canAccessBusiness(businessId);
+        allow create, update: if canAccessBusiness(businessId);
+        allow delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+      }
+
+      // ── Prescriptions — all staff can create ──
+      match /prescriptions/{prescriptionId} {
+        allow read: if canAccessBusiness(businessId);
+        allow create: if canAccessBusiness(businessId);
+        allow update, delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+      }
+
+      // ── Expenses — all staff can create, admin+ to edit/delete ──
+      match /expenses/{expenseId} {
+        allow read: if canAccessBusiness(businessId);
+        allow create: if canAccessBusiness(businessId);
+        allow update, delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+      }
+
+      // ── Orders (My Orders) — all staff can create & update, admin+ to delete ──
+      match /orders/{orderId} {
+        allow read: if canAccessBusiness(businessId);
+        allow create, update: if canAccessBusiness(businessId);
+        allow delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+      }
+
+      // ── DDA Register — all staff can create ──
+      match /dda_register/{entryId} {
+        allow read: if canAccessBusiness(businessId);
+        allow create: if canAccessBusiness(businessId);
+        allow update, delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+      }
+
+      // ── Suppliers — admin+ only ──
+      match /suppliers/{supplierId} {
+        allow read: if canAccessBusiness(businessId);
+        allow create, update, delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+      }
+
+      // ── Wholesale Orders — admin+ to create/edit/delete, rider token for dispatch updates ──
+      match /wholesale_orders/{wholesaleId} {
+        allow read: if canAccessBusiness(businessId);
+        allow create: if canAccessBusiness(businessId) && isAdminOrAbove();
+        allow update: if canAccessBusiness(businessId) && isAdminOrAbove();
+        allow delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+        // Allow unauthenticated rider to read & update dispatch status via token
+        allow get: if resource.data.dispatch.riderToken is string && resource.data.dispatch.riderToken.size() > 0;
+        allow update: if resource.data.dispatch.riderToken is string
+          && resource.data.dispatch.riderToken.size() > 0
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['dispatch', 'updatedAt']);
+      }
+
+      // ── Activity Log — all staff can create (logging), admin+ to delete ──
+      match /activity_log/{logId} {
+        allow read: if canAccessBusiness(businessId);
+        allow create: if canAccessBusiness(businessId);
+        allow update, delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+      }
+
+      // ── Medication Refills — all staff can create & update, admin+ to delete ──
+      match /medication_refills/{refillId} {
+        allow read: if canAccessBusiness(businessId);
+        allow create, update: if canAccessBusiness(businessId);
+        allow delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+      }
+
+      // ── Reports — admin+ only ──
+      match /reports/{reportId} {
+        allow read: if canAccessBusiness(businessId);
+        allow create, update, delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+      }
+
+      // ── Accounts — admin+ to write, superadmin to delete ──
+      match /accounts/{accountId} {
+        allow read: if canAccessBusiness(businessId);
+        allow create, update: if canAccessBusiness(businessId) && isAdminOrAbove();
+        allow delete: if canAccessBusiness(businessId) && isSuperAdmin();
+      }
+
+      // ── Messages — all staff can read/create/update ──
+      match /messages/{messageId} {
+        allow read: if canAccessBusiness(businessId);
+        allow create, update: if canAccessBusiness(businessId);
+        allow delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+      }
+
+      // ── Notifications — all staff can read/create/update ──
+      match /notifications/{notificationId} {
+        allow read: if canAccessBusiness(businessId);
+        allow create, update: if canAccessBusiness(businessId);
+        allow delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+      }
+
+      // ── Settings (retention, etc.) — admin+ to read/write ──
+      match /settings/{settingId} {
+        allow read: if canAccessBusiness(businessId);
+        allow create, update: if canAccessBusiness(businessId) && isAdminOrAbove();
+        allow delete: if canAccessBusiness(businessId) && isSuperAdmin();
+      }
+
+      // ── Stock History — read for all, write for admin+ ──
+      match /stock_history/{entryId} {
+        allow read: if canAccessBusiness(businessId);
+        allow create: if canAccessBusiness(businessId);
+        allow delete: if canAccessBusiness(businessId) && isSuperAdmin();
+      }
+
+      // ── Client Leads — wholesale client management ──
+      match /client_leads/{clientId} {
+        allow read: if canAccessBusiness(businessId);
+        allow create, update: if canAccessBusiness(businessId);
+        allow delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+      }
+
+      // ── Riders — delivery riders management + public update for delivery count ──
+      match /riders/{riderId} {
+        allow read: if canAccessBusiness(businessId);
+        allow create, update: if canAccessBusiness(businessId);
+        allow delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+        // Allow unauthenticated rider page to update delivery stats
+        allow get: if true;
+        allow update: if request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['deliveryCount', 'status', 'updatedAt']);
+      }
+    }
+
+    // ===== RIDER SESSIONS (public read for shareable rider links) =====
+    match /rider_sessions/{token} {
+      allow read: if true;
+      allow create, update: if isAuthenticated();
+    }
+
+    // ===== GLOBAL ADMIN CONFIG =====
+    match /superadmin/{docId} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    // ===== SYSTEM CONFIG (auto-reminders, etc.) =====
+    match /system_config/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdminOrAbove();
+    }
+
+    // ===== FRANCHISE ALERTS =====
+    match /franchise_alerts/{alertId} {
+      // All authenticated users can read (dashboard banners filter by businessId)
+      allow read: if isAuthenticated();
+      // Admins+ can create and delete alerts
+      allow create, delete: if isAdminOrAbove();
+      // Any authenticated user can update (dismiss/acknowledge from dashboard)
+      allow update: if isAuthenticated();
+    }
+
+    // Deny all other access by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
