@@ -12,14 +12,21 @@
     window.PharmaFlow = window.PharmaFlow || {};
 
     let ordersListener = null;
-    let allOrders = [];
-    let filteredOrders = [];
     let orderItems = [];          // items in the create-order form
     let inventoryCache = [];      // cached inventory for item picker
     let suppliersCache = [];      // cached suppliers
-    let ordersCurrentPage = 1;
-    const PAGE_SIZE = 25;
     let editingOrderId = null;
+
+    // Cursor-based pagination state
+    let ordPage = 1;
+    let ordPageSize = 25;
+    let ordPageData = [];         // current page orders
+    let ordFirstDoc = null;       // first doc snapshot of current page
+    let ordLastDoc = null;        // last doc snapshot of current page
+    let ordPageStack = [];        // stack of startAt cursors for prev pages
+    let ordHasNext = false;
+    let ordIsLoading = false;
+    const SH_PAGE_SIZE = 25;    // stock history page size
 
     const MyOrders = {
 
@@ -55,8 +62,12 @@
 
         cleanup: function () {
             if (ordersListener) { ordersListener(); ordersListener = null; }
-            allOrders = [];
-            filteredOrders = [];
+            ordPageData = [];
+            ordFirstDoc = null;
+            ordLastDoc = null;
+            ordPageStack = [];
+            ordPage = 1;
+            ordHasNext = false;
             orderItems = [];
             editingOrderId = null;
         },
@@ -620,6 +631,11 @@
                                 <option value="normal">Normal</option>
                                 <option value="low">Low</option>
                             </select>
+                            <select id="ord-page-size" title="Rows per page">
+                                <option value="25">25 rows</option>
+                                <option value="50">50 rows</option>
+                                <option value="100">100 rows</option>
+                            </select>
                             <button class="dda-btn dda-btn--export" id="ord-export-pdf">
                                 <i class="fas fa-file-pdf"></i> Export PDF
                             </button>
@@ -678,14 +694,21 @@
             `;
 
             this.bindManageEvents(container);
-            this.subscribeOrders();
+            this._resetOrdersPagination();
+            this._loadOrdersPage();
+            this._loadOrderStats();
             this.loadManageLowStockBanner();
         },
 
         bindManageEvents: function (container) {
-            document.getElementById('ord-manage-search')?.addEventListener('input', () => { ordersCurrentPage = 1; this.filterOrders(); });
-            document.getElementById('ord-status-filter')?.addEventListener('change', () => { ordersCurrentPage = 1; this.filterOrders(); });
-            document.getElementById('ord-priority-filter')?.addEventListener('change', () => { ordersCurrentPage = 1; this.filterOrders(); });
+            let searchTimer = null;
+            document.getElementById('ord-manage-search')?.addEventListener('input', () => {
+                clearTimeout(searchTimer);
+                searchTimer = setTimeout(() => { this._resetOrdersPagination(); this._loadOrdersPage(); }, 350);
+            });
+            document.getElementById('ord-status-filter')?.addEventListener('change', () => { this._resetOrdersPagination(); this._loadOrdersPage(); this._loadOrderStats(); });
+            document.getElementById('ord-priority-filter')?.addEventListener('change', () => { this._resetOrdersPagination(); this._loadOrdersPage(); this._loadOrderStats(); });
+            document.getElementById('ord-page-size')?.addEventListener('change', (e) => { ordPageSize = parseInt(e.target.value) || 25; this._resetOrdersPagination(); this._loadOrdersPage(); });
             document.getElementById('ord-export-pdf')?.addEventListener('click', () => this.exportOrdersPdf());
 
             // Quick filters
@@ -713,83 +736,143 @@
 
         applyQuickRange: function (range) {
             this.quickRange = range;
-            ordersCurrentPage = 1;
-            this.filterOrders();
+            this._resetOrdersPagination();
+            this._loadOrdersPage();
+            this._loadOrderStats();
         },
 
-        subscribeOrders: function () {
-            const businessId = this.getBusinessId();
-            if (!businessId) return;
-            if (ordersListener) ordersListener();
-
-            ordersListener = getBusinessCollection(businessId, 'orders')
-                .onSnapshot(snap => {
-                    allOrders = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                    allOrders.sort((a, b) => {
-                        const ta = a.orderTimestamp?.toDate ? a.orderTimestamp.toDate().getTime() : 0;
-                        const tb = b.orderTimestamp?.toDate ? b.orderTimestamp.toDate().getTime() : 0;
-                        return tb - ta;
-                    });
-                    this.updateOrderStats();
-                    this.filterOrders();
-                }, err => {
-                    console.error('Orders subscribe error:', err);
-                });
+        _resetOrdersPagination: function () {
+            ordPage = 1;
+            ordPageData = [];
+            ordFirstDoc = null;
+            ordLastDoc = null;
+            ordPageStack = [];
+            ordHasNext = false;
         },
 
-        updateOrderStats: function () {
-            const el = id => document.getElementById(id);
-            if (el('ord-total')) el('ord-total').textContent = allOrders.length;
-            if (el('ord-pending')) el('ord-pending').textContent = allOrders.filter(o => o.status === 'pending').length;
-            if (el('ord-approved')) el('ord-approved').textContent = allOrders.filter(o => o.status === 'approved').length;
-            if (el('ord-received')) el('ord-received').textContent = allOrders.filter(o => o.status === 'received').length;
-            if (el('ord-cancelled')) el('ord-cancelled').textContent = allOrders.filter(o => o.status === 'cancelled').length;
-        },
-
-        filterOrders: function () {
-            const query = (document.getElementById('ord-manage-search')?.value || '').toLowerCase();
-            const statusFilter = document.getElementById('ord-status-filter')?.value || '';
-            const priorityFilter = document.getElementById('ord-priority-filter')?.value || '';
-
-            // Date range from quick filter
-            let fromDate = null;
-            let toDate = null;
+        _getDateRange: function () {
             const today = new Date();
             const fmt = d => d.toISOString().split('T')[0];
-
             switch (this.quickRange) {
-                case 'today':
-                    fromDate = fmt(today); toDate = fmt(today); break;
-                case 'week': {
-                    const ws = new Date(today); ws.setDate(ws.getDate() - ws.getDay());
-                    fromDate = fmt(ws); toDate = fmt(today); break;
-                }
-                case 'month': {
-                    const ms = new Date(today.getFullYear(), today.getMonth(), 1);
-                    fromDate = fmt(ms); toDate = fmt(today); break;
-                }
-                case '30': {
-                    const d30 = new Date(today); d30.setDate(d30.getDate() - 30);
-                    fromDate = fmt(d30); toDate = fmt(today); break;
-                }
+                case 'today': return { from: fmt(today), to: fmt(today) };
+                case 'week': { const ws = new Date(today); ws.setDate(ws.getDate() - ws.getDay()); return { from: fmt(ws), to: fmt(today) }; }
+                case 'month': { const ms = new Date(today.getFullYear(), today.getMonth(), 1); return { from: fmt(ms), to: fmt(today) }; }
+                case '30': { const d30 = new Date(today); d30.setDate(d30.getDate() - 30); return { from: fmt(d30), to: fmt(today) }; }
+                default: return { from: null, to: null };
             }
+        },
 
-            filteredOrders = allOrders.filter(o => {
-                if (statusFilter && o.status !== statusFilter) return false;
-                if (priorityFilter && o.priority !== priorityFilter) return false;
-                if (fromDate || toDate) {
-                    const oDate = o.orderDate || '';
-                    if (fromDate && oDate < fromDate) return false;
-                    if (toDate && oDate > toDate) return false;
-                }
-                if (query) {
-                    const haystack = ((o.orderId || '') + ' ' + (o.supplierName || '') + ' ' + (o.createdBy || '')).toLowerCase();
-                    return haystack.includes(query);
-                }
-                return true;
-            });
+        _buildOrderQuery: function () {
+            const businessId = this.getBusinessId();
+            if (!businessId) return null;
+            let q = getBusinessCollection(businessId, 'orders');
 
-            this.renderOrdersPage();
+            const statusFilter = document.getElementById('ord-status-filter')?.value || '';
+            const priorityFilter = document.getElementById('ord-priority-filter')?.value || '';
+            const range = this._getDateRange();
+
+            if (statusFilter) q = q.where('status', '==', statusFilter);
+            if (priorityFilter) q = q.where('priority', '==', priorityFilter);
+            if (range.from) q = q.where('orderDate', '>=', range.from);
+            if (range.to) q = q.where('orderDate', '<=', range.to);
+
+            q = q.orderBy('orderDate', 'desc');
+            return q;
+        },
+
+        _loadOrdersPage: async function (direction) {
+            if (ordIsLoading) return;
+            ordIsLoading = true;
+
+            const tbody = document.getElementById('ord-manage-tbody');
+            if (tbody) tbody.innerHTML = '<tr><td colspan="10" class="dda-loading"><i class="fas fa-spinner fa-spin"></i> Loading orders...</td></tr>';
+
+            try {
+                let q = this._buildOrderQuery();
+                if (!q) { ordIsLoading = false; return; }
+
+                if (direction === 'next' && ordLastDoc) {
+                    q = q.startAfter(ordLastDoc);
+                } else if (direction === 'prev' && ordPageStack.length > 0) {
+                    const prevCursor = ordPageStack.pop();
+                    q = q.startAt(prevCursor);
+                    ordPage--;
+                }
+
+                // Fetch one extra to detect hasNext
+                const snap = await q.limit(ordPageSize + 1).get();
+                const docs = snap.docs;
+
+                ordHasNext = docs.length > ordPageSize;
+                const pageDocs = ordHasNext ? docs.slice(0, ordPageSize) : docs;
+
+                ordPageData = pageDocs.map(d => ({ id: d.id, ...d.data() }));
+
+                // Apply client-side search filter (search text can't be indexed server-side)
+                const searchQuery = (document.getElementById('ord-manage-search')?.value || '').toLowerCase().trim();
+                if (searchQuery) {
+                    ordPageData = ordPageData.filter(o => {
+                        const haystack = ((o.orderId || '') + ' ' + (o.supplierName || '') + ' ' + (o.createdBy || '')).toLowerCase();
+                        return haystack.includes(searchQuery);
+                    });
+                }
+
+                if (pageDocs.length > 0) {
+                    if (direction === 'next' && ordFirstDoc) {
+                        ordPageStack.push(ordFirstDoc);
+                        ordPage++;
+                    }
+                    ordFirstDoc = pageDocs[0];
+                    ordLastDoc = pageDocs[pageDocs.length - 1];
+                } else {
+                    ordFirstDoc = null;
+                    ordLastDoc = null;
+                }
+
+                this.renderOrdersPage();
+            } catch (err) {
+                console.error('Load orders page error:', err);
+                if (tbody) tbody.innerHTML = '<tr><td colspan="10" class="dda-loading"><i class="fas fa-exclamation-circle"></i> Failed to load orders</td></tr>';
+            } finally {
+                ordIsLoading = false;
+            }
+        },
+
+        _loadOrderStats: async function () {
+            const businessId = this.getBusinessId();
+            if (!businessId) return;
+            const el = id => document.getElementById(id);
+            const coll = getBusinessCollection(businessId, 'orders');
+
+            try {
+                // Use Firestore count() if available (Firebase v9.22+)
+                if (typeof coll.count === 'function') {
+                    const [total, pending, approved, received, cancelled] = await Promise.all([
+                        coll.count().get(),
+                        coll.where('status', '==', 'pending').count().get(),
+                        coll.where('status', '==', 'approved').count().get(),
+                        coll.where('status', '==', 'received').count().get(),
+                        coll.where('status', '==', 'cancelled').count().get()
+                    ]);
+                    if (el('ord-total')) el('ord-total').textContent = total.data().count;
+                    if (el('ord-pending')) el('ord-pending').textContent = pending.data().count;
+                    if (el('ord-approved')) el('ord-approved').textContent = approved.data().count;
+                    if (el('ord-received')) el('ord-received').textContent = received.data().count;
+                    if (el('ord-cancelled')) el('ord-cancelled').textContent = cancelled.data().count;
+                } else {
+                    // Fallback: lightweight status-only fetch with reasonable limit
+                    const snap = await coll.orderBy('orderDate', 'desc').limit(10000).get();
+                    const orders = snap.docs.map(d => d.data());
+                    const suffix = orders.length >= 10000 ? '+' : '';
+                    if (el('ord-total')) el('ord-total').textContent = orders.length + suffix;
+                    if (el('ord-pending')) el('ord-pending').textContent = orders.filter(o => o.status === 'pending').length;
+                    if (el('ord-approved')) el('ord-approved').textContent = orders.filter(o => o.status === 'approved').length;
+                    if (el('ord-received')) el('ord-received').textContent = orders.filter(o => o.status === 'received').length;
+                    if (el('ord-cancelled')) el('ord-cancelled').textContent = orders.filter(o => o.status === 'cancelled').length;
+                }
+            } catch (err) {
+                console.error('Load order stats error:', err);
+            }
         },
 
         getStatusBadge: function (status) {
@@ -817,16 +900,15 @@
             const tbody = document.getElementById('ord-manage-tbody');
             if (!tbody) return;
 
-            const start = (ordersCurrentPage - 1) * PAGE_SIZE;
-            const pageData = filteredOrders.slice(start, start + PAGE_SIZE);
+            const start = (ordPage - 1) * ordPageSize;
 
-            if (pageData.length === 0) {
+            if (ordPageData.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="10" class="dda-loading"><i class="fas fa-inbox"></i> No orders found</td></tr>';
                 this.renderPagination();
                 return;
             }
 
-            tbody.innerHTML = pageData.map((o, i) => {
+            tbody.innerHTML = ordPageData.map((o, i) => {
                 const date = o.orderDate || '—';
                 const showAddToInv = o.status === 'received' && !o.inventoryAdded;
                 return `<tr>
@@ -853,27 +935,42 @@
             // Bind actions
             tbody.querySelectorAll('.ord-view').forEach(btn => {
                 btn.addEventListener('click', () => {
-                    const order = allOrders.find(o => o.id === btn.dataset.id);
+                    const order = ordPageData.find(o => o.id === btn.dataset.id);
                     if (order) this.viewOrder(order);
                 });
             });
             tbody.querySelectorAll('.ord-print').forEach(btn => {
                 btn.addEventListener('click', () => {
-                    const order = allOrders.find(o => o.id === btn.dataset.id);
+                    const order = ordPageData.find(o => o.id === btn.dataset.id);
                     if (order) this.printInvoice(order);
                 });
             });
             tbody.querySelectorAll('.ord-approve').forEach(btn => {
-                btn.addEventListener('click', () => this.updateOrderStatus(btn.dataset.id, 'approved'));
+                btn.addEventListener('click', async () => {
+                    await this.updateOrderStatus(btn.dataset.id, 'approved');
+                    this._loadOrdersPage();
+                    this._loadOrderStats();
+                });
             });
             tbody.querySelectorAll('.ord-receive').forEach(btn => {
-                btn.addEventListener('click', () => this.receiveOrder(btn.dataset.id));
+                btn.addEventListener('click', async () => {
+                    await this.receiveOrder(btn.dataset.id);
+                    this._loadOrdersPage();
+                    this._loadOrderStats();
+                });
             });
             tbody.querySelectorAll('.ord-add-inv').forEach(btn => {
-                btn.addEventListener('click', () => this.addToInventory(btn.dataset.id));
+                btn.addEventListener('click', async () => {
+                    await this.addToInventory(btn.dataset.id);
+                    this._loadOrdersPage();
+                });
             });
             tbody.querySelectorAll('.ord-cancel').forEach(btn => {
-                btn.addEventListener('click', () => this.updateOrderStatus(btn.dataset.id, 'cancelled'));
+                btn.addEventListener('click', async () => {
+                    await this.updateOrderStatus(btn.dataset.id, 'cancelled');
+                    this._loadOrdersPage();
+                    this._loadOrderStats();
+                });
             });
 
             this.renderPagination();
@@ -930,8 +1027,15 @@
         // ═══════════════════════════════════════════════
 
         addToInventory: async function (docId) {
-            const order = allOrders.find(o => o.id === docId);
-            if (!order) return;
+            let order = ordPageData.find(o => o.id === docId);
+            if (!order) {
+                // Fetch from Firestore if not on current page
+                const businessId = this.getBusinessId();
+                if (!businessId) return;
+                const snap = await getBusinessCollection(businessId, 'orders').doc(docId).get();
+                if (!snap.exists) { this.showToast('Order not found.', 'error'); return; }
+                order = { id: snap.id, ...snap.data() };
+            }
             if (order.inventoryAdded) { this.showToast('Already added to inventory.', 'error'); return; }
 
             // Sort items alphabetically by name
@@ -1131,41 +1235,32 @@
         renderPagination: function () {
             const container = document.getElementById('ord-manage-pagination');
             if (!container) return;
-            const totalItems = filteredOrders.length;
-            const totalPages = Math.ceil(totalItems / PAGE_SIZE) || 1;
-            if (totalPages <= 1) { container.innerHTML = ''; return; }
 
-            const start = (ordersCurrentPage - 1) * PAGE_SIZE + 1;
-            const end = Math.min(ordersCurrentPage * PAGE_SIZE, totalItems);
+            const hasPrev = ordPage > 1;
+            const hasNext = ordHasNext;
+            const count = ordPageData.length;
+            const start = (ordPage - 1) * ordPageSize + 1;
+            const end = start + count - 1;
 
-            let pagesHtml = '';
-            const maxV = 5;
-            let sp = Math.max(1, ordersCurrentPage - Math.floor(maxV / 2));
-            let ep = Math.min(totalPages, sp + maxV - 1);
-            if (ep - sp < maxV - 1) sp = Math.max(1, ep - maxV + 1);
-
-            if (sp > 1) pagesHtml += '<button class="dda-page-btn" data-page="1">1</button>';
-            if (sp > 2) pagesHtml += '<span class="dda-page-dots">...</span>';
-            for (let p = sp; p <= ep; p++) {
-                pagesHtml += '<button class="dda-page-btn' + (p === ordersCurrentPage ? ' active' : '') + '" data-page="' + p + '">' + p + '</button>';
+            if (!hasPrev && !hasNext && count <= ordPageSize) {
+                container.innerHTML = count > 0 ? `<span class="dda-page-info">Showing ${count} order${count !== 1 ? 's' : ''} &mdash; Page ${ordPage}</span>` : '';
+                return;
             }
-            if (ep < totalPages - 1) pagesHtml += '<span class="dda-page-dots">...</span>';
-            if (ep < totalPages) pagesHtml += '<button class="dda-page-btn" data-page="' + totalPages + '">' + totalPages + '</button>';
 
             container.innerHTML = `
-                <span class="dda-page-info">Showing ${start}-${end} of ${totalItems}</span>
+                <span class="dda-page-info">Page ${ordPage} &middot; Showing ${count > 0 ? start + '-' + end : '0'} orders</span>
                 <div class="dda-page-controls">
-                    <button class="dda-page-btn" data-page="${ordersCurrentPage - 1}" ${ordersCurrentPage === 1 ? 'disabled' : ''}><i class="fas fa-chevron-left"></i></button>
-                    ${pagesHtml}
-                    <button class="dda-page-btn" data-page="${ordersCurrentPage + 1}" ${ordersCurrentPage === totalPages ? 'disabled' : ''}><i class="fas fa-chevron-right"></i></button>
+                    <button class="dda-page-btn" id="ord-prev-page" ${!hasPrev ? 'disabled' : ''}><i class="fas fa-chevron-left"></i> Prev</button>
+                    <span class="dda-page-btn active" style="cursor:default">${ordPage}</span>
+                    <button class="dda-page-btn" id="ord-next-page" ${!hasNext ? 'disabled' : ''}>Next <i class="fas fa-chevron-right"></i></button>
                 </div>
             `;
 
-            container.querySelectorAll('.dda-page-btn[data-page]').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const page = parseInt(btn.dataset.page);
-                    if (page >= 1 && page <= totalPages) { ordersCurrentPage = page; this.renderOrdersPage(); }
-                });
+            document.getElementById('ord-prev-page')?.addEventListener('click', () => {
+                if (hasPrev) this._loadOrdersPage('prev');
+            });
+            document.getElementById('ord-next-page')?.addEventListener('click', () => {
+                if (hasNext) this._loadOrdersPage('next');
             });
         },
 
@@ -1276,9 +1371,9 @@
             doc.text('Purchase Orders Report', 14, 18);
             doc.setFontSize(9);
             doc.text('Generated: ' + new Date().toLocaleString('en-KE'), 14, 24);
-            doc.text('Total Orders: ' + filteredOrders.length, 14, 29);
+            doc.text('Total Orders: ' + ordPageData.length + ' (current page)', 14, 29);
 
-            const rows = filteredOrders.map((o, i) => [
+            const rows = ordPageData.map((o, i) => [
                 i + 1,
                 o.orderId || '',
                 o.orderDate || '',
@@ -1581,8 +1676,8 @@
             if (!tbody) return;
             var self = this;
             var data = this._shFilteredData;
-            var start = (this._shCurrentPage - 1) * PAGE_SIZE;
-            var page = data.slice(start, start + PAGE_SIZE);
+            var start = (this._shCurrentPage - 1) * SH_PAGE_SIZE;
+            var page = data.slice(start, start + SH_PAGE_SIZE);
 
             if (page.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="11" class="dda-loading"><i class="fas fa-inbox"></i> No stock history found</td></tr>';
@@ -1616,13 +1711,13 @@
             var container = document.getElementById('sh-pagination');
             if (!container) return;
             var totalItems = this._shFilteredData.length;
-            var totalPages = Math.ceil(totalItems / PAGE_SIZE) || 1;
+            var totalPages = Math.ceil(totalItems / SH_PAGE_SIZE) || 1;
             if (totalPages <= 1) { container.innerHTML = ''; return; }
 
             var self = this;
             var cp = this._shCurrentPage;
-            var start = (cp - 1) * PAGE_SIZE + 1;
-            var end = Math.min(cp * PAGE_SIZE, totalItems);
+            var start = (cp - 1) * SH_PAGE_SIZE + 1;
+            var end = Math.min(cp * SH_PAGE_SIZE, totalItems);
 
             var pagesHtml = '';
             var maxV = 5;

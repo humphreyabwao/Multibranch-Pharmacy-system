@@ -641,6 +641,21 @@
                 return;
             }
 
+            // Client-side permission checks for edits
+            if (isEdit && !this.isSuperAdmin()) {
+                const existingUser = allUsers.find(u => u.id === editId);
+                const myBizId = PharmaFlow.Auth.userProfile ? PharmaFlow.Auth.userProfile.businessId : null;
+
+                if (existingUser && existingUser.businessId !== myBizId) {
+                    this.showToast('You can only edit users within your own franchise.', 'error');
+                    return;
+                }
+                if (existingUser && existingUser.role === 'superadmin') {
+                    this.showToast('Only superadmins can edit superadmin users.', 'error');
+                    return;
+                }
+            }
+
             const btn = document.getElementById('adm-user-save');
             if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...'; }
 
@@ -719,6 +734,24 @@
             }
         },
 
+        /**
+         * Check if the current user can edit a given target user
+         */
+        canEditUser: function (targetUser) {
+            if (!targetUser) return false;
+            const myUid = firebase.auth().currentUser ? firebase.auth().currentUser.uid : null;
+            // Can't edit yourself via the admin panel edit flow
+            if (targetUser.id === myUid) return false;
+            // Superadmin can edit anyone
+            if (this.isSuperAdmin()) return true;
+            // Admin can edit users in their own business (but not superadmins)
+            if (this.isAdminOrAbove()) {
+                const myBizId = PharmaFlow.Auth.userProfile ? PharmaFlow.Auth.userProfile.businessId : null;
+                return targetUser.businessId === myBizId && targetUser.role !== 'superadmin';
+            }
+            return false;
+        },
+
         subscribeUsers: function () {
             if (usersListener) usersListener();
 
@@ -728,8 +761,16 @@
                 if (allUsers.length > 0) this.filterUsers();
             }).catch(err => console.error('Load business names error:', err));
 
-            // Admin panel: admins and superadmins see ALL users across all franchises
-            const query = window.db.collection('users');
+            // Superadmin sees ALL users; admin sees only users in their own business
+            let query;
+            if (this.isSuperAdmin()) {
+                query = window.db.collection('users');
+            } else {
+                const myBizId = PharmaFlow.Auth.userProfile ? PharmaFlow.Auth.userProfile.businessId : null;
+                query = myBizId
+                    ? window.db.collection('users').where('businessId', '==', myBizId)
+                    : window.db.collection('users');
+            }
 
             usersListener = query.onSnapshot(snap => {
                 allUsers = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -819,7 +860,8 @@
                     : '<span class="ord-status-badge ord-status--approved">Active</span>';
                 const permCount = (u.permissions && u.permissions.length > 0) ? u.permissions.length + ' custom' : 'Full access';
                 const isMe = u.id === myUid;
-                const canManage = (this.isSuperAdmin() || this.isAdminOrAbove()) && !isMe;
+                const canEdit = this.canEditUser(u);
+                const canManage = canEdit;
 
                 return `<tr${isMe ? ' style="background:var(--bg-tertiary,#f0fdf4)"' : ''}>
                     <td>${start + i + 1}</td>
@@ -841,7 +883,7 @@
                     <td>
                         <div class="adm-actions-cell">
                             <button class="sales-action-btn sales-action--view adm-view-user" data-id="${u.id}" title="View"><i class="fas fa-eye"></i></button>
-                            <button class="sales-action-btn adm-edit-user" data-id="${u.id}" title="Edit" style="background:#e0e7ff;color:#4338ca"><i class="fas fa-edit"></i></button>
+                            ${canEdit ? '<button class="sales-action-btn adm-edit-user" data-id="' + u.id + '" title="Edit" style="background:#e0e7ff;color:#4338ca"><i class="fas fa-edit"></i></button>' : ''}
                             ${canManage ? '<button class="sales-action-btn adm-toggle-user" data-id="' + u.id + '" data-status="' + (u.status || 'active') + '" title="' + (isDisabled ? 'Reactivate' : 'Suspend') + '" style="background:' + (isDisabled ? '#dcfce7;color:#16a34a' : '#fef3c7;color:#92400e') + '"><i class="fas ' + (isDisabled ? 'fa-user-check' : 'fa-user-slash') + '"></i></button>' : ''}
                             ${canManage ? '<button class="sales-action-btn adm-delete-user" data-id="' + u.id + '" title="Delete" style="background:#fee2e2;color:#991b1b"><i class="fas fa-trash"></i></button>' : ''}
                         </div>

@@ -12,13 +12,22 @@
 
     let ptUnsubPatients = null;
     let ptUnsubBilling = null;
-    let ptAllPatients = [];
     let ptAllBills = [];
     let ptBillItems = [];
     let ptUnsubRecords = null;
     let ptManageRecords = [];
     let ptTreatmentDrugs = [];
     let ptInventoryCache = [];
+
+    // Cursor-based pagination state for manage patients
+    let ptPage = 1;
+    let ptPageSize = 25;
+    let ptPageData = [];
+    let ptFirstDoc = null;
+    let ptLastDoc = null;
+    let ptPageStack = [];
+    let ptHasNext = false;
+    let ptIsLoading = false;
 
     /* ── Manage Billing state ── */
     let ptUnsubManageBills = null;
@@ -86,13 +95,18 @@
             if (ptUnsubBilling) { ptUnsubBilling(); ptUnsubBilling = null; }
             if (ptUnsubRecords) { ptUnsubRecords(); ptUnsubRecords = null; }
             if (ptUnsubManageBills) { ptUnsubManageBills(); ptUnsubManageBills = null; }
-            ptAllPatients = [];
             ptAllBills = [];
             ptBillItems = [];
             ptManageRecords = [];
             ptManageBillsCache = [];
             ptMbFilteredCache = [];
             ptMbPage = 1;
+            ptPage = 1;
+            ptPageData = [];
+            ptFirstDoc = null;
+            ptLastDoc = null;
+            ptPageStack = [];
+            ptHasNext = false;
         },
 
         /* ══════════════════════════════════════════
@@ -329,6 +343,11 @@
                                 <option value="Female">Female</option>
                                 <option value="Other">Other</option>
                             </select>
+                            <select id="pt-page-size" class="pt-select" title="Rows per page">
+                                <option value="25">25 rows</option>
+                                <option value="50">50 rows</option>
+                                <option value="100">100 rows</option>
+                            </select>
                         </div>
 
                         <div class="pt-table-wrap">
@@ -351,6 +370,9 @@
                                 </tbody>
                             </table>
                         </div>
+
+                        <!-- Pagination -->
+                        <div class="dda-pagination" id="pt-manage-pagination"></div>
                     </div>
                 </div>
             `;
@@ -366,53 +388,172 @@
             let debounce;
             document.getElementById('pt-manage-search')?.addEventListener('input', () => {
                 clearTimeout(debounce);
-                debounce = setTimeout(() => this._filterPatients(), 200);
+                debounce = setTimeout(() => { this._resetPtPagination(); this._loadPatientsPage(); }, 350);
             });
-            document.getElementById('pt-filter-status')?.addEventListener('change', () => this._filterPatients());
-            document.getElementById('pt-filter-gender')?.addEventListener('change', () => this._filterPatients());
+            document.getElementById('pt-filter-status')?.addEventListener('change', () => { this._resetPtPagination(); this._loadPatientsPage(); this._loadPatientStats(); });
+            document.getElementById('pt-filter-gender')?.addEventListener('change', () => { this._resetPtPagination(); this._loadPatientsPage(); this._loadPatientStats(); });
+            document.getElementById('pt-page-size')?.addEventListener('change', (e) => { ptPageSize = parseInt(e.target.value) || 25; this._resetPtPagination(); this._loadPatientsPage(); });
 
-            this._subscribePatients(businessId);
+            this._resetPtPagination();
+            this._loadPatientsPage();
+            this._loadPatientStats();
         },
 
-        _subscribePatients: function (businessId) {
-            if (ptUnsubPatients) { ptUnsubPatients(); ptUnsubPatients = null; }
-            if (!businessId) return;
-            const col = getBusinessCollection(businessId, 'patients');
-            if (!col) return;
-
-            ptUnsubPatients = col.orderBy('createdAt', 'desc').onSnapshot(snap => {
-                ptAllPatients = [];
-                snap.forEach(doc => ptAllPatients.push({ id: doc.id, ...doc.data() }));
-                this._updateManageStats();
-                this._filterPatients();
-            }, err => console.error('Patients listener error:', err));
+        _resetPtPagination: function () {
+            ptPage = 1;
+            ptPageData = [];
+            ptFirstDoc = null;
+            ptLastDoc = null;
+            ptPageStack = [];
+            ptHasNext = false;
         },
 
-        _updateManageStats: function () {
-            const today = new Date().toISOString().split('T')[0];
-            const el = (id) => document.getElementById(id);
-            if (el('pt-stat-total')) el('pt-stat-total').textContent = ptAllPatients.length;
-            if (el('pt-stat-active')) el('pt-stat-active').textContent = ptAllPatients.filter(p => p.status === 'active').length;
-            if (el('pt-stat-insured')) el('pt-stat-insured').textContent = ptAllPatients.filter(p => p.insurance && p.insurance.trim()).length;
-            if (el('pt-stat-today')) el('pt-stat-today').textContent = ptAllPatients.filter(p => (p.createdAt || '').startsWith(today)).length;
-        },
+        _buildPatientQuery: function () {
+            const businessId = this.getBusinessId();
+            if (!businessId) return null;
+            let q = getBusinessCollection(businessId, 'patients');
 
-        _filterPatients: function () {
-            const q = (document.getElementById('pt-manage-search')?.value || '').toLowerCase().trim();
             const statusF = document.getElementById('pt-filter-status')?.value || 'all';
             const genderF = document.getElementById('pt-filter-gender')?.value || 'all';
 
-            const filtered = ptAllPatients.filter(p => {
-                if (statusF !== 'all' && p.status !== statusF) return false;
-                if (genderF !== 'all' && p.gender !== genderF) return false;
-                if (q) {
-                    const hay = ((p.fullName || '') + ' ' + (p.phone || '') + ' ' + (p.patientId || '') + ' ' + (p.idNumber || '') + ' ' + (p.insurance || '')).toLowerCase();
-                    if (!hay.includes(q)) return false;
-                }
-                return true;
-            });
+            if (statusF !== 'all') q = q.where('status', '==', statusF);
+            if (genderF !== 'all') q = q.where('gender', '==', genderF);
 
-            this._renderPatientsTable(filtered);
+            q = q.orderBy('createdAt', 'desc');
+            return q;
+        },
+
+        _loadPatientsPage: async function (direction) {
+            if (ptIsLoading) return;
+            ptIsLoading = true;
+
+            const tbody = document.getElementById('pt-patients-list');
+            if (tbody) tbody.innerHTML = '<tr><td colspan="9" class="pt-loading"><div class="spinner"></div> Loading patients...</td></tr>';
+
+            try {
+                let q = this._buildPatientQuery();
+                if (!q) { ptIsLoading = false; return; }
+
+                if (direction === 'next' && ptLastDoc) {
+                    q = q.startAfter(ptLastDoc);
+                } else if (direction === 'prev' && ptPageStack.length > 0) {
+                    const prevCursor = ptPageStack.pop();
+                    q = q.startAt(prevCursor);
+                    ptPage--;
+                }
+
+                const snap = await q.limit(ptPageSize + 1).get();
+                const docs = snap.docs;
+
+                ptHasNext = docs.length > ptPageSize;
+                const pageDocs = ptHasNext ? docs.slice(0, ptPageSize) : docs;
+
+                ptPageData = pageDocs.map(d => ({ id: d.id, ...d.data() }));
+
+                // Client-side search filter
+                const searchQ = (document.getElementById('pt-manage-search')?.value || '').toLowerCase().trim();
+                if (searchQ) {
+                    ptPageData = ptPageData.filter(p => {
+                        const hay = ((p.fullName || '') + ' ' + (p.phone || '') + ' ' + (p.patientId || '') + ' ' + (p.idNumber || '') + ' ' + (p.insurance || '')).toLowerCase();
+                        return hay.includes(searchQ);
+                    });
+                }
+
+                if (pageDocs.length > 0) {
+                    if (direction === 'next' && ptFirstDoc) {
+                        ptPageStack.push(ptFirstDoc);
+                        ptPage++;
+                    }
+                    ptFirstDoc = pageDocs[0];
+                    ptLastDoc = pageDocs[pageDocs.length - 1];
+                } else {
+                    ptFirstDoc = null;
+                    ptLastDoc = null;
+                }
+
+                this._renderPatientsTable(ptPageData);
+                this._renderPtPagination();
+            } catch (err) {
+                console.error('Load patients page error:', err);
+                if (tbody) tbody.innerHTML = '<tr><td colspan="9" class="pt-loading"><i class="fas fa-exclamation-circle"></i> Failed to load patients</td></tr>';
+            } finally {
+                ptIsLoading = false;
+            }
+        },
+
+        _loadPatientStats: async function () {
+            const businessId = this.getBusinessId();
+            if (!businessId) return;
+            const el = (id) => document.getElementById(id);
+            const col = getBusinessCollection(businessId, 'patients');
+            const today = new Date().toISOString().split('T')[0];
+
+            try {
+                if (typeof col.count === 'function') {
+                    const [total, active, insured, todayCount] = await Promise.all([
+                        col.count().get(),
+                        col.where('status', '==', 'active').count().get(),
+                        col.where('insurance', '!=', '').count().get(),
+                        col.where('createdAt', '>=', today).where('createdAt', '<=', today + '\uf8ff').count().get()
+                    ]);
+                    if (el('pt-stat-total')) el('pt-stat-total').textContent = total.data().count;
+                    if (el('pt-stat-active')) el('pt-stat-active').textContent = active.data().count;
+                    if (el('pt-stat-insured')) el('pt-stat-insured').textContent = insured.data().count;
+                    if (el('pt-stat-today')) el('pt-stat-today').textContent = todayCount.data().count;
+                } else {
+                    const snap = await col.orderBy('createdAt', 'desc').limit(10000).get();
+                    const all = snap.docs.map(d => d.data());
+                    const suffix = all.length >= 10000 ? '+' : '';
+                    if (el('pt-stat-total')) el('pt-stat-total').textContent = all.length + suffix;
+                    if (el('pt-stat-active')) el('pt-stat-active').textContent = all.filter(p => p.status === 'active').length;
+                    if (el('pt-stat-insured')) el('pt-stat-insured').textContent = all.filter(p => p.insurance && p.insurance.trim()).length;
+                    if (el('pt-stat-today')) el('pt-stat-today').textContent = all.filter(p => (p.createdAt || '').startsWith(today)).length;
+                }
+            } catch (err) {
+                console.error('Load patient stats error:', err);
+            }
+        },
+
+        _renderPtPagination: function () {
+            const container = document.getElementById('pt-manage-pagination');
+            if (!container) return;
+
+            const hasPrev = ptPage > 1;
+            const hasNext = ptHasNext;
+            const count = ptPageData.length;
+            const start = (ptPage - 1) * ptPageSize + 1;
+            const end = start + count - 1;
+
+            if (!hasPrev && !hasNext && count <= ptPageSize) {
+                container.innerHTML = count > 0 ? '<span class="dda-page-info">Showing ' + count + ' patient' + (count !== 1 ? 's' : '') + ' &mdash; Page ' + ptPage + '</span>' : '';
+                return;
+            }
+
+            container.innerHTML = '<span class="dda-page-info">Page ' + ptPage + ' &middot; Showing ' + (count > 0 ? start + '-' + end : '0') + ' patients</span>' +
+                '<div class="dda-page-controls">' +
+                '<button class="dda-page-btn" id="pt-prev-page"' + (!hasPrev ? ' disabled' : '') + '><i class="fas fa-chevron-left"></i> Prev</button>' +
+                '<span class="dda-page-btn active" style="cursor:default">' + ptPage + '</span>' +
+                '<button class="dda-page-btn" id="pt-next-page"' + (!hasNext ? ' disabled' : '') + '>Next <i class="fas fa-chevron-right"></i></button>' +
+                '</div>';
+
+            document.getElementById('pt-prev-page')?.addEventListener('click', () => {
+                if (hasPrev) this._loadPatientsPage('prev');
+            });
+            document.getElementById('pt-next-page')?.addEventListener('click', () => {
+                if (hasNext) this._loadPatientsPage('next');
+            });
+        },
+
+        /** Fetch a single patient by ID from Firestore */
+        _fetchPatientById: async function (patientId) {
+            // First check current page data
+            const local = ptPageData.find(x => (x.patientId || x.id) === patientId);
+            if (local) return local;
+            // Fetch from Firestore
+            const businessId = this.getBusinessId();
+            if (!businessId) return null;
+            const doc = await getBusinessCollection(businessId, 'patients').doc(patientId).get();
+            return doc.exists ? { id: doc.id, ...doc.data() } : null;
         },
 
         _calcAge: function (dob) {
@@ -475,13 +616,17 @@
             tbody.querySelectorAll('.pt-act--edit').forEach(btn => btn.addEventListener('click', () => self._editPatient(btn.dataset.id)));
             tbody.querySelectorAll('.pt-act--bill').forEach(btn => btn.addEventListener('click', () => self._quickBill(btn.dataset.id)));
             tbody.querySelectorAll('.pt-act--manage').forEach(btn => btn.addEventListener('click', () => self._managePatient(btn.dataset.id)));
-            tbody.querySelectorAll('.pt-act--toggle').forEach(btn => btn.addEventListener('click', () => self._toggleStatus(btn.dataset.id, btn.dataset.status)));
+            tbody.querySelectorAll('.pt-act--toggle').forEach(btn => btn.addEventListener('click', async () => {
+                await self._toggleStatus(btn.dataset.id, btn.dataset.status);
+                self._loadPatientsPage();
+                self._loadPatientStats();
+            }));
         },
 
         /* ── View Patient Modal ── */
-        _viewPatient: function (patientId) {
-            const p = ptAllPatients.find(x => (x.patientId || x.id) === patientId);
-            if (!p) return;
+        _viewPatient: async function (patientId) {
+            const p = await this._fetchPatientById(patientId);
+            if (!p) { this.showToast('Patient not found', 'error'); return; }
             const age = this._calcAge(p.dob);
 
             const modal = document.createElement('div');
@@ -526,9 +671,9 @@
         },
 
         /* ── Edit Patient Modal ── */
-        _editPatient: function (patientId) {
-            const p = ptAllPatients.find(x => (x.patientId || x.id) === patientId);
-            if (!p) return;
+        _editPatient: async function (patientId) {
+            const p = await this._fetchPatientById(patientId);
+            if (!p) { this.showToast('Patient not found', 'error'); return; }
             const businessId = this.getBusinessId();
 
             const modal = document.createElement('div');
@@ -649,6 +794,7 @@
 
                     self.showToast('Patient updated');
                     close();
+                    self._loadPatientsPage();
                 } catch (err) {
                     console.error('Edit patient error:', err);
                     self.showToast('Failed: ' + err.message, 'error');
@@ -872,21 +1018,14 @@
             `;
 
             this._bindBillingEvents(container, businessId);
-            this._subscribePatients(businessId);
             this._subscribeBills(businessId);
 
             // Auto-select patient if coming from quick-bill
             if (this._pendingBillPatientId) {
-                const waitForData = setInterval(() => {
-                    if (ptAllPatients.length > 0) {
-                        clearInterval(waitForData);
-                        const pat = ptAllPatients.find(px => (px.patientId || px.id) === this._pendingBillPatientId);
-                        if (pat) this._selectBillPatient(pat);
-                        this._pendingBillPatientId = null;
-                    }
-                }, 200);
-                // Safety timeout
-                setTimeout(() => { clearInterval(waitForData); this._pendingBillPatientId = null; }, 5000);
+                this._fetchPatientById(this._pendingBillPatientId).then(pat => {
+                    if (pat) this._selectBillPatient(pat);
+                    this._pendingBillPatientId = null;
+                }).catch(() => { this._pendingBillPatientId = null; });
             }
         },
 
@@ -949,14 +1088,29 @@
             document.getElementById('pt-submit-bill')?.addEventListener('click', () => this._submitBill(businessId));
         },
 
-        _searchPatients: function (query, dropdown) {
+        _searchPatients: async function (query, dropdown) {
             const q = (query || '').toLowerCase().trim();
             if (q.length < 1) { dropdown.classList.remove('show'); return; }
 
-            const results = ptAllPatients.filter(p => {
-                const hay = ((p.fullName || '') + ' ' + (p.phone || '') + ' ' + (p.patientId || '')).toLowerCase();
-                return hay.includes(q) && p.status === 'active';
-            }).slice(0, 8);
+            // Search Firestore directly for billing patient search
+            const businessId = this.getBusinessId();
+            let results = [];
+            if (businessId) {
+                try {
+                    const snap = await getBusinessCollection(businessId, 'patients')
+                        .where('status', '==', 'active')
+                        .orderBy('fullName')
+                        .limit(50)
+                        .get();
+                    results = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => {
+                        const hay = ((p.fullName || '') + ' ' + (p.phone || '') + ' ' + (p.patientId || '')).toLowerCase();
+                        return hay.includes(q);
+                    }).slice(0, 8);
+                } catch (e) {
+                    console.error('Patient search error:', e);
+                    results = [];
+                }
+            }
 
             if (results.length === 0) {
                 dropdown.innerHTML = '<div class="pt-dd-empty"><i class="fas fa-search"></i> No patients found</div>';
@@ -978,8 +1132,8 @@
             dropdown.classList.add('show');
 
             dropdown.querySelectorAll('.pt-dd-item').forEach(item => {
-                item.addEventListener('click', () => {
-                    const pat = ptAllPatients.find(px => (px.patientId || px.id) === item.dataset.id);
+                item.addEventListener('click', async () => {
+                    const pat = await this._fetchPatientById(item.dataset.id);
                     if (pat) this._selectBillPatient(pat);
                     dropdown.classList.remove('show');
                 });
@@ -1570,9 +1724,9 @@
             }
         },
 
-        _managePatient: function (patientId) {
-            const p = ptAllPatients.find(x => (x.patientId || x.id) === patientId);
-            if (!p) return;
+        _managePatient: async function (patientId) {
+            const p = await this._fetchPatientById(patientId);
+            if (!p) { this.showToast('Patient not found', 'error'); return; }
             const businessId = this.getBusinessId();
             if (!businessId) return;
 

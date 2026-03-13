@@ -18,12 +18,18 @@
     let ddaSalesData = [];
     let ddaPrescriptions = [];
     let filteredRegister = [];
-    let filteredSales = [];
     let filteredPrescriptions = [];
     let regCurrentPage = 1;
-    let salesCurrentPage = 1;
     let prescCurrentPage = 1;
     const PAGE_SIZE = 25;
+
+    // Pagination state for DDA Sales
+    let dsPage = 1;
+    let dsPageSize = 25;
+    let dsPageData = [];
+    let dsHasNext = false;
+    let dsIsLoading = false;
+    let dsTotalFiltered = 0;
 
     const DdaRegister = {
 
@@ -64,6 +70,10 @@
             ddaInventory = [];
             ddaSalesData = [];
             ddaPrescriptions = [];
+            dsPage = 1;
+            dsPageData = [];
+            dsHasNext = false;
+            dsTotalFiltered = 0;
         },
 
         // ═══════════════════════════════════════════════
@@ -371,6 +381,11 @@
                             <button class="dda-btn dda-btn--export" id="dda-sales-export-pdf">
                                 <i class="fas fa-file-pdf"></i> Export PDF
                             </button>
+                            <select id="dda-sales-page-size" title="Rows per page">
+                                <option value="25">25 rows</option>
+                                <option value="50">50 rows</option>
+                                <option value="100">100 rows</option>
+                            </select>
                         </div>
                     </div>
 
@@ -413,17 +428,22 @@
             `;
 
             this.bindSalesEvents(container);
-            this.subscribeSales();
+            this._resetSalesPagination();
+            this._loadSalesPage();
+            this._loadSalesStats();
         },
 
         bindSalesEvents: function (container) {
+            let dsDebounce;
             const search = document.getElementById('dda-sales-search');
-            if (search) search.addEventListener('input', () => { salesCurrentPage = 1; this.filterSales(); });
+            if (search) search.addEventListener('input', () => { clearTimeout(dsDebounce); dsDebounce = setTimeout(() => { this._resetSalesPagination(); this._loadSalesPage(); }, 350); });
 
             const from = document.getElementById('dda-sales-from');
             const to = document.getElementById('dda-sales-to');
-            if (from) from.addEventListener('change', () => { salesCurrentPage = 1; this.filterSales(); });
-            if (to) to.addEventListener('change', () => { salesCurrentPage = 1; this.filterSales(); });
+            if (from) from.addEventListener('change', () => { this._resetSalesPagination(); this._loadSalesPage(); });
+            if (to) to.addEventListener('change', () => { this._resetSalesPagination(); this._loadSalesPage(); });
+
+            document.getElementById('dda-sales-page-size')?.addEventListener('change', (e) => { dsPageSize = parseInt(e.target.value) || 25; this._resetSalesPagination(); this._loadSalesPage(); });
 
             const exportBtn = document.getElementById('dda-sales-export-pdf');
             if (exportBtn) exportBtn.addEventListener('click', () => this.exportSalesPdf());
@@ -471,79 +491,142 @@
                 default:
                     fromEl.value = ''; toEl.value = ''; break;
             }
-            salesCurrentPage = 1;
-            this.filterSales();
+            this._resetSalesPagination();
+            this._loadSalesPage();
         },
 
-        subscribeSales: function () {
+        _resetSalesPagination: function () {
+            dsPage = 1;
+            dsPageData = [];
+            dsHasNext = false;
+            dsTotalFiltered = 0;
+        },
+
+        _loadSalesPage: async function () {
+            if (dsIsLoading) return;
+            dsIsLoading = true;
+
+            const tbody = document.getElementById('dda-sales-tbody');
+            if (tbody) tbody.innerHTML = '<tr><td colspan="10" class="dda-loading"><div class="spinner"></div> Loading DDA sales...</td></tr>';
+
+            try {
+                const businessId = this.getBusinessId();
+                if (!businessId) { dsIsLoading = false; return; }
+
+                // Simple query — no orderBy to avoid composite index requirement
+                const snap = await getBusinessCollection(businessId, 'dda_register')
+                    .where('type', '==', 'sale')
+                    .get();
+
+                let allSales = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+                // Sort client-side by saleDate descending
+                allSales.sort((a, b) => {
+                    const ta = a.saleDate?.toDate ? a.saleDate.toDate().getTime() : 0;
+                    const tb = b.saleDate?.toDate ? b.saleDate.toDate().getTime() : 0;
+                    return tb - ta;
+                });
+
+                // Client-side date filter
+                const fromStr = document.getElementById('dda-sales-from')?.value || '';
+                const toStr = document.getElementById('dda-sales-to')?.value || '';
+                if (fromStr || toStr) {
+                    allSales = allSales.filter(s => {
+                        const d = s.saleDateStr || '';
+                        if (fromStr && d < fromStr) return false;
+                        if (toStr && d > toStr) return false;
+                        return true;
+                    });
+                }
+
+                // Client-side text search
+                const searchQ = (document.getElementById('dda-sales-search')?.value || '').toLowerCase().trim();
+                if (searchQ) {
+                    allSales = allSales.filter(s => {
+                        const hay = ((s.drugName || '') + ' ' + (s.saleId || '') + ' ' + (s.soldBy || '')).toLowerCase();
+                        return hay.includes(searchQ);
+                    });
+                }
+
+                // Client-side pagination
+                const totalFiltered = allSales.length;
+                const start = (dsPage - 1) * dsPageSize;
+                dsPageData = allSales.slice(start, start + dsPageSize);
+                dsHasNext = start + dsPageSize < totalFiltered;
+                dsTotalFiltered = totalFiltered;
+
+                this.renderSalesPage();
+                this._renderSalesPagination();
+            } catch (err) {
+                console.error('Load DDA sales page error:', err);
+                if (tbody) tbody.innerHTML = '<tr><td colspan="10" class="dda-loading"><i class="fas fa-exclamation-circle"></i> Failed to load DDA sales</td></tr>';
+            } finally {
+                dsIsLoading = false;
+            }
+        },
+
+        _loadSalesStats: async function () {
             const businessId = this.getBusinessId();
             if (!businessId) return;
-            if (salesListener) salesListener();
-
-            salesListener = getBusinessCollection(businessId, 'dda_register')
-                .where('type', '==', 'sale')
-                .onSnapshot(snap => {
-                    ddaSalesData = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                    ddaSalesData.sort((a, b) => {
-                        const ta = a.saleDate?.toDate ? a.saleDate.toDate().getTime() : 0;
-                        const tb = b.saleDate?.toDate ? b.saleDate.toDate().getTime() : 0;
-                        return tb - ta;
-                    });
-                    this.updateSalesStats();
-                    this.filterSales();
-                }, err => {
-                    console.error('DDA sales subscribe error:', err);
-                    const tbody = document.getElementById('dda-sales-tbody');
-                    if (tbody) tbody.innerHTML = '<tr><td colspan="10" class="dda-loading"><i class="fas fa-exclamation-circle"></i> Failed to load DDA sales</td></tr>';
-                });
-        },
-
-        updateSalesStats: function () {
             const el = id => document.getElementById(id);
-            const count = ddaSalesData.length;
-            const revenue = ddaSalesData.reduce((s, d) => s + (d.lineTotal || 0), 0);
-            const qty = ddaSalesData.reduce((s, d) => s + (d.quantitySold || 0), 0);
-            const profit = ddaSalesData.reduce((s, d) => s + (d.profit || 0), 0);
 
-            if (el('dda-sales-count')) el('dda-sales-count').textContent = count;
-            if (el('dda-sales-revenue')) el('dda-sales-revenue').textContent = this.formatCurrency(revenue);
-            if (el('dda-sales-qty')) el('dda-sales-qty').textContent = qty;
-            if (el('dda-sales-profit')) el('dda-sales-profit').textContent = this.formatCurrency(profit);
+            try {
+                const snap = await getBusinessCollection(businessId, 'dda_register')
+                    .where('type', '==', 'sale')
+                    .get();
+                const all = snap.docs.map(d => d.data());
+                const revenue = all.reduce((s, d) => s + (d.lineTotal || 0), 0);
+                const qty = all.reduce((s, d) => s + (d.quantitySold || 0), 0);
+                const profit = all.reduce((s, d) => s + (d.profit || 0), 0);
+
+                if (el('dda-sales-count')) el('dda-sales-count').textContent = all.length;
+                if (el('dda-sales-revenue')) el('dda-sales-revenue').textContent = this.formatCurrency(revenue);
+                if (el('dda-sales-qty')) el('dda-sales-qty').textContent = qty;
+                if (el('dda-sales-profit')) el('dda-sales-profit').textContent = this.formatCurrency(profit);
+            } catch (err) {
+                console.error('Load DDA sales stats error:', err);
+            }
         },
 
-        filterSales: function () {
-            const query = (document.getElementById('dda-sales-search')?.value || '').toLowerCase();
-            const fromStr = document.getElementById('dda-sales-from')?.value || '';
-            const toStr = document.getElementById('dda-sales-to')?.value || '';
+        _renderSalesPagination: function () {
+            const container = document.getElementById('dda-sales-pagination');
+            if (!container) return;
 
-            filteredSales = ddaSalesData.filter(s => {
-                // Date filtering
-                if (fromStr || toStr) {
-                    const saleDate = s.saleDateStr || '';
-                    if (fromStr && saleDate < fromStr) return false;
-                    if (toStr && saleDate > toStr) return false;
-                }
-                // Search
-                if (query) {
-                    const haystack = ((s.drugName || '') + ' ' + (s.saleId || '') + ' ' + (s.soldBy || '')).toLowerCase();
-                    return haystack.includes(query);
-                }
-                return true;
+            const hasPrev = dsPage > 1;
+            const hasNext = dsHasNext;
+            const count = dsPageData.length;
+            const start = (dsPage - 1) * dsPageSize + 1;
+            const end = start + count - 1;
+
+            if (!hasPrev && !hasNext && count <= dsPageSize) {
+                container.innerHTML = count > 0 ? '<span class="dda-page-info">Showing ' + count + ' sale' + (count !== 1 ? 's' : '') + ' &mdash; Page ' + dsPage + '</span>' : '';
+                return;
+            }
+
+            container.innerHTML = '<span class="dda-page-info">Page ' + dsPage + ' &middot; Showing ' + (count > 0 ? start + '-' + end : '0') + ' of ' + dsTotalFiltered + ' sales</span>' +
+                '<div class="dda-page-controls">' +
+                '<button class="dda-page-btn" id="ds-prev-page"' + (!hasPrev ? ' disabled' : '') + '><i class="fas fa-chevron-left"></i> Prev</button>' +
+                '<span class="dda-page-btn active" style="cursor:default">' + dsPage + '</span>' +
+                '<button class="dda-page-btn" id="ds-next-page"' + (!hasNext ? ' disabled' : '') + '>Next <i class="fas fa-chevron-right"></i></button>' +
+                '</div>';
+
+            document.getElementById('ds-prev-page')?.addEventListener('click', () => {
+                if (hasPrev) { dsPage--; this._loadSalesPage(); }
             });
-
-            this.renderSalesPage();
+            document.getElementById('ds-next-page')?.addEventListener('click', () => {
+                if (hasNext) { dsPage++; this._loadSalesPage(); }
+            });
         },
 
         renderSalesPage: function () {
             const tbody = document.getElementById('dda-sales-tbody');
             if (!tbody) return;
 
-            const start = (salesCurrentPage - 1) * PAGE_SIZE;
-            const pageData = filteredSales.slice(start, start + PAGE_SIZE);
+            const start = (dsPage - 1) * dsPageSize;
+            const pageData = dsPageData;
 
             if (pageData.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="10" class="dda-loading"><i class="fas fa-inbox"></i> No DDA sales found</td></tr>';
-                this.renderPagination('dda-sales-pagination', filteredSales.length, salesCurrentPage, p => { salesCurrentPage = p; this.renderSalesPage(); });
                 return;
             }
 
@@ -563,38 +646,50 @@
                     <td>${s.balanceAfterSale != null ? s.balanceAfterSale : '—'}</td>
                 </tr>`;
             }).join('');
-
-            this.renderPagination('dda-sales-pagination', filteredSales.length, salesCurrentPage, p => { salesCurrentPage = p; this.renderSalesPage(); });
         },
 
-        exportSalesPdf: function () {
+        exportSalesPdf: async function () {
             const { jsPDF } = window.jspdf;
             if (!jsPDF) { this.showToast('PDF library not loaded.', 'error'); return; }
-            const doc = new jsPDF('l', 'mm', 'a4');
 
-            doc.setFontSize(16);
-            doc.text('DDA Sales Register', 14, 18);
-            doc.setFontSize(9);
-            doc.text('Generated: ' + new Date().toLocaleString('en-KE'), 14, 24);
-            const from = document.getElementById('dda-sales-from')?.value || 'All';
-            const to = document.getElementById('dda-sales-to')?.value || 'All';
-            doc.text('Period: ' + from + ' to ' + to + '   |   Total Records: ' + filteredSales.length, 14, 29);
+            this.showToast('Preparing PDF export...');
+            try {
+                const businessId = this.getBusinessId();
+                if (!businessId) return;
+                const snap = await getBusinessCollection(businessId, 'dda_register')
+                    .where('type', '==', 'sale')
+                    .get();
+                const allSales = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-            const rows = filteredSales.map((s, i) => {
-                const date = s.saleDate?.toDate ? s.saleDate.toDate().toLocaleDateString('en-KE') : '';
-                return [i + 1, date, s.saleId || '', s.drugName || '', s.quantitySold || 0, this.formatCurrency(s.unitPrice), this.formatCurrency(s.lineTotal), this.formatCurrency(s.profit), s.soldBy || '', s.balanceAfterSale != null ? s.balanceAfterSale : ''];
-            });
+                const doc = new jsPDF('l', 'mm', 'a4');
 
-            doc.autoTable({
-                startY: 34,
-                head: [['#', 'Date', 'Receipt #', 'Drug Name', 'Qty', 'Unit Price', 'Total', 'Profit', 'Cashier', 'Balance']],
-                body: rows,
-                styles: { fontSize: 7, cellPadding: 2 },
-                headStyles: { fillColor: [220, 38, 38], textColor: 255 }
-            });
+                doc.setFontSize(16);
+                doc.text('DDA Sales Register', 14, 18);
+                doc.setFontSize(9);
+                doc.text('Generated: ' + new Date().toLocaleString('en-KE'), 14, 24);
+                const from = document.getElementById('dda-sales-from')?.value || 'All';
+                const to = document.getElementById('dda-sales-to')?.value || 'All';
+                doc.text('Period: ' + from + ' to ' + to + '   |   Total Records: ' + allSales.length, 14, 29);
 
-            doc.save('DDA_Sales_' + new Date().toISOString().split('T')[0] + '.pdf');
-            this.showToast('DDA Sales PDF exported!');
+                const rows = allSales.map((s, i) => {
+                    const date = s.saleDate?.toDate ? s.saleDate.toDate().toLocaleDateString('en-KE') : '';
+                    return [i + 1, date, s.saleId || '', s.drugName || '', s.quantitySold || 0, this.formatCurrency(s.unitPrice), this.formatCurrency(s.lineTotal), this.formatCurrency(s.profit), s.soldBy || '', s.balanceAfterSale != null ? s.balanceAfterSale : ''];
+                });
+
+                doc.autoTable({
+                    startY: 34,
+                    head: [['#', 'Date', 'Receipt #', 'Drug Name', 'Qty', 'Unit Price', 'Total', 'Profit', 'Cashier', 'Balance']],
+                    body: rows,
+                    styles: { fontSize: 7, cellPadding: 2 },
+                    headStyles: { fillColor: [220, 38, 38], textColor: 255 }
+                });
+
+                doc.save('DDA_Sales_' + new Date().toISOString().split('T')[0] + '.pdf');
+                this.showToast('DDA Sales PDF exported!');
+            } catch (err) {
+                console.error('Export DDA sales PDF error:', err);
+                this.showToast('Failed to export PDF.', 'error');
+            }
         },
 
         // ═══════════════════════════════════════════════

@@ -7086,170 +7086,216 @@ input, select, textarea {
 
 .ws-invoice-container {
     width: 100%;
-    max-width: 780px;
+    max-width: 760px;
     background: #fff;
-    border-radius: var(--radius-lg);
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+    border-radius: 0;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
     overflow: hidden;
+    border: 2px solid #000;
 }
 
 .ws-invoice {
-    padding: 36px 40px;
-    color: #1e293b;
+    padding: 0;
+    color: #000;
 }
 
-/* Invoice header */
-.ws-inv-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    margin-bottom: 28px;
-    padding-bottom: 20px;
-    border-bottom: 3px solid #2563eb;
-}
-.ws-inv-logo {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-.ws-inv-logo i { font-size: 1.8rem; color: #2563eb; }
-.ws-inv-logo h2 { font-size: 1.5rem; font-weight: 800; color: #2563eb; margin: 0; }
-.ws-inv-tagline { font-size: 0.78rem; color: #64748b; margin-top: 4px; }
-.ws-inv-title {
-    font-size: 2rem;
-    font-weight: 800;
-    color: #2563eb;
-    letter-spacing: 4px;
-    text-align: right;
-    margin: 0;
-}
-.ws-inv-meta {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    text-align: right;
-    font-size: 0.82rem;
-    color: #475569;
-    margin-top: 8px;
+/* ─── Receipt-Style Invoice ─── */
+.rcpt-invoice {
+    font-family: 'Courier New', Courier, 'Lucida Console', monospace;
+    padding: 28px 36px;
+    font-size: 13px;
+    line-height: 1.45;
+    color: #000;
 }
 
-/* Parties */
-.ws-inv-parties {
-    display: flex;
-    justify-content: space-between;
-    margin-bottom: 24px;
-    gap: 40px;
+.rcpt-header {
+    text-align: center;
+    padding-bottom: 4px;
 }
-.ws-inv-party {
-    font-size: 0.85rem;
-    line-height: 1.7;
-}
-.ws-inv-party h4 {
-    font-size: 0.78rem;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: #2563eb;
-    margin-bottom: 6px;
+.rcpt-biz-name {
+    font-size: 1.3rem;
     font-weight: 700;
+    letter-spacing: 3px;
+    text-transform: uppercase;
 }
-.ws-inv-party--right { text-align: right; }
+.rcpt-biz-tagline {
+    font-size: 0.78rem;
+    margin-top: 2px;
+}
+.rcpt-doc-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+    letter-spacing: 4px;
+    text-align: center;
+    padding: 6px 0;
+}
 
-/* Invoice table */
-.ws-inv-table {
+/* Dividers */
+.rcpt-divider {
+    border: none;
+    border-top: 1px dashed #000;
+    margin: 8px 0;
+    height: 0;
+}
+.rcpt-divider-double {
+    border: none;
+    border-top: 3px double #000;
+    margin: 8px 0;
+    height: 0;
+}
+
+/* Meta rows */
+.rcpt-meta {
+    padding: 4px 0;
+}
+.rcpt-meta-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 2px 0;
+    font-size: 0.82rem;
+}
+.rcpt-label {
+    font-weight: 700;
+    min-width: 120px;
+}
+.rcpt-value {
+    text-align: right;
+}
+
+.rcpt-section {
+    padding: 4px 0;
+}
+.rcpt-section-title {
+    font-weight: 700;
+    font-size: 0.82rem;
+    letter-spacing: 1px;
+    border-bottom: 1px solid #000;
+    padding-bottom: 2px;
+    margin-bottom: 4px;
+}
+
+/* Items table */
+.rcpt-table {
     width: 100%;
     border-collapse: collapse;
-    margin-bottom: 20px;
-    font-size: 0.85rem;
+    font-size: 0.82rem;
+    font-family: 'Courier New', Courier, monospace;
 }
-.ws-inv-table th {
-    background: #f1f5f9;
-    padding: 10px 14px;
+.rcpt-table th {
     text-align: left;
     font-weight: 700;
-    border-bottom: 2px solid #e2e8f0;
-    font-size: 0.76rem;
-    text-transform: uppercase;
+    padding: 6px 4px;
+    border-bottom: 2px solid #000;
+    border-top: 2px solid #000;
+    font-size: 0.75rem;
     letter-spacing: 0.5px;
-    color: #475569;
 }
-.ws-inv-table td {
-    padding: 10px 14px;
-    border-bottom: 1px solid #f1f5f9;
+.rcpt-th-num { width: 30px; text-align: center; }
+.rcpt-th-desc { text-align: left; }
+.rcpt-th-qty { width: 45px; text-align: center; }
+.rcpt-th-price { width: 100px; text-align: right; }
+.rcpt-th-amount { width: 100px; text-align: right; }
+.rcpt-table td {
+    padding: 5px 4px;
+    border-bottom: 1px dotted #999;
+    vertical-align: top;
 }
-.ws-inv-table tbody tr:hover { background: #f8fafc; }
+.rcpt-cell-num { text-align: center; }
+.rcpt-cell-desc { text-align: left; }
+.rcpt-cell-qty { text-align: center; font-weight: 700; }
+.rcpt-cell-price { text-align: right; }
+.rcpt-cell-amount { text-align: right; font-weight: 700; }
+.rcpt-sku { font-size: 0.72rem; }
+.rcpt-note { font-size: 0.72rem; font-style: italic; }
 
 /* Totals */
-.ws-inv-totals {
-    display: flex;
-    justify-content: flex-end;
-    margin-bottom: 18px;
+.rcpt-totals {
+    padding: 4px 0;
 }
-.ws-inv-totals-table { width: 300px; }
-.ws-inv-total-row {
+.rcpt-total-line {
     display: flex;
     justify-content: space-between;
-    padding: 6px 0;
-    font-size: 0.88rem;
-    color: #475569;
+    padding: 3px 0;
+    font-size: 0.85rem;
 }
-.ws-inv-grand-total {
-    font-size: 1.1rem;
-    font-weight: 800;
-    color: #2563eb;
-    border-top: 2px solid #2563eb;
-    border-bottom: 2px solid #2563eb;
-    padding: 10px 0;
-    margin: 6px 0;
-}
-.ws-inv-balance-due {
-    color: #dc2626;
+.rcpt-grand-total {
+    font-size: 1.05rem;
     font-weight: 700;
+    padding: 6px 0;
+}
+.rcpt-balance-due {
+    font-weight: 700;
+    font-size: 0.95rem;
 }
 
-/* Payment info */
-.ws-inv-payment-info {
-    display: flex;
-    gap: 30px;
-    font-size: 0.82rem;
-    padding: 12px 0;
-    border-top: 1px solid #e2e8f0;
-    margin-bottom: 14px;
-    color: #475569;
-}
-.ws-inv-notes {
-    background: #f8fafc;
-    padding: 14px;
-    border-radius: 8px;
-    margin-bottom: 18px;
-    font-size: 0.82rem;
-}
-.ws-inv-notes h4 {
-    font-size: 0.76rem;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: #2563eb;
-    margin-bottom: 5px;
+.rcpt-notes-text {
+    font-size: 0.78rem;
+    padding: 4px 0;
+    font-style: italic;
 }
 
 /* Footer */
-.ws-inv-footer {
+.rcpt-footer {
     text-align: center;
-    padding-top: 18px;
-    border-top: 1px solid #e2e8f0;
-    font-size: 0.84rem;
-    color: #64748b;
+    padding: 10px 0 4px;
 }
-.ws-inv-footer small { display: block; margin-top: 4px; font-size: 0.72rem; }
+.rcpt-footer-msg {
+    font-size: 0.82rem;
+    font-weight: 700;
+}
+.rcpt-footer-gen {
+    font-size: 0.68rem;
+    margin-top: 4px;
+}
 
 /* Invoice actions bar */
 .ws-invoice-actions {
     display: flex;
     gap: 10px;
     padding: 14px 24px 20px;
-    border-top: 1px solid #e2e8f0;
-    background: #f8fafc;
+    border-top: 2px solid #000;
+    background: #fff;
 }
 .ws-invoice-actions .btn { flex: 1; }
+
+/* ─── Pagination ─── */
+.ws-pagination {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 18px;
+    border-top: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+    flex-wrap: wrap;
+    gap: 10px;
+}
+.ws-pagination-info {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+}
+.ws-pagination-info strong {
+    color: var(--text-primary);
+}
+.ws-pagination-controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+.ws-page-size-select {
+    padding: 6px 10px;
+    font-size: 0.78rem;
+    border-radius: var(--radius-md);
+    min-width: unset;
+    width: auto;
+}
+.ws-page-btn {
+    min-width: 80px;
+}
+.ws-page-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
 
 /* ─── Toast ─── */
 .ws-toast {

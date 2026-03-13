@@ -23,6 +23,16 @@
     let wsClPageSize = 50;
     let wsClFilteredCache = [];
 
+    // Pagination state for manage orders
+    let wsOrdPage = 1;
+    let wsOrdPageSize = 25;
+    let wsOrdFirstDoc = null;   // first doc on current page (for prev)
+    let wsOrdLastDoc = null;    // last doc on current page (for next)
+    let wsOrdPageStack = [];    // stack of firstDoc cursors for going back
+    let wsOrdHasNext = false;
+    let wsOrdTotalEstimate = 0; // estimated total from stats
+    let wsOrdIsLoading = false;
+
     const Wholesale = {
 
         /* ══════════════════════════════════════════════════════
@@ -987,10 +997,16 @@
             let searchDebounce;
             document.getElementById('ws-manage-search')?.addEventListener('input', function () {
                 clearTimeout(searchDebounce);
-                searchDebounce = setTimeout(() => self._filterOrders(), 200);
+                searchDebounce = setTimeout(() => self._applyClientSearch(), 200);
             });
-            document.getElementById('ws-filter-status')?.addEventListener('change', () => this._filterOrders());
-            document.getElementById('ws-filter-payment')?.addEventListener('change', () => this._filterOrders());
+            document.getElementById('ws-filter-status')?.addEventListener('change', () => {
+                wsOrdPage = 1; wsOrdPageStack = []; wsOrdFirstDoc = null; wsOrdLastDoc = null;
+                this._loadOrdersPage(businessId, 'first');
+            });
+            document.getElementById('ws-filter-payment')?.addEventListener('change', () => {
+                wsOrdPage = 1; wsOrdPageStack = []; wsOrdFirstDoc = null; wsOrdLastDoc = null;
+                this._loadOrdersPage(businessId, 'first');
+            });
 
             // Subscribe to orders
             this._subscribeOrders(businessId);
@@ -1001,53 +1017,194 @@
         _subscribeOrders: function (businessId) {
             if (wsUnsubOrders) { wsUnsubOrders(); wsUnsubOrders = null; }
             if (!businessId) return;
+            // Reset pagination state
+            wsOrdPage = 1;
+            wsOrdFirstDoc = null;
+            wsOrdLastDoc = null;
+            wsOrdPageStack = [];
+            wsOrdHasNext = false;
+            // Load first page
+            this._loadOrdersPage(businessId, 'first');
+        },
 
+        _buildOrderQuery: function (businessId) {
             const col = getBusinessCollection(businessId, 'wholesale_orders');
-            if (!col) return;
+            if (!col) return null;
+            let q = col.orderBy('createdAt', 'desc');
 
-            wsUnsubOrders = col.orderBy('createdAt', 'desc').onSnapshot(snap => {
-                this._allOrders = [];
-                snap.forEach(doc => this._allOrders.push({ id: doc.id, ...doc.data() }));
-                this._updateManageStats();
-                this._filterOrders();
-            }, err => console.error('Wholesale orders listener error:', err));
-        },
-
-        _updateManageStats: function () {
-            const orders = this._allOrders;
-            const totalEl = document.getElementById('ws-stat-total');
-            const confirmedEl = document.getElementById('ws-stat-confirmed');
-            const draftEl = document.getElementById('ws-stat-draft');
-            const revenueEl = document.getElementById('ws-stat-revenue');
-            const unpaidEl = document.getElementById('ws-stat-unpaid');
-
-            if (totalEl) totalEl.textContent = orders.length;
-            if (confirmedEl) confirmedEl.textContent = orders.filter(o => o.status === 'confirmed' || o.status === 'delivered').length;
-            if (draftEl) draftEl.textContent = orders.filter(o => o.status === 'draft').length;
-            if (unpaidEl) unpaidEl.textContent = orders.filter(o => o.paymentStatus === 'unpaid').length;
-
-            const revenue = orders.filter(o => o.status !== 'cancelled').reduce((sum, o) => sum + (o.grandTotal || 0), 0);
-            if (revenueEl) revenueEl.textContent = this.formatCurrency(revenue);
-        },
-
-        _filterOrders: function () {
-            const query = (document.getElementById('ws-manage-search')?.value || '').toLowerCase().trim();
+            // Apply server-side status filter if set
             const statusFilter = document.getElementById('ws-filter-status')?.value || 'all';
+            if (statusFilter !== 'all') {
+                q = col.where('status', '==', statusFilter).orderBy('createdAt', 'desc');
+            }
             const paymentFilter = document.getElementById('ws-filter-payment')?.value || 'all';
+            if (paymentFilter !== 'all') {
+                if (statusFilter !== 'all') {
+                    q = col.where('status', '==', statusFilter)
+                           .where('paymentStatus', '==', paymentFilter)
+                           .orderBy('createdAt', 'desc');
+                } else {
+                    q = col.where('paymentStatus', '==', paymentFilter).orderBy('createdAt', 'desc');
+                }
+            }
+            return q;
+        },
 
-            let filtered = this._allOrders.filter(o => {
-                if (statusFilter !== 'all' && o.status !== statusFilter) return false;
-                if (paymentFilter !== 'all' && o.paymentStatus !== paymentFilter) return false;
-                if (query) {
+        _loadOrdersPage: async function (businessId, direction) {
+            if (wsOrdIsLoading) return;
+            wsOrdIsLoading = true;
+
+            const tbody = document.getElementById('ws-orders-list');
+            if (tbody) tbody.innerHTML = '<tr><td colspan="10" class="ws-loading-cell"><div class="spinner"></div> Loading orders...</td></tr>';
+
+            try {
+                const baseQ = this._buildOrderQuery(businessId);
+                if (!baseQ) { wsOrdIsLoading = false; return; }
+
+                // Fetch pageSize + 1 to know if there's a next page
+                let query;
+                if (direction === 'next' && wsOrdLastDoc) {
+                    query = baseQ.startAfter(wsOrdLastDoc).limit(wsOrdPageSize + 1);
+                } else if (direction === 'prev' && wsOrdPageStack.length > 0) {
+                    const prevCursor = wsOrdPageStack.pop();
+                    wsOrdPage--;
+                    if (prevCursor === null) {
+                        query = baseQ.limit(wsOrdPageSize + 1);
+                    } else {
+                        query = baseQ.startAt(prevCursor).limit(wsOrdPageSize + 1);
+                    }
+                } else {
+                    // First page
+                    query = baseQ.limit(wsOrdPageSize + 1);
+                    wsOrdPage = 1;
+                    wsOrdPageStack = [];
+                }
+
+                const snap = await query.get();
+                const docs = snap.docs;
+
+                // Check if there are more
+                wsOrdHasNext = docs.length > wsOrdPageSize;
+                const pageDocs = wsOrdHasNext ? docs.slice(0, wsOrdPageSize) : docs;
+
+                this._allOrders = pageDocs.map(doc => ({ id: doc.id, ...doc.data() }));
+                wsOrdFirstDoc = pageDocs.length > 0 ? pageDocs[0] : null;
+                wsOrdLastDoc = pageDocs.length > 0 ? pageDocs[pageDocs.length - 1] : null;
+
+                // Get total count for stats (cached, refresh only on first load or filter change)
+                if (direction === 'first' || wsOrdTotalEstimate === 0) {
+                    this._loadOrderStats(businessId);
+                }
+
+                this._applyClientSearch();
+                this._renderPagination();
+            } catch (err) {
+                console.error('Wholesale orders load error:', err);
+                if (tbody) tbody.innerHTML = '<tr><td colspan="10" class="ws-empty-row"><div class="ws-empty-items"><i class="fas fa-exclamation-triangle"></i><p>Failed to load orders</p></div></td></tr>';
+            } finally {
+                wsOrdIsLoading = false;
+            }
+        },
+
+        _loadOrderStats: async function (businessId) {
+            try {
+                const col = getBusinessCollection(businessId, 'wholesale_orders');
+                if (!col) return;
+                // Use a lightweight aggregation - count docs
+                const snap = await col.get();
+                const allDocs = [];
+                snap.forEach(doc => allDocs.push(doc.data()));
+                wsOrdTotalEstimate = allDocs.length;
+
+                const totalEl = document.getElementById('ws-stat-total');
+                const confirmedEl = document.getElementById('ws-stat-confirmed');
+                const draftEl = document.getElementById('ws-stat-draft');
+                const revenueEl = document.getElementById('ws-stat-revenue');
+                const unpaidEl = document.getElementById('ws-stat-unpaid');
+
+                if (totalEl) totalEl.textContent = allDocs.length.toLocaleString();
+                if (confirmedEl) confirmedEl.textContent = allDocs.filter(o => o.status === 'confirmed' || o.status === 'delivered').length.toLocaleString();
+                if (draftEl) draftEl.textContent = allDocs.filter(o => o.status === 'draft').length.toLocaleString();
+                if (unpaidEl) unpaidEl.textContent = allDocs.filter(o => o.paymentStatus === 'unpaid').length.toLocaleString();
+
+                const revenue = allDocs.filter(o => o.status !== 'cancelled').reduce((sum, o) => sum + (o.grandTotal || 0), 0);
+                if (revenueEl) revenueEl.textContent = this.formatCurrency(revenue);
+            } catch (err) {
+                console.error('Order stats error:', err);
+            }
+        },
+
+        _applyClientSearch: function () {
+            // Apply client-side text search on already-fetched page
+            const query = (document.getElementById('ws-manage-search')?.value || '').toLowerCase().trim();
+            let filtered = this._allOrders;
+            if (query) {
+                filtered = filtered.filter(o => {
                     const id = (o.orderId || '').toLowerCase();
                     const inv = (o.invoiceNo || '').toLowerCase();
                     const cust = (o.customer?.name || '').toLowerCase();
-                    if (!id.includes(query) && !inv.includes(query) && !cust.includes(query)) return false;
-                }
-                return true;
-            });
-
+                    return id.includes(query) || inv.includes(query) || cust.includes(query);
+                });
+            }
             this._renderOrders(filtered);
+        },
+
+        _renderPagination: function () {
+            let pager = document.getElementById('ws-orders-pagination');
+            if (!pager) {
+                const tableWrap = document.querySelector('.ws-orders-table-wrap');
+                if (!tableWrap) return;
+                pager = document.createElement('div');
+                pager.id = 'ws-orders-pagination';
+                pager.className = 'ws-pagination';
+                tableWrap.after(pager);
+            }
+
+            const totalPages = wsOrdTotalEstimate > 0 ? Math.ceil(wsOrdTotalEstimate / wsOrdPageSize) : '?';
+            const hasPrev = wsOrdPage > 1;
+
+            pager.innerHTML = `
+                <div class="ws-pagination-info">
+                    Showing page <strong>${wsOrdPage}</strong>${totalPages !== '?' ? ' of <strong>' + totalPages.toLocaleString() + '</strong>' : ''}
+                    &nbsp;·&nbsp; ${wsOrdTotalEstimate.toLocaleString()} total orders
+                </div>
+                <div class="ws-pagination-controls">
+                    <select id="ws-page-size" class="ws-select ws-page-size-select">
+                        <option value="10" ${wsOrdPageSize === 10 ? 'selected' : ''}>10 / page</option>
+                        <option value="25" ${wsOrdPageSize === 25 ? 'selected' : ''}>25 / page</option>
+                        <option value="50" ${wsOrdPageSize === 50 ? 'selected' : ''}>50 / page</option>
+                        <option value="100" ${wsOrdPageSize === 100 ? 'selected' : ''}>100 / page</option>
+                    </select>
+                    <button class="btn btn-sm btn-outline ws-page-btn" id="ws-page-prev" ${!hasPrev ? 'disabled' : ''}>
+                        <i class="fas fa-chevron-left"></i> Prev
+                    </button>
+                    <button class="btn btn-sm btn-outline ws-page-btn" id="ws-page-next" ${!wsOrdHasNext ? 'disabled' : ''}>
+                        Next <i class="fas fa-chevron-right"></i>
+                    </button>
+                </div>
+            `;
+
+            const self = this;
+            const businessId = this.getBusinessId();
+
+            document.getElementById('ws-page-prev')?.addEventListener('click', () => {
+                if (hasPrev) self._loadOrdersPage(businessId, 'prev');
+            });
+            document.getElementById('ws-page-next')?.addEventListener('click', () => {
+                if (wsOrdHasNext) {
+                    wsOrdPageStack.push(wsOrdFirstDoc);
+                    wsOrdPage++;
+                    self._loadOrdersPage(businessId, 'next');
+                }
+            });
+            document.getElementById('ws-page-size')?.addEventListener('change', function () {
+                wsOrdPageSize = parseInt(this.value) || 25;
+                wsOrdPage = 1;
+                wsOrdPageStack = [];
+                wsOrdFirstDoc = null;
+                wsOrdLastDoc = null;
+                self._loadOrdersPage(businessId, 'first');
+            });
         },
 
         _renderOrders: function (orders) {
@@ -1282,18 +1439,23 @@
             if (existing) existing.remove();
 
             const dateStr = order.createdAt ? new Date(order.createdAt).toLocaleDateString('en-KE', { year: 'numeric', month: 'long', day: 'numeric' }) : '';
+            const timeStr = order.createdAt ? new Date(order.createdAt).toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' }) : '';
             const dueStr = order.dueDate ? new Date(order.dueDate).toLocaleDateString('en-KE', { year: 'numeric', month: 'long', day: 'numeric' }) : 'N/A';
+            const bizName = PharmaFlow.Settings ? PharmaFlow.Settings.getBusinessName() : 'PharmaFlow';
+            const bizTagline = PharmaFlow.Settings ? PharmaFlow.Settings.getTagline() : 'Pharmacy Management System';
+            const invFooter = PharmaFlow.Settings ? PharmaFlow.Settings.getInvoiceFooter() : 'Thank you for your business!';
+            const invGenerated = PharmaFlow.Settings ? PharmaFlow.Settings.getInvoiceGenerated() : 'This invoice was generated by PharmaFlow Pharmacy Management System';
+            const totalQty = (order.items || []).reduce((s, i) => s + (i.quantity || 0), 0);
 
             const itemsHtml = (order.items || []).map((item, i) => `
-                <tr>
-                    <td>${i + 1}</td>
-                    <td>
-                        ${this.escapeHtml(item.name)}
-                        ${item.sku ? '<br><small style="color:#888;">SKU: ' + this.escapeHtml(item.sku) + '</small>' : ''}
+                <tr class="rcpt-row">
+                    <td class="rcpt-cell-num">${i + 1}</td>
+                    <td class="rcpt-cell-desc">
+                        ${this.escapeHtml(item.name)}${item.sku ? '  <span class="rcpt-sku">[' + this.escapeHtml(item.sku) + ']</span>' : ''}${item.notes ? '<br><span class="rcpt-note">Note: ' + this.escapeHtml(item.notes) + '</span>' : ''}
                     </td>
-                    <td style="text-align:center">${item.quantity}</td>
-                    <td style="text-align:right">${this.formatCurrency(item.unitPrice)}</td>
-                    <td style="text-align:right">${this.formatCurrency(item.lineTotal)}</td>
+                    <td class="rcpt-cell-qty">${item.quantity}</td>
+                    <td class="rcpt-cell-price">${this.formatCurrency(item.unitPrice)}</td>
+                    <td class="rcpt-cell-amount">${this.formatCurrency(item.lineTotal)}</td>
                 </tr>
             `).join('');
 
@@ -1302,53 +1464,46 @@
             modal.id = 'ws-invoice-modal';
             modal.innerHTML = `
                 <div class="ws-invoice-container">
-                    <div class="ws-invoice" id="ws-invoice-content">
-                        <!-- Invoice Header -->
-                        <div class="ws-inv-header">
-                            <div class="ws-inv-brand">
-                                <div class="ws-inv-logo">
-                                    <i class="${PharmaFlow.Settings ? PharmaFlow.Settings.getLogoIcon() : 'fas fa-capsules'}"></i>
-                                    <h2>${PharmaFlow.Settings ? PharmaFlow.Settings.getBusinessName() : 'PharmaFlow'}</h2>
-                                </div>
-                                <p class="ws-inv-tagline">${PharmaFlow.Settings ? PharmaFlow.Settings.getTagline() : 'Pharmacy Management System'}</p>
-                            </div>
-                            <div class="ws-inv-title-block">
-                                <h1 class="ws-inv-title">INVOICE</h1>
-                                <div class="ws-inv-meta">
-                                    <span><strong>Invoice #:</strong> ${this.escapeHtml(order.invoiceNo || 'N/A')}</span>
-                                    <span><strong>Order ID:</strong> ${this.escapeHtml(order.orderId || '')}</span>
-                                    <span><strong>Date:</strong> ${dateStr}</span>
-                                    <span><strong>Due Date:</strong> ${dueStr}</span>
-                                </div>
-                            </div>
+                    <div class="ws-invoice rcpt-invoice" id="ws-invoice-content">
+
+                        <div class="rcpt-header">
+                            <div class="rcpt-biz-name">${this.escapeHtml(bizName.toUpperCase())}</div>
+                            <div class="rcpt-biz-tagline">${this.escapeHtml(bizTagline)}</div>
+                            <div class="rcpt-divider-double"></div>
+                            <div class="rcpt-doc-title">WHOLESALE INVOICE</div>
+                            <div class="rcpt-divider"></div>
                         </div>
 
-                        <!-- Bill To / From -->
-                        <div class="ws-inv-parties">
-                            <div class="ws-inv-party">
-                                <h4>Bill To:</h4>
-                                <strong>${this.escapeHtml(order.customer?.name || 'N/A')}</strong>
-                                ${order.customer?.phone ? '<br>' + this.escapeHtml(order.customer.phone) : ''}
-                                ${order.customer?.email ? '<br>' + this.escapeHtml(order.customer.email) : ''}
-                                ${order.customer?.address ? '<br>' + this.escapeHtml(order.customer.address) : ''}
-                            </div>
-                            <div class="ws-inv-party ws-inv-party--right">
-                                <h4>From:</h4>
-                                <strong>${PharmaFlow.Settings ? PharmaFlow.Settings.getBusinessName() : 'PharmaFlow'}</strong>
-                                <br>${PharmaFlow.Settings ? PharmaFlow.Settings.getTagline() : 'Pharmacy Management System'}
-                                <br>${this.escapeHtml(order.createdBy || 'Staff')}
-                            </div>
+                        <div class="rcpt-meta">
+                            <div class="rcpt-meta-row"><span class="rcpt-label">Invoice No.:</span><span class="rcpt-value">${this.escapeHtml(order.invoiceNo || 'N/A')}</span></div>
+                            <div class="rcpt-meta-row"><span class="rcpt-label">Order ID:</span><span class="rcpt-value">${this.escapeHtml(order.orderId || 'N/A')}</span></div>
+                            <div class="rcpt-meta-row"><span class="rcpt-label">Date:</span><span class="rcpt-value">${dateStr}  ${timeStr}</span></div>
+                            <div class="rcpt-meta-row"><span class="rcpt-label">Due Date:</span><span class="rcpt-value">${dueStr}</span></div>
+                            <div class="rcpt-meta-row"><span class="rcpt-label">Status:</span><span class="rcpt-value">${(order.status || 'N/A').toUpperCase()}</span></div>
+                            <div class="rcpt-meta-row"><span class="rcpt-label">Payment:</span><span class="rcpt-value">${(order.paymentStatus || 'N/A').toUpperCase()}</span></div>
+                            <div class="rcpt-meta-row"><span class="rcpt-label">Served By:</span><span class="rcpt-value">${this.escapeHtml(order.createdBy || 'Staff')}</span></div>
                         </div>
 
-                        <!-- Items Table -->
-                        <table class="ws-inv-table">
+                        <div class="rcpt-divider"></div>
+
+                        <div class="rcpt-section">
+                            <div class="rcpt-section-title">BILL TO</div>
+                            <div class="rcpt-meta-row"><span class="rcpt-label">Name:</span><span class="rcpt-value">${this.escapeHtml(order.customer?.name || 'N/A')}</span></div>
+                            ${order.customer?.phone ? '<div class="rcpt-meta-row"><span class="rcpt-label">Phone:</span><span class="rcpt-value">' + this.escapeHtml(order.customer.phone) + '</span></div>' : ''}
+                            ${order.customer?.email ? '<div class="rcpt-meta-row"><span class="rcpt-label">Email:</span><span class="rcpt-value">' + this.escapeHtml(order.customer.email) + '</span></div>' : ''}
+                            ${order.customer?.address ? '<div class="rcpt-meta-row"><span class="rcpt-label">Address:</span><span class="rcpt-value">' + this.escapeHtml(order.customer.address) + '</span></div>' : ''}
+                        </div>
+
+                        <div class="rcpt-divider-double"></div>
+
+                        <table class="rcpt-table">
                             <thead>
                                 <tr>
-                                    <th>#</th>
-                                    <th>Description</th>
-                                    <th style="text-align:center">Qty</th>
-                                    <th style="text-align:right">Unit Price</th>
-                                    <th style="text-align:right">Amount</th>
+                                    <th class="rcpt-th-num">#</th>
+                                    <th class="rcpt-th-desc">ITEM DESCRIPTION</th>
+                                    <th class="rcpt-th-qty">QTY</th>
+                                    <th class="rcpt-th-price">PRICE</th>
+                                    <th class="rcpt-th-amount">AMOUNT</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -1356,65 +1511,43 @@
                             </tbody>
                         </table>
 
-                        <!-- Totals -->
-                        <div class="ws-inv-totals">
-                            <div class="ws-inv-totals-table">
-                                <div class="ws-inv-total-row">
-                                    <span>Subtotal</span>
-                                    <span>${this.formatCurrency(order.subtotal)}</span>
-                                </div>
-                                ${order.discountAmount > 0 ? `
-                                <div class="ws-inv-total-row">
-                                    <span>Discount ${order.discountType === 'percent' ? '(' + order.discountValue + '%)' : ''}</span>
-                                    <span>- ${this.formatCurrency(order.discountAmount)}</span>
-                                </div>` : ''}
-                                ${order.applyTax ? `
-                                <div class="ws-inv-total-row">
-                                    <span>VAT (16%)</span>
-                                    <span>${this.formatCurrency(order.taxAmount)}</span>
-                                </div>` : ''}
-                                <div class="ws-inv-total-row ws-inv-grand-total">
-                                    <span>TOTAL</span>
-                                    <span>${this.formatCurrency(order.grandTotal)}</span>
-                                </div>
-                                <div class="ws-inv-total-row">
-                                    <span>Amount Paid</span>
-                                    <span>${this.formatCurrency(order.amountPaid || 0)}</span>
-                                </div>
-                                ${(order.balanceDue || 0) > 0 ? `
-                                <div class="ws-inv-total-row ws-inv-balance-due">
-                                    <span>Balance Due</span>
-                                    <span>${this.formatCurrency(order.balanceDue)}</span>
-                                </div>` : ''}
-                            </div>
+                        <div class="rcpt-divider"></div>
+
+                        <div class="rcpt-totals">
+                            <div class="rcpt-total-line"><span>Total Items:</span><span>${totalQty}</span></div>
+                            <div class="rcpt-total-line"><span>Subtotal:</span><span>${this.formatCurrency(order.subtotal)}</span></div>
+                            ${order.discountAmount > 0 ? '<div class="rcpt-total-line"><span>Discount' + (order.discountType === 'percent' ? ' (' + order.discountValue + '%)' : '') + ':</span><span>-' + this.formatCurrency(order.discountAmount) + '</span></div>' : ''}
+                            ${order.applyTax ? '<div class="rcpt-total-line"><span>VAT (16%):</span><span>' + this.formatCurrency(order.taxAmount) + '</span></div>' : ''}
+                            <div class="rcpt-divider"></div>
+                            <div class="rcpt-total-line rcpt-grand-total"><span>TOTAL DUE:</span><span>${this.formatCurrency(order.grandTotal)}</span></div>
+                            <div class="rcpt-divider-double"></div>
+                            <div class="rcpt-total-line"><span>Amount Paid:</span><span>${this.formatCurrency(order.amountPaid || 0)}</span></div>
+                            ${(order.balanceDue || 0) > 0 ? '<div class="rcpt-total-line rcpt-balance-due"><span>BALANCE DUE:</span><span>' + this.formatCurrency(order.balanceDue) + '</span></div>' : '<div class="rcpt-total-line"><span>Balance:</span><span>KSH 0.00</span></div>'}
                         </div>
 
-                        <!-- Payment Info -->
-                        <div class="ws-inv-payment-info">
-                            <span><strong>Payment Method:</strong> ${this.escapeHtml((order.paymentMethod || 'N/A').replace('_', ' ').toUpperCase())}</span>
-                            <span><strong>Payment Status:</strong> ${this.escapeHtml((order.paymentStatus || 'N/A').toUpperCase())}</span>
+                        <div class="rcpt-divider"></div>
+
+                        <div class="rcpt-section">
+                            <div class="rcpt-meta-row"><span class="rcpt-label">Pay Method:</span><span class="rcpt-value">${this.escapeHtml((order.paymentMethod || 'N/A').replace(/_/g, ' ').toUpperCase())}</span></div>
                         </div>
 
-                        ${order.notes ? `
-                        <div class="ws-inv-notes">
-                            <h4>Notes:</h4>
-                            <p>${this.escapeHtml(order.notes)}</p>
-                        </div>` : ''}
+                        ${order.notes ? '<div class="rcpt-divider"></div><div class="rcpt-section"><div class="rcpt-section-title">NOTES</div><div class="rcpt-notes-text">' + this.escapeHtml(order.notes) + '</div></div>' : ''}
 
-                        <!-- Footer -->
-                        <div class="ws-inv-footer">
-                            <p>${PharmaFlow.Settings ? PharmaFlow.Settings.getInvoiceFooter() : 'Thank you for your business!'}</p>
-                            <small>${PharmaFlow.Settings ? PharmaFlow.Settings.getInvoiceGenerated() : 'This invoice was generated by PharmaFlow Pharmacy Management System'}</small>
+                        <div class="rcpt-divider-double"></div>
+
+                        <div class="rcpt-footer">
+                            <div class="rcpt-footer-msg">${this.escapeHtml(invFooter)}</div>
+                            <div class="rcpt-footer-gen">${this.escapeHtml(invGenerated)}</div>
                         </div>
+
                     </div>
 
-                    <!-- Modal Actions -->
                     <div class="ws-invoice-actions">
                         <button class="btn btn-primary" id="ws-print-invoice">
-                            <i class="fas fa-print"></i> Print Invoice
+                            <i class="fas fa-print"></i> Print
                         </button>
                         <button class="btn btn-outline" id="ws-download-pdf">
-                            <i class="fas fa-file-pdf"></i> Download PDF
+                            <i class="fas fa-file-pdf"></i> PDF
                         </button>
                         <button class="btn btn-outline" id="ws-close-invoice">
                             <i class="fas fa-times"></i> Close
@@ -1431,55 +1564,67 @@
             document.getElementById('ws-close-invoice').addEventListener('click', closeModal);
             modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
 
-            // Print
             document.getElementById('ws-print-invoice').addEventListener('click', () => {
                 this._printInvoice(order);
             });
 
-            // Download PDF
             document.getElementById('ws-download-pdf').addEventListener('click', () => {
                 this._downloadInvoicePdf(order);
             });
+        },
+
+        _getInvoicePrintCSS: function () {
+            return `
+                * { margin: 0; padding: 0; box-sizing: border-box; }
+                body { font-family: 'Courier New', Courier, 'Lucida Console', monospace; color: #000; background: #fff; font-size: 12px; line-height: 1.4; }
+                .rcpt-invoice { max-width: 760px; margin: 0 auto; padding: 32px 40px; }
+                .rcpt-header { text-align: center; margin-bottom: 4px; }
+                .rcpt-biz-name { font-size: 20px; font-weight: 700; letter-spacing: 3px; text-transform: uppercase; }
+                .rcpt-biz-tagline { font-size: 11px; margin-top: 2px; }
+                .rcpt-doc-title { font-size: 16px; font-weight: 700; letter-spacing: 4px; text-align: center; padding: 6px 0; }
+                .rcpt-divider { border: none; border-top: 1px dashed #000; margin: 8px 0; height: 0; }
+                .rcpt-divider-double { border: none; border-top: 3px double #000; margin: 8px 0; height: 0; }
+                .rcpt-meta { padding: 4px 0; }
+                .rcpt-meta-row { display: flex; justify-content: space-between; padding: 2px 0; font-size: 12px; }
+                .rcpt-label { font-weight: 700; min-width: 120px; }
+                .rcpt-value { text-align: right; }
+                .rcpt-section { padding: 4px 0; }
+                .rcpt-section-title { font-weight: 700; font-size: 12px; letter-spacing: 1px; border-bottom: 1px solid #000; padding-bottom: 2px; margin-bottom: 4px; }
+                .rcpt-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+                .rcpt-table th { text-align: left; font-weight: 700; padding: 6px 4px; border-bottom: 2px solid #000; border-top: 2px solid #000; font-size: 11px; letter-spacing: 0.5px; }
+                .rcpt-th-num { width: 30px; text-align: center; }
+                .rcpt-th-desc { text-align: left; }
+                .rcpt-th-qty { width: 45px; text-align: center; }
+                .rcpt-th-price { width: 100px; text-align: right; }
+                .rcpt-th-amount { width: 100px; text-align: right; }
+                .rcpt-table td { padding: 5px 4px; border-bottom: 1px dotted #999; vertical-align: top; }
+                .rcpt-cell-num { text-align: center; }
+                .rcpt-cell-desc { text-align: left; }
+                .rcpt-cell-qty { text-align: center; font-weight: 700; }
+                .rcpt-cell-price { text-align: right; }
+                .rcpt-cell-amount { text-align: right; font-weight: 700; }
+                .rcpt-sku { font-size: 10px; }
+                .rcpt-note { font-size: 10px; font-style: italic; }
+                .rcpt-totals { padding: 4px 0; }
+                .rcpt-total-line { display: flex; justify-content: space-between; padding: 3px 0; font-size: 12px; }
+                .rcpt-grand-total { font-size: 15px; font-weight: 700; padding: 6px 0; }
+                .rcpt-balance-due { font-weight: 700; font-size: 13px; }
+                .rcpt-notes-text { font-size: 11px; padding: 4px 0; font-style: italic; }
+                .rcpt-footer { text-align: center; padding: 10px 0 4px; }
+                .rcpt-footer-msg { font-size: 12px; font-weight: 700; }
+                .rcpt-footer-gen { font-size: 9px; margin-top: 4px; }
+                @media print { body { padding: 10px; } }
+            `;
         },
 
         _printInvoice: function (order) {
             const content = document.getElementById('ws-invoice-content');
             if (!content) return;
 
-            const printWin = window.open('', '_blank', 'width=800,height=1000');
+            const printWin = window.open('', '_blank', 'width=820,height=1050');
             printWin.document.write(`
                 <html><head><title>Invoice - ${this.escapeHtml(order.invoiceNo || order.orderId)}</title>
-                <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-                <style>
-                    * { margin: 0; padding: 0; box-sizing: border-box; }
-                    body { font-family: 'Segoe UI', Arial, sans-serif; padding: 30px; max-width: 800px; margin: 0 auto; color: #1e293b; }
-                    .ws-inv-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 3px solid #2563eb; }
-                    .ws-inv-logo { display: flex; align-items: center; gap: 10px; }
-                    .ws-inv-logo i { font-size: 1.8rem; color: #2563eb; }
-                    .ws-inv-logo h2 { font-size: 1.5rem; color: #2563eb; }
-                    .ws-inv-tagline { font-size: 0.8rem; color: #64748b; margin-top: 4px; }
-                    .ws-inv-title { font-size: 2rem; color: #2563eb; text-align: right; letter-spacing: 4px; }
-                    .ws-inv-meta { display: flex; flex-direction: column; gap: 3px; text-align: right; font-size: 0.82rem; margin-top: 8px; color: #475569; }
-                    .ws-inv-parties { display: flex; justify-content: space-between; margin-bottom: 25px; gap: 40px; }
-                    .ws-inv-party h4 { color: #2563eb; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
-                    .ws-inv-party { font-size: 0.85rem; line-height: 1.6; }
-                    .ws-inv-party--right { text-align: right; }
-                    .ws-inv-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 0.85rem; }
-                    .ws-inv-table th { background: #f1f5f9; padding: 10px 12px; text-align: left; font-weight: 600; border-bottom: 2px solid #e2e8f0; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.5px; color: #475569; }
-                    .ws-inv-table td { padding: 10px 12px; border-bottom: 1px solid #f1f5f9; }
-                    .ws-inv-table tbody tr:hover { background: #f8fafc; }
-                    .ws-inv-totals { display: flex; justify-content: flex-end; margin-bottom: 20px; }
-                    .ws-inv-totals-table { width: 300px; }
-                    .ws-inv-total-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 0.88rem; }
-                    .ws-inv-grand-total { font-size: 1.1rem; font-weight: 700; border-top: 2px solid #2563eb; border-bottom: 2px solid #2563eb; padding: 10px 0; margin: 6px 0; color: #2563eb; }
-                    .ws-inv-balance-due { color: #dc2626; font-weight: 600; }
-                    .ws-inv-payment-info { display: flex; gap: 30px; font-size: 0.82rem; padding: 12px 0; border-top: 1px solid #e2e8f0; margin-bottom: 15px; color: #475569; }
-                    .ws-inv-notes { background: #f8fafc; padding: 12px; border-radius: 6px; margin-bottom: 20px; font-size: 0.82rem; }
-                    .ws-inv-notes h4 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 1px; color: #2563eb; margin-bottom: 4px; }
-                    .ws-inv-footer { text-align: center; padding-top: 20px; border-top: 1px solid #e2e8f0; font-size: 0.82rem; color: #64748b; }
-                    .ws-inv-footer small { display: block; margin-top: 4px; font-size: 0.72rem; }
-                    @media print { body { padding: 15px; } }
-                </style>
+                <style>${this._getInvoicePrintCSS()}</style>
                 </head><body>${content.innerHTML}</body></html>
             `);
             printWin.document.close();
@@ -1495,96 +1640,198 @@
 
             const { jsPDF } = window.jspdf || jspdf;
             const doc = new jsPDF();
+            const bizName = PharmaFlow.Settings ? PharmaFlow.Settings.getBusinessName() : 'PharmaFlow';
+            const bizTagline = PharmaFlow.Settings ? PharmaFlow.Settings.getTagline() : 'Pharmacy Management System';
+            const dateStr = order.createdAt ? new Date(order.createdAt).toLocaleDateString('en-KE', { year: 'numeric', month: 'long', day: 'numeric' }) : '';
+            const timeStr = order.createdAt ? new Date(order.createdAt).toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' }) : '';
+            const dueStr = order.dueDate ? new Date(order.dueDate).toLocaleDateString('en-KE', { year: 'numeric', month: 'long', day: 'numeric' }) : 'N/A';
+            const totalQty = (order.items || []).reduce((s, i) => s + (i.quantity || 0), 0);
+
+            doc.setFont('courier', 'normal');
+            const L = 14;
+            const R = 196;
 
             // Header
-            doc.setFontSize(22);
-            doc.setTextColor(37, 99, 235);
-            doc.text(PharmaFlow.Settings ? PharmaFlow.Settings.getBusinessName() : 'PharmaFlow', 14, 20);
-            doc.setFontSize(10);
-            doc.setTextColor(100);
-            doc.text(PharmaFlow.Settings ? PharmaFlow.Settings.getTagline() : 'Pharmacy Management System', 14, 26);
-
-            doc.setFontSize(20);
-            doc.setTextColor(37, 99, 235);
-            doc.text('INVOICE', 196, 20, { align: 'right' });
-
+            doc.setFontSize(16);
+            doc.text(bizName.toUpperCase(), 105, 16, { align: 'center' });
             doc.setFontSize(9);
-            doc.setTextColor(70);
-            doc.text('Invoice #: ' + (order.invoiceNo || 'N/A'), 196, 28, { align: 'right' });
-            doc.text('Order ID: ' + (order.orderId || ''), 196, 33, { align: 'right' });
-            doc.text('Date: ' + (order.createdAt ? new Date(order.createdAt).toLocaleDateString('en-KE') : ''), 196, 38, { align: 'right' });
+            doc.text(bizTagline, 105, 22, { align: 'center' });
 
-            doc.setDrawColor(37, 99, 235);
+            // Double line
             doc.setLineWidth(0.8);
-            doc.line(14, 42, 196, 42);
+            doc.setDrawColor(0);
+            doc.line(L, 26, R, 26);
+            doc.line(L, 27.5, R, 27.5);
+
+            doc.setFontSize(13);
+            doc.text('WHOLESALE INVOICE', 105, 34, { align: 'center' });
+
+            // Dashed line
+            doc.setLineWidth(0.3);
+            doc.setLineDashPattern([2, 2], 0);
+            doc.line(L, 37, R, 37);
+            doc.setLineDashPattern([], 0);
+
+            // Meta details
+            let y = 44;
+            doc.setFontSize(9);
+            const metaLines = [
+                ['Invoice No.:', order.invoiceNo || 'N/A'],
+                ['Order ID:', order.orderId || 'N/A'],
+                ['Date:', dateStr + '  ' + timeStr],
+                ['Due Date:', dueStr],
+                ['Status:', (order.status || 'N/A').toUpperCase()],
+                ['Payment:', (order.paymentStatus || 'N/A').toUpperCase()],
+                ['Served By:', order.createdBy || 'Staff']
+            ];
+            metaLines.forEach(([label, value]) => {
+                doc.setFont('courier', 'bold');
+                doc.text(label, L, y);
+                doc.setFont('courier', 'normal');
+                doc.text(value, R, y, { align: 'right' });
+                y += 5;
+            });
+
+            // Dashed line
+            doc.setLineDashPattern([2, 2], 0);
+            doc.line(L, y, R, y);
+            doc.setLineDashPattern([], 0);
+            y += 6;
 
             // Bill To
-            doc.setFontSize(8);
-            doc.setTextColor(37, 99, 235);
-            doc.text('BILL TO:', 14, 50);
-            doc.setTextColor(30);
-            doc.setFontSize(10);
-            doc.text(order.customer?.name || 'N/A', 14, 56);
-            doc.setFontSize(9);
-            let yPos = 61;
-            if (order.customer?.phone) { doc.text(order.customer.phone, 14, yPos); yPos += 5; }
-            if (order.customer?.email) { doc.text(order.customer.email, 14, yPos); yPos += 5; }
-            if (order.customer?.address) { doc.text(order.customer.address, 14, yPos); yPos += 5; }
+            doc.setFont('courier', 'bold');
+            doc.text('BILL TO', L, y);
+            doc.setLineWidth(0.3);
+            doc.line(L, y + 1, L + 25, y + 1);
+            y += 6;
+            doc.setFont('courier', 'normal');
+            const custLines = [
+                ['Name:', order.customer?.name || 'N/A'],
+                order.customer?.phone ? ['Phone:', order.customer.phone] : null,
+                order.customer?.email ? ['Email:', order.customer.email] : null,
+                order.customer?.address ? ['Address:', order.customer.address] : null
+            ].filter(Boolean);
+            custLines.forEach(([label, value]) => {
+                doc.setFont('courier', 'bold');
+                doc.text(label, L, y);
+                doc.setFont('courier', 'normal');
+                doc.text(value, R, y, { align: 'right' });
+                y += 5;
+            });
 
-            // Items table using autoTable
+            // Double line
+            y += 2;
+            doc.setLineWidth(0.8);
+            doc.setLineDashPattern([], 0);
+            doc.line(L, y, R, y);
+            doc.line(L, y + 1.5, R, y + 1.5);
+            y += 5;
+
+            // Items table
             const tableData = (order.items || []).map((item, i) => [
-                i + 1,
-                item.name + (item.sku ? '\nSKU: ' + item.sku : ''),
-                item.quantity,
+                String(i + 1),
+                item.name + (item.sku ? ' [' + item.sku + ']' : ''),
+                String(item.quantity),
                 this.formatCurrency(item.unitPrice),
                 this.formatCurrency(item.lineTotal)
             ]);
 
             doc.autoTable({
-                startY: Math.max(yPos + 5, 70),
-                head: [['#', 'Description', 'Qty', 'Unit Price', 'Amount']],
+                startY: y,
+                head: [['#', 'ITEM DESCRIPTION', 'QTY', 'PRICE', 'AMOUNT']],
                 body: tableData,
-                theme: 'striped',
-                headStyles: { fillColor: [37, 99, 235], fontSize: 8, fontStyle: 'bold' },
-                bodyStyles: { fontSize: 8 },
+                theme: 'plain',
+                styles: { font: 'courier', fontSize: 8.5, cellPadding: 3, textColor: [0, 0, 0], lineColor: [0, 0, 0] },
+                headStyles: { fontStyle: 'bold', fontSize: 8, lineWidth: { top: 0.5, bottom: 0.5 } },
+                bodyStyles: { lineWidth: { bottom: 0.15 } },
                 columnStyles: {
-                    0: { cellWidth: 12 },
-                    2: { halign: 'center', cellWidth: 18 },
+                    0: { cellWidth: 12, halign: 'center' },
+                    2: { halign: 'center', cellWidth: 16, fontStyle: 'bold' },
                     3: { halign: 'right', cellWidth: 30 },
-                    4: { halign: 'right', cellWidth: 30 }
+                    4: { halign: 'right', cellWidth: 30, fontStyle: 'bold' }
                 }
             });
 
             // Totals
-            let finalY = doc.lastAutoTable.finalY + 10;
-            doc.setFontSize(9);
-            doc.setTextColor(70);
+            let fY = doc.lastAutoTable.finalY + 4;
+            doc.setLineDashPattern([2, 2], 0);
+            doc.setLineWidth(0.3);
+            doc.line(L, fY, R, fY);
+            doc.setLineDashPattern([], 0);
+            fY += 6;
 
-            const addTotalRow = (label, value, bold) => {
-                if (bold) { doc.setFontSize(11); doc.setTextColor(37, 99, 235); }
-                else { doc.setFontSize(9); doc.setTextColor(70); }
-                doc.text(label, 140, finalY);
-                doc.text(value, 196, finalY, { align: 'right' });
-                finalY += bold ? 8 : 6;
+            const totRow = (label, value, big) => {
+                doc.setFont('courier', big ? 'bold' : 'normal');
+                doc.setFontSize(big ? 11 : 9);
+                doc.text(label, 120, fY);
+                doc.text(value, R, fY, { align: 'right' });
+                fY += big ? 7 : 5;
             };
 
-            addTotalRow('Subtotal:', this.formatCurrency(order.subtotal));
-            if (order.discountAmount > 0) addTotalRow('Discount:', '- ' + this.formatCurrency(order.discountAmount));
-            if (order.applyTax) addTotalRow('VAT (16%):', this.formatCurrency(order.taxAmount));
-            addTotalRow('TOTAL:', this.formatCurrency(order.grandTotal), true);
-            addTotalRow('Amount Paid:', this.formatCurrency(order.amountPaid || 0));
+            totRow('Total Items:', String(totalQty));
+            totRow('Subtotal:', this.formatCurrency(order.subtotal));
+            if (order.discountAmount > 0) totRow('Discount' + (order.discountType === 'percent' ? ' (' + order.discountValue + '%)' : '') + ':', '-' + this.formatCurrency(order.discountAmount));
+            if (order.applyTax) totRow('VAT (16%):', this.formatCurrency(order.taxAmount));
+
+            // Grand total with lines
+            doc.setLineWidth(0.3);
+            doc.setLineDashPattern([2, 2], 0);
+            doc.line(120, fY - 2, R, fY - 2);
+            doc.setLineDashPattern([], 0);
+            fY += 2;
+            totRow('TOTAL DUE:', this.formatCurrency(order.grandTotal), true);
+            doc.setLineWidth(0.8);
+            doc.line(120, fY - 3, R, fY - 3);
+            doc.line(120, fY - 1.5, R, fY - 1.5);
+            fY += 3;
+
+            totRow('Amount Paid:', this.formatCurrency(order.amountPaid || 0));
             if ((order.balanceDue || 0) > 0) {
-                doc.setTextColor(220, 38, 38);
-                addTotalRow('Balance Due:', this.formatCurrency(order.balanceDue));
+                totRow('BALANCE DUE:', this.formatCurrency(order.balanceDue), true);
+            } else {
+                totRow('Balance:', 'KSH 0.00');
+            }
+
+            // Payment method
+            fY += 2;
+            doc.setLineDashPattern([2, 2], 0);
+            doc.setLineWidth(0.3);
+            doc.line(L, fY, R, fY);
+            doc.setLineDashPattern([], 0);
+            fY += 6;
+            doc.setFont('courier', 'bold');
+            doc.setFontSize(9);
+            doc.text('Pay Method:', L, fY);
+            doc.setFont('courier', 'normal');
+            doc.text((order.paymentMethod || 'N/A').replace(/_/g, ' ').toUpperCase(), R, fY, { align: 'right' });
+            fY += 6;
+
+            if (order.notes) {
+                doc.setLineDashPattern([2, 2], 0);
+                doc.line(L, fY, R, fY);
+                doc.setLineDashPattern([], 0);
+                fY += 6;
+                doc.setFont('courier', 'bold');
+                doc.text('NOTES', L, fY);
+                fY += 5;
+                doc.setFont('courier', 'normal');
+                doc.setFontSize(8);
+                doc.text(order.notes, L, fY, { maxWidth: R - L });
+                fY += 8;
             }
 
             // Footer
-            finalY += 10;
+            doc.setLineWidth(0.8);
+            doc.setLineDashPattern([], 0);
+            doc.line(L, fY, R, fY);
+            doc.line(L, fY + 1.5, R, fY + 1.5);
+            fY += 8;
+            doc.setFont('courier', 'bold');
             doc.setFontSize(9);
-            doc.setTextColor(100);
-            doc.text(PharmaFlow.Settings ? PharmaFlow.Settings.getInvoiceFooter() : 'Thank you for your business!', 105, finalY, { align: 'center' });
+            doc.text(PharmaFlow.Settings ? PharmaFlow.Settings.getInvoiceFooter() : 'Thank you for your business!', 105, fY, { align: 'center' });
+            doc.setFont('courier', 'normal');
             doc.setFontSize(7);
-            doc.text(PharmaFlow.Settings ? PharmaFlow.Settings.getInvoiceGenerated() : 'Generated by PharmaFlow Pharmacy Management System', 105, finalY + 6, { align: 'center' });
+            doc.text(PharmaFlow.Settings ? PharmaFlow.Settings.getInvoiceGenerated() : 'Generated by PharmaFlow', 105, fY + 5, { align: 'center' });
 
             doc.save('Invoice-' + (order.invoiceNo || order.orderId) + '.pdf');
             this.showToast('PDF downloaded!');

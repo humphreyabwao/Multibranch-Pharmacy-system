@@ -12,10 +12,16 @@
     window.PharmaFlow = window.PharmaFlow || {};
 
     let expensesListener = null;
-    let allExpenses = [];
-    let filteredExpenses = [];
-    let expCurrentPage = 1;
-    const PAGE_SIZE = 25;
+
+    // Cursor-based pagination state
+    let expPage = 1;
+    let expPageSize = 25;
+    let expPageData = [];
+    let expFirstDoc = null;
+    let expLastDoc = null;
+    let expPageStack = [];
+    let expHasNext = false;
+    let expIsLoading = false;
 
     // Expense categories
     const EXPENSE_CATEGORIES = [
@@ -87,8 +93,12 @@
 
         cleanup: function () {
             if (expensesListener) { expensesListener(); expensesListener = null; }
-            allExpenses = [];
-            filteredExpenses = [];
+            expPage = 1;
+            expPageData = [];
+            expFirstDoc = null;
+            expLastDoc = null;
+            expPageStack = [];
+            expHasNext = false;
         },
 
         // ═══════════════════════════════════════════════
@@ -401,6 +411,11 @@
                                 <option value="">All Payments</option>
                                 ${paymentOptions}
                             </select>
+                            <select id="exp-page-size" title="Rows per page">
+                                <option value="25">25 rows</option>
+                                <option value="50">50 rows</option>
+                                <option value="100">100 rows</option>
+                            </select>
                             <button class="dda-btn dda-btn--export" id="exp-export-pdf">
                                 <i class="fas fa-file-pdf"></i> Export PDF
                             </button>
@@ -537,14 +552,18 @@
             `;
 
             this.bindManageEvents(container);
-            this.subscribeExpenses();
+            this._resetExpPagination();
+            this._loadExpensesPage();
+            this._loadExpenseStats();
         },
 
         bindManageEvents: function (container) {
-            document.getElementById('exp-search')?.addEventListener('input', () => { expCurrentPage = 1; this.filterExpenses(); });
-            document.getElementById('exp-cat-filter')?.addEventListener('change', () => { expCurrentPage = 1; this.filterExpenses(); });
-            document.getElementById('exp-status-filter')?.addEventListener('change', () => { expCurrentPage = 1; this.filterExpenses(); });
-            document.getElementById('exp-pay-filter')?.addEventListener('change', () => { expCurrentPage = 1; this.filterExpenses(); });
+            let expDebounce;
+            document.getElementById('exp-search')?.addEventListener('input', () => { clearTimeout(expDebounce); expDebounce = setTimeout(() => { this._resetExpPagination(); this._loadExpensesPage(); }, 350); });
+            document.getElementById('exp-cat-filter')?.addEventListener('change', () => { this._resetExpPagination(); this._loadExpensesPage(); this._loadExpenseStats(); });
+            document.getElementById('exp-status-filter')?.addEventListener('change', () => { this._resetExpPagination(); this._loadExpensesPage(); this._loadExpenseStats(); });
+            document.getElementById('exp-pay-filter')?.addEventListener('change', () => { this._resetExpPagination(); this._loadExpensesPage(); this._loadExpenseStats(); });
+            document.getElementById('exp-page-size')?.addEventListener('change', (e) => { expPageSize = parseInt(e.target.value) || 25; this._resetExpPagination(); this._loadExpensesPage(); });
             document.getElementById('exp-export-pdf')?.addEventListener('click', () => this.exportPdf());
 
             // Quick date filters
@@ -553,8 +572,9 @@
                     container.querySelectorAll('.dda-pill').forEach(p => p.classList.remove('active'));
                     pill.classList.add('active');
                     this.quickRange = pill.dataset.range;
-                    expCurrentPage = 1;
-                    this.filterExpenses();
+                    this._resetExpPagination();
+                    this._loadExpensesPage();
+                    this._loadExpenseStats();
                 });
             });
 
@@ -573,94 +593,170 @@
 
         quickRange: 'all',
 
-        subscribeExpenses: function () {
+        _resetExpPagination: function () {
+            expPage = 1;
+            expPageData = [];
+            expFirstDoc = null;
+            expLastDoc = null;
+            expPageStack = [];
+            expHasNext = false;
+        },
+
+        _buildExpenseQuery: function () {
             const businessId = this.getBusinessId();
-            if (!businessId) return;
-            if (expensesListener) expensesListener();
+            if (!businessId) return null;
+            let q = getBusinessCollection(businessId, 'expenses');
 
-            expensesListener = getBusinessCollection(businessId, 'expenses')
-                .onSnapshot(snap => {
-                    allExpenses = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                    allExpenses.sort((a, b) => {
-                        const da = a.date || '';
-                        const db = b.date || '';
-                        return db.localeCompare(da);
-                    });
-                    this.updateStats();
-                    this.filterExpenses();
-                }, err => {
-                    console.error('Expenses subscribe error:', err);
-                });
-        },
-
-        updateStats: function () {
-            const el = id => document.getElementById(id);
-            const now = new Date();
-            const monthStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
-
-            const totalAmount = allExpenses.reduce((s, e) => s + (e.amount || 0), 0);
-            const pendingCount = allExpenses.filter(e => e.status === 'pending').length;
-            const approvedCount = allExpenses.filter(e => e.status === 'approved').length;
-            const monthExpenses = allExpenses.filter(e => (e.date || '').startsWith(monthStr));
-            const monthTotal = monthExpenses.reduce((s, e) => s + (e.amount || 0), 0);
-
-            if (el('exp-total-count')) el('exp-total-count').textContent = allExpenses.length;
-            if (el('exp-total-amount')) el('exp-total-amount').textContent = this.formatCurrency(totalAmount);
-            if (el('exp-pending-count')) el('exp-pending-count').textContent = pendingCount;
-            if (el('exp-approved-count')) el('exp-approved-count').textContent = approvedCount;
-            if (el('exp-month-amount')) el('exp-month-amount').textContent = this.formatCurrency(monthTotal);
-        },
-
-        filterExpenses: function () {
-            const query = (document.getElementById('exp-search')?.value || '').toLowerCase();
             const catFilter = document.getElementById('exp-cat-filter')?.value || '';
             const statusFilter = document.getElementById('exp-status-filter')?.value || '';
             const payFilter = document.getElementById('exp-pay-filter')?.value || '';
 
-            let fromDate = null;
-            let toDate = null;
+            if (catFilter) q = q.where('category', '==', catFilter);
+            if (statusFilter) q = q.where('status', '==', statusFilter);
+            if (payFilter) q = q.where('paymentMethod', '==', payFilter);
+
+            // Date range from quick pills
+            let fromDate = null, toDate = null;
             const today = new Date();
             const fmt = d => d.toISOString().split('T')[0];
-
             switch (this.quickRange) {
-                case 'today':
-                    fromDate = fmt(today); toDate = fmt(today); break;
-                case 'week': {
-                    const ws = new Date(today); ws.setDate(ws.getDate() - ws.getDay());
-                    fromDate = fmt(ws); toDate = fmt(today); break;
+                case 'today': fromDate = fmt(today); toDate = fmt(today); break;
+                case 'week': { const ws = new Date(today); ws.setDate(ws.getDate() - ws.getDay()); fromDate = fmt(ws); toDate = fmt(today); break; }
+                case 'month': { const ms = new Date(today.getFullYear(), today.getMonth(), 1); fromDate = fmt(ms); toDate = fmt(today); break; }
+                case '30': { const d30 = new Date(today); d30.setDate(d30.getDate() - 30); fromDate = fmt(d30); toDate = fmt(today); break; }
+                case '90': { const d90 = new Date(today); d90.setDate(d90.getDate() - 90); fromDate = fmt(d90); toDate = fmt(today); break; }
+            }
+            if (fromDate) q = q.where('date', '>=', fromDate);
+            if (toDate) q = q.where('date', '<=', toDate);
+
+            q = q.orderBy('date', 'desc');
+            return q;
+        },
+
+        _loadExpensesPage: async function (direction) {
+            if (expIsLoading) return;
+            expIsLoading = true;
+
+            const tbody = document.getElementById('exp-tbody');
+            if (tbody) tbody.innerHTML = '<tr><td colspan="10" class="dda-loading"><div class="spinner"></div> Loading expenses...</td></tr>';
+
+            try {
+                let q = this._buildExpenseQuery();
+                if (!q) { expIsLoading = false; return; }
+
+                if (direction === 'next' && expLastDoc) {
+                    q = q.startAfter(expLastDoc);
+                } else if (direction === 'prev' && expPageStack.length > 0) {
+                    const prevCursor = expPageStack.pop();
+                    q = q.startAt(prevCursor);
+                    expPage--;
                 }
-                case 'month': {
-                    const ms = new Date(today.getFullYear(), today.getMonth(), 1);
-                    fromDate = fmt(ms); toDate = fmt(today); break;
+
+                const snap = await q.limit(expPageSize + 1).get();
+                const docs = snap.docs;
+
+                expHasNext = docs.length > expPageSize;
+                const pageDocs = expHasNext ? docs.slice(0, expPageSize) : docs;
+
+                expPageData = pageDocs.map(d => ({ id: d.id, ...d.data() }));
+
+                // Client-side text search
+                const searchQ = (document.getElementById('exp-search')?.value || '').toLowerCase().trim();
+                if (searchQ) {
+                    expPageData = expPageData.filter(e => {
+                        const hay = ((e.title || '') + ' ' + (e.vendor || '') + ' ' + (e.reference || '') + ' ' + (e.category || '') + ' ' + (e.createdBy || '')).toLowerCase();
+                        return hay.includes(searchQ);
+                    });
                 }
-                case '30': {
-                    const d30 = new Date(today); d30.setDate(d30.getDate() - 30);
-                    fromDate = fmt(d30); toDate = fmt(today); break;
+
+                if (pageDocs.length > 0) {
+                    if (direction === 'next' && expFirstDoc) {
+                        expPageStack.push(expFirstDoc);
+                        expPage++;
+                    }
+                    expFirstDoc = pageDocs[0];
+                    expLastDoc = pageDocs[pageDocs.length - 1];
+                } else {
+                    expFirstDoc = null;
+                    expLastDoc = null;
                 }
-                case '90': {
-                    const d90 = new Date(today); d90.setDate(d90.getDate() - 90);
-                    fromDate = fmt(d90); toDate = fmt(today); break;
-                }
+
+                this.renderCategoryBreakdown();
+                this.renderPage();
+                this._renderExpPagination();
+            } catch (err) {
+                console.error('Load expenses page error:', err);
+                if (tbody) tbody.innerHTML = '<tr><td colspan="10" class="dda-loading"><i class="fas fa-exclamation-circle"></i> Failed to load expenses</td></tr>';
+            } finally {
+                expIsLoading = false;
+            }
+        },
+
+        _loadExpenseStats: async function () {
+            const businessId = this.getBusinessId();
+            if (!businessId) return;
+            const el = id => document.getElementById(id);
+            const col = getBusinessCollection(businessId, 'expenses');
+            const now = new Date();
+            const monthStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+
+            try {
+                const snap = await col.orderBy('date', 'desc').limit(10000).get();
+                const all = snap.docs.map(d => d.data());
+                const suffix = all.length >= 10000 ? '+' : '';
+                const totalAmount = all.reduce((s, e) => s + (e.amount || 0), 0);
+                const pendingCount = all.filter(e => e.status === 'pending').length;
+                const approvedCount = all.filter(e => e.status === 'approved').length;
+                const monthExpenses = all.filter(e => (e.date || '').startsWith(monthStr));
+                const monthTotal = monthExpenses.reduce((s, e) => s + (e.amount || 0), 0);
+
+                if (el('exp-total-count')) el('exp-total-count').textContent = all.length + suffix;
+                if (el('exp-total-amount')) el('exp-total-amount').textContent = this.formatCurrency(totalAmount);
+                if (el('exp-pending-count')) el('exp-pending-count').textContent = pendingCount;
+                if (el('exp-approved-count')) el('exp-approved-count').textContent = approvedCount;
+                if (el('exp-month-amount')) el('exp-month-amount').textContent = this.formatCurrency(monthTotal);
+            } catch (err) {
+                console.error('Load expense stats error:', err);
+            }
+        },
+
+        _renderExpPagination: function () {
+            const container = document.getElementById('exp-pagination');
+            if (!container) return;
+
+            const hasPrev = expPage > 1;
+            const hasNext = expHasNext;
+            const count = expPageData.length;
+            const start = (expPage - 1) * expPageSize + 1;
+            const end = start + count - 1;
+
+            if (!hasPrev && !hasNext && count <= expPageSize) {
+                container.innerHTML = count > 0 ? '<span class="dda-page-info">Showing ' + count + ' expense' + (count !== 1 ? 's' : '') + ' &mdash; Page ' + expPage + '</span>' : '';
+                return;
             }
 
-            filteredExpenses = allExpenses.filter(e => {
-                if (catFilter && e.category !== catFilter) return false;
-                if (statusFilter && e.status !== statusFilter) return false;
-                if (payFilter && e.paymentMethod !== payFilter) return false;
-                if (fromDate || toDate) {
-                    const eDate = e.date || '';
-                    if (fromDate && eDate < fromDate) return false;
-                    if (toDate && eDate > toDate) return false;
-                }
-                if (query) {
-                    const haystack = ((e.title || '') + ' ' + (e.vendor || '') + ' ' + (e.reference || '') + ' ' + (e.category || '') + ' ' + (e.createdBy || '')).toLowerCase();
-                    return haystack.includes(query);
-                }
-                return true;
-            });
+            container.innerHTML = '<span class="dda-page-info">Page ' + expPage + ' &middot; Showing ' + (count > 0 ? start + '-' + end : '0') + ' expenses</span>' +
+                '<div class="dda-page-controls">' +
+                '<button class="dda-page-btn" id="exp-prev-page"' + (!hasPrev ? ' disabled' : '') + '><i class="fas fa-chevron-left"></i> Prev</button>' +
+                '<span class="dda-page-btn active" style="cursor:default">' + expPage + '</span>' +
+                '<button class="dda-page-btn" id="exp-next-page"' + (!hasNext ? ' disabled' : '') + '>Next <i class="fas fa-chevron-right"></i></button>' +
+                '</div>';
 
-            this.renderCategoryBreakdown();
-            this.renderPage();
+            document.getElementById('exp-prev-page')?.addEventListener('click', () => {
+                if (hasPrev) this._loadExpensesPage('prev');
+            });
+            document.getElementById('exp-next-page')?.addEventListener('click', () => {
+                if (hasNext) this._loadExpensesPage('next');
+            });
+        },
+
+        _fetchExpenseById: async function (docId) {
+            const local = expPageData.find(e => e.id === docId);
+            if (local) return local;
+            const businessId = this.getBusinessId();
+            if (!businessId) return null;
+            const doc = await getBusinessCollection(businessId, 'expenses').doc(docId).get();
+            return doc.exists ? { id: doc.id, ...doc.data() } : null;
         },
 
         // ═══════════════════════════════════════════════
@@ -671,13 +767,13 @@
             const container = document.getElementById('exp-breakdown');
             if (!container) return;
 
-            if (filteredExpenses.length === 0) {
+            if (expPageData.length === 0) {
                 container.innerHTML = '';
                 return;
             }
 
             const catTotals = {};
-            filteredExpenses.forEach(e => {
+            expPageData.forEach(e => {
                 const cat = e.category || 'Uncategorized';
                 catTotals[cat] = (catTotals[cat] || 0) + (e.amount || 0);
             });
@@ -724,12 +820,11 @@
             const tbody = document.getElementById('exp-tbody');
             if (!tbody) return;
 
-            const start = (expCurrentPage - 1) * PAGE_SIZE;
-            const pageData = filteredExpenses.slice(start, start + PAGE_SIZE);
+            const start = (expPage - 1) * expPageSize;
+            const pageData = expPageData;
 
             if (pageData.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="10" class="dda-loading"><i class="fas fa-inbox"></i> No expenses found</td></tr>';
-                this.renderPagination();
                 return;
             }
 
@@ -757,29 +852,40 @@
             }).join('');
 
             // Bind actions
+            const self = this;
             tbody.querySelectorAll('.exp-view').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const expense = allExpenses.find(e => e.id === btn.dataset.id);
-                    if (expense) this.viewExpense(expense);
+                btn.addEventListener('click', async () => {
+                    const expense = await self._fetchExpenseById(btn.dataset.id);
+                    if (expense) self.viewExpense(expense);
                 });
             });
             tbody.querySelectorAll('.exp-approve').forEach(btn => {
-                btn.addEventListener('click', () => this.changeStatus(btn.dataset.id, 'approved'));
+                btn.addEventListener('click', async () => {
+                    await self.changeStatus(btn.dataset.id, 'approved');
+                    self._loadExpensesPage();
+                    self._loadExpenseStats();
+                });
             });
             tbody.querySelectorAll('.exp-reject').forEach(btn => {
-                btn.addEventListener('click', () => this.changeStatus(btn.dataset.id, 'rejected'));
+                btn.addEventListener('click', async () => {
+                    await self.changeStatus(btn.dataset.id, 'rejected');
+                    self._loadExpensesPage();
+                    self._loadExpenseStats();
+                });
             });
             tbody.querySelectorAll('.exp-edit').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const expense = allExpenses.find(e => e.id === btn.dataset.id);
-                    if (expense) this.openEditModal(expense);
+                btn.addEventListener('click', async () => {
+                    const expense = await self._fetchExpenseById(btn.dataset.id);
+                    if (expense) self.openEditModal(expense);
                 });
             });
             tbody.querySelectorAll('.exp-delete').forEach(btn => {
-                btn.addEventListener('click', () => this.deleteExpense(btn.dataset.id));
+                btn.addEventListener('click', async () => {
+                    await self.deleteExpense(btn.dataset.id);
+                    self._loadExpensesPage();
+                    self._loadExpenseStats();
+                });
             });
-
-            this.renderPagination();
         },
 
         changeStatus: async function (docId, newStatus) {
@@ -938,6 +1044,7 @@
 
                 this.showToast('Expense updated!');
                 document.getElementById('exp-edit-modal').style.display = 'none';
+                this._loadExpensesPage();
             } catch (err) {
                 console.error('Update expense error:', err);
                 this.showToast('Failed to update: ' + err.message, 'error');
@@ -986,86 +1093,58 @@
         //  PAGINATION
         // ═══════════════════════════════════════════════
 
-        renderPagination: function () {
-            const container = document.getElementById('exp-pagination');
-            if (!container) return;
-            const totalItems = filteredExpenses.length;
-            const totalPages = Math.ceil(totalItems / PAGE_SIZE) || 1;
-            if (totalPages <= 1) { container.innerHTML = ''; return; }
-
-            const start = (expCurrentPage - 1) * PAGE_SIZE + 1;
-            const end = Math.min(expCurrentPage * PAGE_SIZE, totalItems);
-
-            let pagesHtml = '';
-            const maxV = 5;
-            let sp = Math.max(1, expCurrentPage - Math.floor(maxV / 2));
-            let ep = Math.min(totalPages, sp + maxV - 1);
-            if (ep - sp < maxV - 1) sp = Math.max(1, ep - maxV + 1);
-
-            if (sp > 1) pagesHtml += '<button class="dda-page-btn" data-page="1">1</button>';
-            if (sp > 2) pagesHtml += '<span class="dda-page-dots">...</span>';
-            for (let p = sp; p <= ep; p++) {
-                pagesHtml += '<button class="dda-page-btn' + (p === expCurrentPage ? ' active' : '') + '" data-page="' + p + '">' + p + '</button>';
-            }
-            if (ep < totalPages - 1) pagesHtml += '<span class="dda-page-dots">...</span>';
-            if (ep < totalPages) pagesHtml += '<button class="dda-page-btn" data-page="' + totalPages + '">' + totalPages + '</button>';
-
-            container.innerHTML = `
-                <span class="dda-page-info">Showing ${start}-${end} of ${totalItems}</span>
-                <div class="dda-page-controls">
-                    <button class="dda-page-btn" data-page="${expCurrentPage - 1}" ${expCurrentPage === 1 ? 'disabled' : ''}><i class="fas fa-chevron-left"></i></button>
-                    ${pagesHtml}
-                    <button class="dda-page-btn" data-page="${expCurrentPage + 1}" ${expCurrentPage === totalPages ? 'disabled' : ''}><i class="fas fa-chevron-right"></i></button>
-                </div>
-            `;
-
-            container.querySelectorAll('.dda-page-btn[data-page]').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const page = parseInt(btn.dataset.page);
-                    if (page >= 1 && page <= totalPages) { expCurrentPage = page; this.renderPage(); }
-                });
-            });
-        },
+        // Pagination is handled by _renderExpPagination above
 
         // ═══════════════════════════════════════════════
         //  EXPORT PDF
         // ═══════════════════════════════════════════════
 
-        exportPdf: function () {
+        exportPdf: async function () {
             const { jsPDF } = window.jspdf;
             if (!jsPDF) { this.showToast('PDF library not loaded.', 'error'); return; }
-            const doc = new jsPDF('l', 'mm', 'a4');
 
-            const totalAmount = filteredExpenses.reduce((s, e) => s + (e.amount || 0), 0);
+            this.showToast('Preparing PDF export...');
+            try {
+                const q = this._buildExpenseQuery();
+                if (!q) return;
+                const snap = await q.limit(50000).get();
+                const allFiltered = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-            doc.setFontSize(16);
-            doc.text('Expenses Report', 14, 18);
-            doc.setFontSize(9);
-            doc.text('Generated: ' + new Date().toLocaleString('en-KE'), 14, 24);
-            doc.text('Total Expenses: ' + filteredExpenses.length + '  |  Total Amount: ' + this.formatCurrency(totalAmount), 14, 29);
+                const totalAmount = allFiltered.reduce((s, e) => s + (e.amount || 0), 0);
+                const doc = new jsPDF('l', 'mm', 'a4');
 
-            const rows = filteredExpenses.map((e, i) => [
-                i + 1,
-                e.date || '',
-                e.title || '',
-                e.category || '',
-                e.vendor || '',
-                e.paymentMethod || '',
-                this.formatCurrency(e.amount),
-                e.status || 'pending',
-                e.createdBy || ''
-            ]);
+                doc.setFontSize(16);
+                doc.text('Expenses Report', 14, 18);
+                doc.setFontSize(9);
+                doc.text('Generated: ' + new Date().toLocaleString('en-KE'), 14, 24);
+                doc.text('Total Expenses: ' + allFiltered.length + '  |  Total Amount: ' + this.formatCurrency(totalAmount), 14, 29);
 
-            doc.autoTable({
-                startY: 34,
-                head: [['#', 'Date', 'Title', 'Category', 'Vendor', 'Payment', 'Amount', 'Status', 'Created By']],
-                body: rows,
-                styles: { fontSize: 8, cellPadding: 2 },
-                headStyles: { fillColor: [79, 70, 229], textColor: 255 }
-            });
+                const rows = allFiltered.map((e, i) => [
+                    i + 1,
+                    e.date || '',
+                    e.title || '',
+                    e.category || '',
+                    e.vendor || '',
+                    e.paymentMethod || '',
+                    this.formatCurrency(e.amount),
+                    e.status || 'pending',
+                    e.createdBy || ''
+                ]);
 
-            doc.save('Expenses_' + new Date().toISOString().split('T')[0] + '.pdf');
-            this.showToast('Expenses PDF exported!');
+                doc.autoTable({
+                    startY: 34,
+                    head: [['#', 'Date', 'Title', 'Category', 'Vendor', 'Payment', 'Amount', 'Status', 'Created By']],
+                    body: rows,
+                    styles: { fontSize: 8, cellPadding: 2 },
+                    headStyles: { fillColor: [79, 70, 229], textColor: 255 }
+                });
+
+                doc.save('Expenses_' + new Date().toISOString().split('T')[0] + '.pdf');
+                this.showToast('Expenses PDF exported!');
+            } catch (err) {
+                console.error('Export PDF error:', err);
+                this.showToast('Failed to export PDF.', 'error');
+            }
         }
     };
 
