@@ -54,8 +54,8 @@
 
                 <div class="topbar-right">
                     <!-- Franchise Selector (visible to superadmin) -->
-                    <div class="franchise-selector" id="franchise-selector" style="display:none;">
-                        <select id="franchise-select" class="franchise-select">
+                    <div class="franchise-selector initially-hidden" id="franchise-selector">
+                        <select id="franchise-select" class="franchise-select" title="Select Business">
                             <option value="">Select Business</option>
                         </select>
                     </div>
@@ -68,13 +68,13 @@
                     <!-- Messages --> 
                     <button class="topbar-btn" id="messages-btn" aria-label="Messages">
                         <i class="fas fa-envelope"></i>
-                        <span class="badge" id="messages-badge" style="display:none;">0</span>
+                        <span class="badge initially-hidden" id="messages-badge">0</span>
                     </button>
 
                     <!-- Notifications -->
                     <button class="topbar-btn" id="notifications-btn" aria-label="Notifications">
                         <i class="fas fa-bell"></i>
-                        <span class="badge" id="notifications-badge" style="display:none;">0</span>
+                        <span class="badge initially-hidden" id="notifications-badge">0</span>
                     </button>
 
                     <!-- Profile Dropdown -->
@@ -113,7 +113,7 @@
             <!-- ===== CONTENT AREA ===== -->
             <main class="content-area" id="content-area">
                 <!-- Sub-module tabs (shown when a module has sub-modules) -->
-                <div class="content-tabs" id="content-tabs" style="display:none;">
+                <div class="content-tabs initially-hidden" id="content-tabs">
                     <!-- Tabs rendered dynamically by router.js -->
                 </div>
 
@@ -133,7 +133,7 @@
     <div class="slide-panel" id="messages-panel">
         <div class="slide-panel-header">
             <h3><i class="fas fa-envelope"></i> Messages</h3>
-            <button class="slide-panel-close" data-panel="messages-panel"><i class="fas fa-times"></i></button>
+            <button class="slide-panel-close" data-panel="messages-panel" title="Close messages"><i class="fas fa-times"></i></button>
         </div>
         <div class="slide-panel-body" id="messages-list">
             <div class="empty-state-small">
@@ -147,7 +147,7 @@
     <div class="slide-panel" id="notifications-panel">
         <div class="slide-panel-header">
             <h3><i class="fas fa-bell"></i> Notifications</h3>
-            <button class="slide-panel-close" data-panel="notifications-panel"><i class="fas fa-times"></i></button>
+            <button class="slide-panel-close" data-panel="notifications-panel" title="Close notifications"><i class="fas fa-times"></i></button>
         </div>
         <div class="slide-panel-body" id="notifications-list">
             <div class="empty-state-small">

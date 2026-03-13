@@ -18,8 +18,8 @@
                 <p>Pharmacy Management System</p>
             </div>
 
-            <div id="login-error" class="alert alert-error" style="display:none;"></div>
-            <div id="login-success" class="alert alert-success" style="display:none;"></div>
+            <div id="login-error" class="alert alert-error login-hidden"></div>
+            <div id="login-success" class="alert alert-success login-hidden"></div>
 
             <!-- Login Form -->
             <form id="login-form" class="login-form">
@@ -54,7 +54,7 @@
             </form>
 
             <!-- Forgot Password Form -->
-            <form id="forgot-password-form" class="login-form" style="display:none;">
+            <form id="forgot-password-form" class="login-form login-hidden">
                 <div class="form-group">
                     <label for="reset-email">Email Address</label>
                     <div class="input-icon-wrapper">
@@ -65,8 +65,8 @@
                 <button type="submit" class="btn btn-primary btn-full" id="reset-btn">
                     <span>Send Reset Link</span>
                     <i class="fas fa-paper-plane"></i>
-                </button>git push -u https://humphreyabwao@github.com/humphreyabwao/Multibranch-Pharmacy-system.git main
-                <button type="button" class="btn btn-outline btn-full" id="back-to-login" style="margin-top:10px;">
+                </button>
+                <button type="button" class="btn btn-outline btn-full back-to-login-btn" id="back-to-login">
                     <i class="fas fa-arrow-left"></i>
                     <span>Back to Login</span>
                 </button>
