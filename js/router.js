@@ -25,57 +25,39 @@
         },
 
         /**
+         * Cleanup a module's listeners/state
+         */
+        _cleanupModule: function (modId) {
+            if (!modId) return;
+            switch (modId) {
+                case 'dashboard': if (PharmaFlow.Dashboard) PharmaFlow.Dashboard.cleanup(); break;
+                case 'inventory': if (PharmaFlow.Inventory) PharmaFlow.Inventory.cleanup(); break;
+                case 'pharmacy':
+                    if (PharmaFlow.POS) PharmaFlow.POS.cleanup();
+                    if (PharmaFlow.TodaysSales) PharmaFlow.TodaysSales.cleanup();
+                    if (PharmaFlow.AllSales) PharmaFlow.AllSales.cleanup();
+                    break;
+                case 'dda-register': if (PharmaFlow.DdaRegister) PharmaFlow.DdaRegister.cleanup(); break;
+                case 'supplier': if (PharmaFlow.Supplier) PharmaFlow.Supplier.cleanup(); break;
+                case 'my-orders': if (PharmaFlow.MyOrders) PharmaFlow.MyOrders.cleanup(); break;
+                case 'expenses': if (PharmaFlow.Expense) PharmaFlow.Expense.cleanup(); break;
+                case 'admin-panel': if (PharmaFlow.AdminPanel) PharmaFlow.AdminPanel.cleanup(); break;
+                case 'wholesale': if (PharmaFlow.Wholesale) PharmaFlow.Wholesale.cleanup(); break;
+                case 'patients': if (PharmaFlow.Patients) PharmaFlow.Patients.cleanup(); break;
+                case 'reports': if (PharmaFlow.Reports) PharmaFlow.Reports.cleanup(); break;
+                case 'accounts': if (PharmaFlow.Accounts) PharmaFlow.Accounts.cleanup(); break;
+                case 'activity-log': if (PharmaFlow.ActivityLog) PharmaFlow.ActivityLog.cleanup(); break;
+                case 'medication-refill': if (PharmaFlow.MedicationRefill) PharmaFlow.MedicationRefill.cleanup(); break;
+                case 'settings': if (PharmaFlow.Settings) PharmaFlow.Settings.cleanup(); break;
+            }
+        },
+
+        /**
          * Navigate to a module/sub-module
          */
         navigateTo: function (moduleId, subModuleId) {
-            // Cleanup previous module listeners
-            if (this.currentModuleId === 'dashboard' && moduleId !== 'dashboard' && PharmaFlow.Dashboard) {
-                PharmaFlow.Dashboard.cleanup();
-            }
-            if (this.currentModuleId === 'inventory' && moduleId !== 'inventory' && PharmaFlow.Inventory) {
-                PharmaFlow.Inventory.cleanup();
-            }
-            if (this.currentModuleId === 'pharmacy' && moduleId !== 'pharmacy') {
-                if (PharmaFlow.POS) PharmaFlow.POS.cleanup();
-                if (PharmaFlow.TodaysSales) PharmaFlow.TodaysSales.cleanup();
-                if (PharmaFlow.AllSales) PharmaFlow.AllSales.cleanup();
-            }
-            if (this.currentModuleId === 'dda-register' && moduleId !== 'dda-register') {
-                if (PharmaFlow.DdaRegister) PharmaFlow.DdaRegister.cleanup();
-            }
-            if (this.currentModuleId === 'supplier' && moduleId !== 'supplier') {
-                if (PharmaFlow.Supplier) PharmaFlow.Supplier.cleanup();
-            }
-            if (this.currentModuleId === 'my-orders' && moduleId !== 'my-orders') {
-                if (PharmaFlow.MyOrders) PharmaFlow.MyOrders.cleanup();
-            }
-            if (this.currentModuleId === 'expenses' && moduleId !== 'expenses') {
-                if (PharmaFlow.Expense) PharmaFlow.Expense.cleanup();
-            }
-            if (this.currentModuleId === 'admin-panel' && moduleId !== 'admin-panel') {
-                if (PharmaFlow.AdminPanel) PharmaFlow.AdminPanel.cleanup();
-            }
-            if (this.currentModuleId === 'wholesale' && moduleId !== 'wholesale') {
-                if (PharmaFlow.Wholesale) PharmaFlow.Wholesale.cleanup();
-            }
-            if (this.currentModuleId === 'patients' && moduleId !== 'patients') {
-                if (PharmaFlow.Patients) PharmaFlow.Patients.cleanup();
-            }
-            if (this.currentModuleId === 'reports' && moduleId !== 'reports') {
-                if (PharmaFlow.Reports) PharmaFlow.Reports.cleanup();
-            }
-            if (this.currentModuleId === 'accounts' && moduleId !== 'accounts') {
-                if (PharmaFlow.Accounts) PharmaFlow.Accounts.cleanup();
-            }
-            if (this.currentModuleId === 'activity-log' && moduleId !== 'activity-log') {
-                if (PharmaFlow.ActivityLog) PharmaFlow.ActivityLog.cleanup();
-            }
-            if (this.currentModuleId === 'medication-refill' && moduleId !== 'medication-refill') {
-                if (PharmaFlow.MedicationRefill) PharmaFlow.MedicationRefill.cleanup();
-            }
-            if (this.currentModuleId === 'settings' && moduleId !== 'settings') {
-                if (PharmaFlow.Settings) PharmaFlow.Settings.cleanup();
-            }
+            // Cleanup previous module listeners (always cleanup, even on same-module re-render for franchise switching)
+            this._cleanupModule(this.currentModuleId);
 
             this.currentModuleId = moduleId;
             this.currentSubModuleId = subModuleId;
@@ -397,6 +379,14 @@
                 }
                 if (subId === 'manage-franchises') {
                     PharmaFlow.AdminPanel.renderManageFranchises(contentBody);
+                    return;
+                }
+                if (subId === 'admin-analytics') {
+                    PharmaFlow.AdminPanel.renderAnalytics(contentBody);
+                    return;
+                }
+                if (subId === 'franchise-alerts') {
+                    PharmaFlow.AdminPanel.renderFranchiseAlerts(contentBody);
                     return;
                 }
             }
