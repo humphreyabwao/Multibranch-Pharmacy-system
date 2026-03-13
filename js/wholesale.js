@@ -2174,7 +2174,7 @@
                 const riders = [];
                 snap.forEach(doc => riders.push({ id: doc.id, ...doc.data() }));
 
-                const availableRiders = riders.filter(r => r.status === 'available' || (order.dispatch && order.dispatch.riderId === r.id));
+                const availableRiders = riders.slice();
 
                 const modal = document.createElement('div');
                 modal.id = 'ws-dispatch-modal';
@@ -2198,7 +2198,8 @@
                                     ${availableRiders.map(r => {
                                         const typeIcons = { motorbike: '🏍️', van: '🚐', truck: '🚛', plane: '✈️', cargo: '🚢', overseas: '🌍' };
                                         const sel = (order.dispatch?.riderId === r.id) ? 'selected' : '';
-                                        return '<option value="' + r.id + '" ' + sel + '>' + (typeIcons[r.agentType] || '🚚') + ' ' + self.escapeHtml(r.name) + ' (' + self.escapeHtml(r.agentType || '') + ' · ' + self.escapeHtml(r.phone || '') + ')</option>';
+                                        const statusTag = r.status === 'available' ? '✅' : r.status === 'dispatched' ? '📦' : '🚀';
+                                        return '<option value="' + r.id + '" ' + sel + '>' + (typeIcons[r.agentType] || '🚚') + ' ' + self.escapeHtml(r.name) + ' ' + statusTag + ' (' + self.escapeHtml(r.agentType || '') + ' · ' + self.escapeHtml(r.phone || '') + ')</option>';
                                     }).join('')}
                                 </select>
                             </div>
@@ -3024,28 +3025,16 @@
             });
         },
 
-        _deleteClient: function (clientId) {
+        _deleteClient: async function (clientId) {
             const self = this;
             const businessId = this.getBusinessId();
-            if (!window.PharmaFlow.showConfirm) {
-                if (!confirm('Delete this client lead?')) return;
-                getBusinessCollection(businessId, 'client_leads').doc(clientId).delete()
-                    .then(() => self.showToast('Client deleted'))
-                    .catch(err => self.showToast('Failed: ' + err.message, 'error'));
-                return;
+            if (!(await PharmaFlow.confirm('Are you sure you want to delete this client lead? This action cannot be undone.', { title: 'Delete Client', confirmText: 'Delete', danger: true }))) return;
+            try {
+                await getBusinessCollection(businessId, 'client_leads').doc(clientId).delete();
+                self.showToast('Client deleted');
+            } catch (err) {
+                self.showToast('Failed: ' + err.message, 'error');
             }
-            window.PharmaFlow.showConfirm(
-                'Delete Client',
-                'Are you sure you want to delete this client lead? This action cannot be undone.',
-                async () => {
-                    try {
-                        await getBusinessCollection(businessId, 'client_leads').doc(clientId).delete();
-                        self.showToast('Client deleted');
-                    } catch (err) {
-                        self.showToast('Failed: ' + err.message, 'error');
-                    }
-                }
-            );
         },
 
         /* ── Send Message Modal ── */

@@ -2337,7 +2337,7 @@
         },
 
         deleteAlert: async function (alertId) {
-            if (!confirm('Delete this alert?')) return;
+            if (!(await PharmaFlow.confirm('Are you sure you want to delete this alert? This action cannot be undone.', { title: 'Delete Alert', confirmText: 'Delete', danger: true }))) return;
             try {
                 await window.db.collection('franchise_alerts').doc(alertId).delete();
                 this.showToast('Alert deleted.');
@@ -2389,7 +2389,7 @@
         },
 
         triggerAutoRemindersNow: async function () {
-            if (!confirm('Send this reminder to all active franchises right now?')) return;
+            if (!(await PharmaFlow.confirm('Send this reminder to all active franchises right now?', { title: 'Send Reminders', confirmText: 'Send Now' }))) return;
             const reminderType = document.getElementById('fal-auto-type')?.value || 'payment_due';
             const message = document.getElementById('fal-auto-message')?.value?.trim() || 'Scheduled reminder from administration.';
             const amount = parseFloat(document.getElementById('fal-auto-amount')?.value) || 0;

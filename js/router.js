@@ -399,14 +399,6 @@
                     PharmaFlow.AdminPanel.renderManageFranchises(contentBody);
                     return;
                 }
-                if (subId === 'admin-analytics') {
-                    PharmaFlow.AdminPanel.renderAnalytics(contentBody);
-                    return;
-                }
-                if (subId === 'franchise-alerts') {
-                    PharmaFlow.AdminPanel.renderFranchiseAlerts(contentBody);
-                    return;
-                }
             }
 
             const pageName = subModule ? subModule.label : moduleConfig.label;

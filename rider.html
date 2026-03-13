@@ -850,13 +850,21 @@
                     showToast(newStatus === 'delivered' ? 'Delivered!' : 'In transit!', 'success');
 
                     if (newStatus === 'delivered' && order.dispatch && order.dispatch.riderId) {
+                        // Check if all orders for this rider are now delivered
+                        var allDelivered = orders.every(function(o) {
+                            if (o.id === orderId) return true; // this one is being delivered now
+                            return o.dispatch && o.dispatch.status === 'delivered';
+                        });
+                        var riderUpdate = {
+                            deliveryCount: firebase.firestore.FieldValue.increment(1),
+                            updatedAt: new Date().toISOString()
+                        };
+                        if (allDelivered) {
+                            riderUpdate.status = 'available';
+                        }
                         db.collection('businesses').doc(businessId)
                             .collection('riders').doc(order.dispatch.riderId)
-                            .update({
-                                deliveryCount: firebase.firestore.FieldValue.increment(1),
-                                status: 'available',
-                                updatedAt: new Date().toISOString()
-                            }).catch(function() {});
+                            .update(riderUpdate).catch(function() {});
                     }
                 }).catch(function(err) {
                     showToast('Failed: ' + err.message, 'error');

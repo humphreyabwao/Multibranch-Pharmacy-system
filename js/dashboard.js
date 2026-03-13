@@ -900,17 +900,11 @@
                             const alertData = alerts.find(a => a.id === alertId);
                             const amount = alertData && alertData.amount ? Number(alertData.amount).toLocaleString() : '';
                             const currency = getCurrency();
-                            if (window.Swal) {
-                                window.Swal.fire({
-                                    icon: 'info',
-                                    title: 'Payment Required',
-                                    html: `<p>Please contact the system administrator to complete your payment.</p>`
-                                        + (amount ? `<p style="margin-top:10px;font-size:1.2rem;font-weight:700">${currency} ${amount}</p>` : ''),
-                                    confirmButtonText: 'OK'
-                                });
-                            } else {
-                                window.alert('Please contact the system administrator to complete your payment.' + (amount ? '\nAmount: ' + currency + ' ' + amount : ''));
-                            }
+                            PharmaFlow.alert(
+                                'Please contact the system administrator to complete your payment.'
+                                + (amount ? '<br><br><span style="font-size:1.2rem;font-weight:700">' + currency + ' ' + amount + '</span>' : ''),
+                                { title: 'Payment Required' }
+                            );
                         });
                     });
                 }, err => {

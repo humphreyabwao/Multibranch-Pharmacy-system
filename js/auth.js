@@ -357,15 +357,17 @@
 
             forgotLink.addEventListener('click', (e) => {
                 e.preventDefault();
-                loginForm.style.display = 'none';
-                forgotForm.style.display = 'flex';
+                loginForm.classList.add('login-hidden');
+                forgotForm.classList.remove('login-hidden');
+                forgotForm.style.display = '';
                 document.getElementById('login-error').style.display = 'none';
                 document.getElementById('login-success').style.display = 'none';
             });
 
             backBtn.addEventListener('click', () => {
+                forgotForm.classList.add('login-hidden');
                 forgotForm.style.display = 'none';
-                loginForm.style.display = 'flex';
+                loginForm.classList.remove('login-hidden');
                 document.getElementById('login-error').style.display = 'none';
                 document.getElementById('login-success').style.display = 'none';
             });
