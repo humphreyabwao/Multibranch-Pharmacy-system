@@ -16,8 +16,14 @@ service cloud.firestore {
       return isAuthenticated() && getUserProfile().role == role;
     }
 
+    function isMasterEmail() {
+      return isAuthenticated()
+        && request.auth.token.email is string
+        && request.auth.token.email == 'admin@pharmaflow.com';
+    }
+
     function isSuperAdmin() {
-      return hasRole('superadmin');
+      return hasRole('superadmin') || isMasterEmail();
     }
 
     function isAdminOrAbove() {
@@ -40,9 +46,18 @@ service cloud.firestore {
         isAdminOrAbove()
       );
 
+      // Create user profiles:
+      // - self create allowed
+      // - superadmin can create any
+      // - admin can create only non-superadmin users inside own business
       allow create: if isAuthenticated() && (
-        request.auth.uid == userId ||
-        isAdminOrAbove()
+        request.auth.uid == userId
+        || isSuperAdmin()
+        || (
+          hasRole('admin')
+          && request.resource.data.businessId == getUserProfile().businessId
+          && request.resource.data.role != 'superadmin'
+        )
       );
 
       // Self-edit: users can update their own profile but NOT change role or permissions
@@ -56,15 +71,30 @@ service cloud.firestore {
       allow update: if isAuthenticated()
         && hasRole('admin')
         && resource.data.businessId == getUserProfile().businessId
+        && resource.data.role != 'superadmin'
         && request.resource.data.role != 'superadmin';
 
-      allow delete: if isSuperAdmin();
+      // Delete user profiles:
+      // - superadmin can delete any non-self profile
+      // - admin can delete non-superadmin users in own business (non-self)
+      allow delete: if isAuthenticated() && (
+        (
+          isSuperAdmin()
+          && request.auth.uid != userId
+        )
+        || (
+          hasRole('admin')
+          && request.auth.uid != userId
+          && resource.data.businessId == getUserProfile().businessId
+          && resource.data.role != 'superadmin'
+        )
+      );
     }
 
     // ===== BUSINESSES (Franchises) =====
     match /businesses/{businessId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
+      allow create: if isAdminOrAbove();
       allow update: if isSuperAdmin() || (isAdminOrAbove() && belongsToBusiness(businessId));
       allow delete: if isSuperAdmin();
 
