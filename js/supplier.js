@@ -20,6 +20,7 @@
     const PAGE_SIZE = 25;
     let editingSupplierId = null;
     let activeSupplierOrdersSupplierId = null;
+    let supplierOrdersInvoiceQuery = '';
 
     const Supplier = {
 
@@ -63,6 +64,7 @@
             supplierOrderCountByName = {};
             editingSupplierId = null;
             activeSupplierOrdersSupplierId = null;
+            supplierOrdersInvoiceQuery = '';
         },
 
         normalizeText: function (value) {
@@ -253,6 +255,10 @@
                         </div>
                         <div class="dda-modal-body">
                             <div class="sup-orders-summary" id="sup-orders-summary"></div>
+                            <div class="sup-orders-search">
+                                <i class="fas fa-search"></i>
+                                <input type="text" id="sup-orders-invoice-search" placeholder="Search invoice number..." autocomplete="off">
+                            </div>
                             <div class="dda-table-wrap">
                                 <table class="dda-table">
                                     <thead>
@@ -299,6 +305,10 @@
             document.getElementById('sup-view-close-btn')?.addEventListener('click', () => { document.getElementById('sup-view-modal').style.display = 'none'; });
             document.getElementById('sup-orders-close')?.addEventListener('click', () => this.closeSupplierOrdersModal());
             document.getElementById('sup-orders-close-btn')?.addEventListener('click', () => this.closeSupplierOrdersModal());
+            document.getElementById('sup-orders-invoice-search')?.addEventListener('input', (e) => {
+                supplierOrdersInvoiceQuery = (e.target.value || '').trim().toLowerCase();
+                if (activeSupplierOrdersSupplierId) this.openSupplierOrdersModal(activeSupplierOrdersSupplierId, true);
+            });
 
             const dashLink = container.querySelector('[data-nav="dashboard"]');
             if (dashLink) dashLink.addEventListener('click', (e) => { e.preventDefault(); PharmaFlow.Sidebar.setActive('dashboard', null); });
@@ -662,7 +672,8 @@
             const modal = document.getElementById('sup-orders-modal');
             const tbody = document.getElementById('sup-orders-tbody');
             const summary = document.getElementById('sup-orders-summary');
-            if (!modal || !tbody || !summary) return;
+            const invoiceSearchInput = document.getElementById('sup-orders-invoice-search');
+            if (!modal || !tbody || !summary || !invoiceSearchInput) return;
 
             const supplier = allSuppliers.find(s => s.id === supplierId);
             if (!supplier) return;
@@ -728,13 +739,30 @@
                 '  </div>' +
                 '</div>';
 
+            if (invoiceSearchInput.value !== supplierOrdersInvoiceQuery) {
+                invoiceSearchInput.value = supplierOrdersInvoiceQuery;
+            }
+
+            const filteredOrders = !supplierOrdersInvoiceQuery
+                ? orders
+                : orders.filter(order => {
+                    const invoiceText = String(order.orderId || order.id || '').toLowerCase();
+                    return invoiceText.includes(supplierOrdersInvoiceQuery);
+                });
+
             if (orders.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="7" class="dda-loading"><i class="fas fa-inbox"></i> No orders found for this supplier</td></tr>';
                 if (!fromRefresh) modal.style.display = 'flex';
                 return;
             }
 
-            tbody.innerHTML = orders.map((order, idx) => {
+            if (filteredOrders.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="dda-loading"><i class="fas fa-search"></i> No invoice matches your search</td></tr>';
+                if (!fromRefresh) modal.style.display = 'flex';
+                return;
+            }
+
+            tbody.innerHTML = filteredOrders.map((order, idx) => {
                 const date = order.orderDate || '—';
                 return '<tr>' +
                     '<td>' + (idx + 1) + '</td>' +
@@ -749,7 +777,7 @@
 
             tbody.querySelectorAll('.sup-order-print').forEach(btn => {
                 btn.addEventListener('click', () => {
-                    const order = orders.find(o => o.id === btn.dataset.id);
+                    const order = filteredOrders.find(o => o.id === btn.dataset.id);
                     if (order) this.printSupplierOrderInvoice(order);
                 });
             });
@@ -759,7 +787,10 @@
 
         closeSupplierOrdersModal: function () {
             const modal = document.getElementById('sup-orders-modal');
+            const invoiceSearchInput = document.getElementById('sup-orders-invoice-search');
             if (modal) modal.style.display = 'none';
+            supplierOrdersInvoiceQuery = '';
+            if (invoiceSearchInput) invoiceSearchInput.value = '';
             activeSupplierOrdersSupplierId = null;
         },
 
