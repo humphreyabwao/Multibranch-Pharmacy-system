@@ -30,7 +30,12 @@
         lowStockThreshold: 10,
         expiryWarningDays: 30,
         dateFormat: 'DD/MM/YYYY',
-        timezone: 'Africa/Nairobi'
+        timezone: 'Africa/Nairobi',
+        emailJsServiceId: '',
+        emailJsTemplateId: '',
+        emailJsPublicKey: '',
+        whatsappCallMeBotPhone: '',
+        whatsappCallMeBotApiKey: ''
     };
 
     const ICON_OPTIONS = [
@@ -127,7 +132,12 @@
                             lowStockThreshold: d.lowStockThreshold || 10,
                             expiryWarningDays: d.expiryWarningDays || 30,
                             dateFormat: d.dateFormat || DEFAULT_SETTINGS.dateFormat,
-                            timezone: d.timezone || DEFAULT_SETTINGS.timezone
+                            timezone: d.timezone || DEFAULT_SETTINGS.timezone,
+                            emailJsServiceId: d.emailJsServiceId || '',
+                            emailJsTemplateId: d.emailJsTemplateId || '',
+                            emailJsPublicKey: d.emailJsPublicKey || '',
+                            whatsappCallMeBotPhone: d.whatsappCallMeBotPhone || '',
+                            whatsappCallMeBotApiKey: d.whatsappCallMeBotApiKey || ''
                         };
                         Settings.applyBranding();
                         Settings.persistBrandToLocal();
@@ -174,6 +184,19 @@
         getCompanyLogoUrl: function () { return this.business.companyLogoUrl; },
         getCurrency: function () { return this.business.currency; },
         getLocale: function () { return this.business.locale; },
+        getMessagingIntegrations: function () {
+            return {
+                provider: this.business.messagingProvider || 'mixed',
+                africaTalkingUsername: this.business.africaTalkingUsername || '',
+                africaTalkingApiKey: this.business.africaTalkingApiKey || '',
+                africaTalkingSenderId: this.business.africaTalkingSenderId || '',
+                emailJsServiceId: this.business.emailJsServiceId || '',
+                emailJsTemplateId: this.business.emailJsTemplateId || '',
+                emailJsPublicKey: this.business.emailJsPublicKey || '',
+                whatsappCallMeBotPhone: this.business.whatsappCallMeBotPhone || '',
+                whatsappCallMeBotApiKey: this.business.whatsappCallMeBotApiKey || ''
+            };
+        },
 
         // ─── HELPERS ─────────────────────────────────────
 
@@ -1038,6 +1061,7 @@
             var b = this.business;
             var self = this;
             var isAdmin = self._isAdmin();
+            var messaging = self.getMessagingIntegrations ? self.getMessagingIntegrations() : {};
 
             container.innerHTML =
                 '<div class="page-header">' +
@@ -1091,6 +1115,15 @@
                 '    </div>' +
 
                 (isAdmin ?
+                    '    <div class="st-messaging-summary">' +
+                    '      <div>' +
+                    '        <strong>Messaging provider setup</strong>' +
+                    '        <p>Open the setup modal to configure Africa\'s Talking, EmailJS, and WhatsApp credentials.</p>' +
+                    '      </div>' +
+                    '      <button type="button" class="btn btn-outline" id="st-open-messaging-modal"><i class="fas fa-comments"></i> Messaging Setup</button>' +
+                    '    </div>' : '') +
+
+                (isAdmin ?
                     '    <hr class="st-divider">' +
                     '    <h3 class="st-section-title"><i class="fas fa-sliders-h"></i> Alert Thresholds</h3>' +
                     '    <div class="st-form-row">' +
@@ -1113,8 +1146,143 @@
                 '  </form>' +
                 '</div>';
 
+            if (isAdmin) {
+                var modal = document.createElement('div');
+                modal.className = 'pc-modal-overlay st-messaging-modal hidden';
+                modal.id = 'st-messaging-modal';
+                modal.innerHTML =
+                    '<div class="pc-modal-card pc-message-modal-card st-messaging-modal-card">' +
+                    '  <div class="pc-modal-header">' +
+                    '    <h3><i class="fas fa-comments"></i> Messaging Setup</h3>' +
+                    '    <button class="slide-panel-close" id="st-messaging-close"><i class="fas fa-times"></i></button>' +
+                    '  </div>' +
+                    '  <div class="pc-modal-meta">' +
+                    '    <span><strong>Provider:</strong> Africa\'s Talking for SMS, EmailJS for email, CallMeBot for WhatsApp</span>' +
+                    '  </div>' +
+                    '  <div class="pc-modal-body">' +
+                    '    <div class="st-form-row">' +
+                    '      <div class="form-group">' +
+                    '        <label for="st-msg-provider">Messaging Mode</label>' +
+                    '        <select id="st-msg-provider">' +
+                    '          <option value="mixed"' + (messaging.provider === 'mixed' ? ' selected' : '') + '>Mixed (recommended)</option>' +
+                    '          <option value="africastalking"' + (messaging.provider === 'africastalking' ? ' selected' : '') + '>Africa\'s Talking SMS</option>' +
+                    '        </select>' +
+                    '        <small class="st-help-text">Use Mixed for SMS + email + WhatsApp, or Africa\'s Talking for SMS-only.</small>' +
+                    '      </div>' +
+                    '      <div class="form-group">' +
+                    '        <label for="st-at-sender">Africa\'s Talking Sender ID</label>' +
+                    '        <input type="text" id="st-at-sender" value="' + self._escapeHtml(messaging.africaTalkingSenderId || '') + '" placeholder="Your sender ID">' +
+                    '      </div>' +
+                    '    </div>' +
+                    '    <div class="st-form-row">' +
+                    '      <div class="form-group">' +
+                    '        <label for="st-at-user">Africa\'s Talking Username</label>' +
+                    '        <input type="text" id="st-at-user" value="' + self._escapeHtml(messaging.africaTalkingUsername || '') + '" placeholder="sandbox or live username">' +
+                    '      </div>' +
+                    '      <div class="form-group">' +
+                    '        <label for="st-at-key">Africa\'s Talking API Key</label>' +
+                    '        <input type="password" id="st-at-key" value="' + self._escapeHtml(messaging.africaTalkingApiKey || '') + '" placeholder="API key">' +
+                    '      </div>' +
+                    '    </div>' +
+                    '    <hr class="st-divider">' +
+                    '    <p class="st-section-desc">Email and WhatsApp still use separate free services. Fill only what you need.</p>' +
+                    '    <div class="st-form-row">' +
+                    '      <div class="form-group">' +
+                    '        <label for="st-emailjs-service-modal">EmailJS Service ID</label>' +
+                    '        <input type="text" id="st-emailjs-service-modal" value="' + self._escapeHtml(messaging.emailJsServiceId || '') + '" placeholder="service_xxxxx">' +
+                    '      </div>' +
+                    '      <div class="form-group">' +
+                    '        <label for="st-emailjs-template-modal">EmailJS Template ID</label>' +
+                    '        <input type="text" id="st-emailjs-template-modal" value="' + self._escapeHtml(messaging.emailJsTemplateId || '') + '" placeholder="template_xxxxx">' +
+                    '      </div>' +
+                    '    </div>' +
+                    '    <div class="st-form-row">' +
+                    '      <div class="form-group">' +
+                    '        <label for="st-emailjs-key-modal">EmailJS Public Key</label>' +
+                    '        <input type="text" id="st-emailjs-key-modal" value="' + self._escapeHtml(messaging.emailJsPublicKey || '') + '" placeholder="public key">' +
+                    '      </div>' +
+                    '      <div class="form-group">' +
+                    '        <label for="st-wa-phone-modal">WhatsApp Phone</label>' +
+                    '        <input type="text" id="st-wa-phone-modal" value="' + self._escapeHtml(messaging.whatsappCallMeBotPhone || '') + '" placeholder="2547xxxxxxxx">' +
+                    '      </div>' +
+                    '    </div>' +
+                    '    <div class="st-form-row">' +
+                    '      <div class="form-group">' +
+                    '        <label for="st-wa-key-modal">WhatsApp API Key</label>' +
+                    '        <input type="text" id="st-wa-key-modal" value="' + self._escapeHtml(messaging.whatsappCallMeBotApiKey || '') + '" placeholder="WhatsApp API key">' +
+                    '      </div>' +
+                    '      <div class="form-group"></div>' +
+                    '    </div>' +
+                    '    <div class="pc-msg-actions">' +
+                    '      <button class="btn btn-outline" id="st-messaging-cancel" type="button"><i class="fas fa-times"></i> Cancel</button>' +
+                    '      <button class="btn btn-primary" id="st-messaging-save" type="button"><i class="fas fa-save"></i> Save Messaging</button>' +
+                    '    </div>' +
+                    '  </div>' +
+                    '</div>';
+                document.body.appendChild(modal);
+            }
+
             self._bindBreadcrumb(container);
             self._bindNotifForm(container);
+            if (isAdmin) self._bindMessagingModal(container);
+        },
+
+        _bindMessagingModal: function () {
+            var modal = document.getElementById('st-messaging-modal');
+            if (!modal) return;
+            var openBtn = document.getElementById('st-open-messaging-modal');
+            var close = function () { modal.classList.add('hidden'); };
+
+            if (openBtn) openBtn.addEventListener('click', function () { modal.classList.remove('hidden'); });
+            document.getElementById('st-messaging-close')?.addEventListener('click', close);
+            document.getElementById('st-messaging-cancel')?.addEventListener('click', close);
+            modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
+
+            document.getElementById('st-messaging-save')?.addEventListener('click', async function () {
+                var btn = document.getElementById('st-messaging-save');
+                if (!btn) return;
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+
+                try {
+                    var businessId = PharmaFlow.Auth && PharmaFlow.Auth.getBusinessId ? PharmaFlow.Auth.getBusinessId() : null;
+                    if (!businessId) throw new Error('No business ID');
+
+                    await window.db.collection('businesses').doc(businessId).update({
+                        messagingProvider: document.getElementById('st-msg-provider').value,
+                        africaTalkingUsername: document.getElementById('st-at-user').value.trim(),
+                        africaTalkingApiKey: document.getElementById('st-at-key').value.trim(),
+                        africaTalkingSenderId: document.getElementById('st-at-sender').value.trim(),
+                        emailJsServiceId: document.getElementById('st-emailjs-service-modal').value.trim(),
+                        emailJsTemplateId: document.getElementById('st-emailjs-template-modal').value.trim(),
+                        emailJsPublicKey: document.getElementById('st-emailjs-key-modal').value.trim(),
+                        whatsappCallMeBotPhone: document.getElementById('st-wa-phone-modal').value.trim(),
+                        whatsappCallMeBotApiKey: document.getElementById('st-wa-key-modal').value.trim(),
+                        updatedAt: new Date().toISOString()
+                    });
+
+                    if (PharmaFlow.Settings) {
+                        PharmaFlow.Settings.business.messagingProvider = document.getElementById('st-msg-provider').value;
+                        PharmaFlow.Settings.business.africaTalkingUsername = document.getElementById('st-at-user').value.trim();
+                        PharmaFlow.Settings.business.africaTalkingApiKey = document.getElementById('st-at-key').value.trim();
+                        PharmaFlow.Settings.business.africaTalkingSenderId = document.getElementById('st-at-sender').value.trim();
+                        PharmaFlow.Settings.business.emailJsServiceId = document.getElementById('st-emailjs-service-modal').value.trim();
+                        PharmaFlow.Settings.business.emailJsTemplateId = document.getElementById('st-emailjs-template-modal').value.trim();
+                        PharmaFlow.Settings.business.emailJsPublicKey = document.getElementById('st-emailjs-key-modal').value.trim();
+                        PharmaFlow.Settings.business.whatsappCallMeBotPhone = document.getElementById('st-wa-phone-modal').value.trim();
+                        PharmaFlow.Settings.business.whatsappCallMeBotApiKey = document.getElementById('st-wa-key-modal').value.trim();
+                    }
+
+                    if (PharmaFlow.Settings && PharmaFlow.Settings.persistBrandToLocal) PharmaFlow.Settings.persistBrandToLocal();
+                    document.getElementById('st-messaging-modal')?.classList.add('hidden');
+                    if (PharmaFlow.Settings && PharmaFlow.Settings._showToast) PharmaFlow.Settings._showToast('Messaging settings saved', 'success');
+                } catch (err) {
+                    if (PharmaFlow.Settings && PharmaFlow.Settings._showToast) PharmaFlow.Settings._showToast(err.message || 'Failed to save messaging settings', 'error');
+                } finally {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-save"></i> Save Messaging';
+                }
+            });
         },
 
         _bindNotifForm: function (container) {

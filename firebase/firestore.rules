@@ -214,6 +214,13 @@ service cloud.firestore {
         allow delete: if canAccessBusiness(businessId) && isAdminOrAbove();
       }
 
+      // ── Message History — all staff can read/create/update, admin+ to delete ──
+      match /message_history/{historyId} {
+        allow read: if canAccessBusiness(businessId);
+        allow create, update: if canAccessBusiness(businessId);
+        allow delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+      }
+
       // ── Notifications — all staff can read/create/update ──
       match /notifications/{notificationId} {
         allow read: if canAccessBusiness(businessId);

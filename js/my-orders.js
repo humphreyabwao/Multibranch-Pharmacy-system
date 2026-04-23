@@ -12,6 +12,7 @@
     window.PharmaFlow = window.PharmaFlow || {};
 
     let ordersListener = null;
+    let inventoryListener = null;
     let orderItems = [];          // items in the create-order form
     let inventoryCache = [];      // cached inventory for item picker
     let suppliersCache = [];      // cached suppliers
@@ -79,6 +80,20 @@
             const d = String(now.getDate()).padStart(2, '0');
             const r = Math.random().toString(36).substring(2, 7).toUpperCase();
             return 'PO-' + y + m + d + '-' + r;
+        },
+
+        generateBatchNumber: function () {
+            const datePart = new Date().toISOString().slice(2, 10).replace(/-/g, '');
+            const timePart = Date.now().toString(36).toUpperCase().slice(-5);
+            const randomPart = Math.random().toString(36).substring(2, 5).toUpperCase();
+            return 'BN-' + datePart + '-' + timePart + randomPart;
+        },
+
+        formatDateInput: function (value) {
+            if (!value) return '';
+            const d = value.toDate ? value.toDate() : new Date(value);
+            if (Number.isNaN(d.getTime())) return '';
+            return d.toISOString().split('T')[0];
         },
 
         getLoanStatusFromValues: function (paymentStatus, loanDueDate, outstandingAmount) {
@@ -281,6 +296,8 @@
                                                 <th>#</th>
                                                 <th>Item Name</th>
                                                 <th>SKU</th>
+                                                <th>Batch No.</th>
+                                                <th>Expiry Date</th>
                                                 <th>Current Stock</th>
                                                 <th>Unit Cost</th>
                                                 <th>Order Qty</th>
@@ -290,14 +307,13 @@
                                             </tr>
                                         </thead>
                                         <tbody id="ord-items-tbody">
-                                            <tr><td colspan="9" class="dda-loading"><i class="fas fa-inbox"></i> No items added yet</td></tr>
+                                            <tr><td colspan="11" class="dda-loading"><i class="fas fa-inbox"></i> No items added yet</td></tr>
                                         </tbody>
                                         <tfoot id="ord-items-tfoot" style="display:none">
                                             <tr>
-                                                <td colspan="6"></td>
+                                                <td colspan="8"></td>
                                                 <td><strong>Total:</strong></td>
                                                 <td><strong id="ord-items-total">KSH 0.00</strong></td>
-                                                <td></td>
                                             </tr>
                                         </tfoot>
                                     </table>
@@ -429,9 +445,30 @@
             if (!businessId) return;
 
             try {
-                const snap = await getBusinessCollection(businessId, 'inventory').get();
-                inventoryCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                inventoryCache.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+                if (inventoryListener) { inventoryListener(); inventoryListener = null; }
+
+                const ref = getBusinessCollection(businessId, 'inventory');
+                if (!ref) return;
+
+                inventoryListener = ref.onSnapshot(snapshot => {
+                    inventoryCache = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+                    inventoryCache.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+                    this.renderLowStockList(this.lowStockActiveTab || 'out');
+
+                    const searchValue = document.getElementById('ord-item-search')?.value?.trim() || '';
+                    if (searchValue) this.searchInventory(searchValue);
+
+                    if (orderItems.length > 0) {
+                        orderItems = orderItems.map(item => {
+                            const live = inventoryCache.find(p => p.id === item.productId);
+                            return live ? { ...item, currentStock: live.quantity || 0 } : item;
+                        });
+                        this.renderOrderItems();
+                    }
+                }, err => {
+                    console.error('Load inventory listener error:', err);
+                });
             } catch (err) {
                 console.error('Load inventory error:', err);
             }
@@ -553,11 +590,114 @@
                 currentStock: product.quantity || 0,
                 unitCost: product.buyingPrice || 0,
                 orderQty: 1,
+                batchMode: 'auto',
+                batchNumber: this.generateBatchNumber(),
+                expiryDate: this.formatDateInput(product.expiryDate),
                 vatEnabled: !!product.vatEnabled,
                 vatType: product.vatType || 'percent',
                 vatValue: parseFloat(product.vatValue) || 0
             });
             this.renderOrderItems();
+        },
+
+        openOrderItemEditModal: function (index) {
+            const item = orderItems[index];
+            if (!item) return;
+
+            const existing = document.getElementById('ord-item-edit-modal');
+            if (existing) existing.remove();
+
+            const modal = document.createElement('div');
+            modal.className = 'inv-modal-overlay';
+            modal.id = 'ord-item-edit-modal';
+            modal.innerHTML = `
+                <div class="inv-modal inv-modal--sm">
+                    <div class="inv-modal-header">
+                        <h3><i class="fas fa-pen-to-square"></i> Edit Batch Details</h3>
+                        <button class="inv-modal-close" id="ord-item-edit-close">&times;</button>
+                    </div>
+                    <div class="inv-modal-body">
+                        <div class="inv-stock-info">
+                            <strong>${this.escapeHtml(item.name)}</strong>
+                            <span>SKU: <b>${this.escapeHtml(item.sku || '—')}</b></span>
+                        </div>
+                        <div class="inv-form-group">
+                            <label for="ord-item-batch-mode-${index}">Batch Number Mode</label>
+                            <select id="ord-item-batch-mode-${index}">
+                                <option value="manual" ${item.batchMode === 'manual' ? 'selected' : ''}>Manual entry</option>
+                                <option value="auto" ${item.batchMode !== 'manual' ? 'selected' : ''}>Auto-generate</option>
+                            </select>
+                        </div>
+                        <div class="inv-form-group">
+                            <label for="ord-item-batch-${index}">Batch Number</label>
+                            <div class="inv-sku-row inv-batch-row">
+                                <input type="text" id="ord-item-batch-${index}" value="${this.escapeHtml(item.batchNumber || '')}" placeholder="Enter batch number manually">
+                                <button type="button" class="btn btn-sm btn-outline" id="ord-item-batch-generate-${index}" title="Generate batch number">
+                                    <i class="fas fa-dice"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="inv-form-group">
+                            <label for="ord-item-expiry-${index}">Expiry Date</label>
+                            <input type="date" id="ord-item-expiry-${index}" value="${this.escapeHtml(item.expiryDate || '')}">
+                        </div>
+                    </div>
+                    <div class="inv-modal-footer">
+                        <button class="btn btn-outline" id="ord-item-edit-cancel">Cancel</button>
+                        <button class="btn btn-primary" id="ord-item-edit-save"><i class="fas fa-check"></i> Save</button>
+                    </div>
+                </div>
+            `;
+
+            document.body.appendChild(modal);
+            setTimeout(() => modal.classList.add('show'), 10);
+
+            const batchModeEl = document.getElementById(`ord-item-batch-mode-${index}`);
+            const batchInput = document.getElementById(`ord-item-batch-${index}`);
+            const batchGenBtn = document.getElementById(`ord-item-batch-generate-${index}`);
+            const syncBatchMode = () => {
+                const isAuto = batchModeEl?.value === 'auto';
+                if (batchInput) {
+                    batchInput.readOnly = isAuto;
+                    batchInput.placeholder = isAuto ? 'Auto-generated batch number' : 'Enter batch number manually';
+                }
+                if (batchGenBtn) batchGenBtn.disabled = !isAuto;
+                if (isAuto && batchInput && !batchInput.value) batchInput.value = this.generateBatchNumber();
+            };
+
+            syncBatchMode();
+            batchModeEl?.addEventListener('change', syncBatchMode);
+            batchGenBtn?.addEventListener('click', () => {
+                if (batchInput) batchInput.value = this.generateBatchNumber();
+                if (batchModeEl) batchModeEl.value = 'auto';
+                syncBatchMode();
+            });
+
+            const close = () => { modal.classList.remove('show'); setTimeout(() => modal.remove(), 200); };
+            document.getElementById('ord-item-edit-close')?.addEventListener('click', close);
+            document.getElementById('ord-item-edit-cancel')?.addEventListener('click', close);
+            modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+
+            document.getElementById('ord-item-edit-save')?.addEventListener('click', () => {
+                const newMode = batchModeEl?.value || 'manual';
+                const newBatch = batchInput?.value?.trim() || (newMode === 'auto' ? this.generateBatchNumber() : '');
+                const newExpiry = document.getElementById(`ord-item-expiry-${index}`)?.value || '';
+
+                if (newMode === 'manual' && !newBatch) {
+                    this.showToast('Enter a batch number or switch to auto-generate.', 'error');
+                    return;
+                }
+                if (!newExpiry) {
+                    this.showToast('Expiry date is required.', 'error');
+                    return;
+                }
+
+                orderItems[index].batchMode = newMode;
+                orderItems[index].batchNumber = newBatch || this.generateBatchNumber();
+                orderItems[index].expiryDate = newExpiry;
+                this.renderOrderItems();
+                close();
+            });
         },
 
         renderOrderItems: function () {
@@ -566,7 +706,7 @@
             if (!tbody) return;
 
             if (orderItems.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="9" class="dda-loading"><i class="fas fa-inbox"></i> No items added yet</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="11" class="dda-loading"><i class="fas fa-inbox"></i> No items added yet</td></tr>';
                 if (tfoot) tfoot.style.display = 'none';
                 return;
             }
@@ -579,6 +719,17 @@
                     <td>${i + 1}</td>
                     <td><strong>${this.escapeHtml(item.name)}</strong></td>
                     <td><code>${this.escapeHtml(item.sku)}</code></td>
+                    <td>
+                        <div class="ord-batch-cell">
+                            <input type="text" class="ord-inline-input ord-batch-input" data-idx="${i}" value="${this.escapeHtml(item.batchNumber || '')}" placeholder="Batch number">
+                            <button type="button" class="sales-action-btn ord-batch-generate" data-idx="${i}" title="Generate batch number" style="background:#e0f2fe;color:#0369a1">
+                                <i class="fas fa-dice"></i>
+                            </button>
+                        </div>
+                    </td>
+                    <td>
+                        <input type="date" class="ord-inline-input ord-expiry-input" data-idx="${i}" value="${this.escapeHtml(item.expiryDate || '')}">
+                    </td>
                     <td>${item.currentStock}</td>
                     <td>
                         <input type="number" class="ord-inline-input ord-cost-input" data-idx="${i}" value="${item.unitCost}" min="0" step="0.01">
@@ -608,6 +759,9 @@
                         <button class="sales-action-btn sup-delete ord-remove-item" data-idx="${i}" style="background:#fee2e2;color:#dc2626" title="Remove">
                             <i class="fas fa-times"></i>
                         </button>
+                        <button class="sales-action-btn ord-edit-item" data-idx="${i}" style="background:#dbeafe;color:#2563eb;margin-left:6px" title="Edit batch and expiry">
+                            <i class="fas fa-pen-to-square"></i>
+                        </button>
                     </td>
                 </tr>`;
             }).join('');
@@ -624,6 +778,27 @@
                 input.addEventListener('change', () => {
                     const idx = parseInt(input.dataset.idx);
                     orderItems[idx].unitCost = Math.max(0, parseFloat(input.value) || 0);
+                    this.renderOrderItems();
+                });
+            });
+            tbody.querySelectorAll('.ord-batch-input').forEach(input => {
+                input.addEventListener('change', () => {
+                    const idx = parseInt(input.dataset.idx);
+                    orderItems[idx].batchNumber = input.value.trim() || this.generateBatchNumber();
+                    this.renderOrderItems();
+                });
+            });
+            tbody.querySelectorAll('.ord-batch-generate').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const idx = parseInt(btn.dataset.idx);
+                    orderItems[idx].batchNumber = this.generateBatchNumber();
+                    this.renderOrderItems();
+                });
+            });
+            tbody.querySelectorAll('.ord-expiry-input').forEach(input => {
+                input.addEventListener('change', () => {
+                    const idx = parseInt(input.dataset.idx);
+                    orderItems[idx].expiryDate = input.value;
                     this.renderOrderItems();
                 });
             });
@@ -656,6 +831,9 @@
                     orderItems.splice(parseInt(btn.dataset.idx), 1);
                     this.renderOrderItems();
                 });
+            });
+            tbody.querySelectorAll('.ord-edit-item').forEach(btn => {
+                btn.addEventListener('click', () => this.openOrderItemEditModal(parseInt(btn.dataset.idx)));
             });
 
             // Update total
@@ -722,6 +900,8 @@
                         name: item.name,
                         sku: item.sku,
                         category: item.category,
+                        batchNumber: item.batchNumber || '',
+                        expiryDate: item.expiryDate || '',
                         unitCost: item.unitCost,
                         orderQty: item.orderQty,
                         vatEnabled: !!item.vatEnabled,
@@ -1361,6 +1541,328 @@
             }
         },
 
+        prepareInventoryPushItems: function (order) {
+            return [...(order.items || [])]
+                .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+                .map(item => {
+                    const batchMode = item.batchMode || (item.batchNumber ? 'manual' : 'auto');
+                    return {
+                        productId: item.productId,
+                        name: item.name || '',
+                        sku: item.sku || '',
+                        category: item.category || '',
+                        currentStock: item.currentStock || 0,
+                        unitCost: item.unitCost || 0,
+                        orderQty: parseInt(item.orderQty) || 0,
+                        batchMode: batchMode,
+                        batchNumber: item.batchNumber || (batchMode === 'auto' ? this.generateBatchNumber() : ''),
+                        expiryDate: item.expiryDate || '',
+                        vatEnabled: !!item.vatEnabled,
+                        vatType: item.vatType || 'percent',
+                        vatValue: parseFloat(item.vatValue) || 0
+                    };
+                });
+        },
+
+        openInventoryPushModal: function (order, pushItems) {
+            const existing = document.getElementById('ord-push-inventory-modal');
+            if (existing) existing.remove();
+
+            const modal = document.createElement('div');
+            modal.className = 'dda-modal-overlay';
+            modal.id = 'ord-push-inventory-modal';
+            modal.innerHTML = `
+                <div class="dda-modal ord-push-modal-card">
+                    <div class="dda-modal-header">
+                        <h3><i class="fas fa-warehouse"></i> Push Received Stock to Inventory</h3>
+                        <button class="dda-modal-close" id="ord-push-close">&times;</button>
+                    </div>
+                    <div class="dda-modal-body">
+                        <div class="ord-push-summary-card">
+                            <div>
+                                <strong>${this.escapeHtml(order.orderId || order.id || 'Order')}</strong>
+                                <span>${this.escapeHtml(order.supplierName || 'Supplier')}</span>
+                            </div>
+                            <div class="ord-push-summary-meta">
+                                <span>${pushItems.length} items</span>
+                                <span>Received stock only</span>
+                            </div>
+                        </div>
+                        <div class="ord-push-list" id="ord-push-list">
+                            ${pushItems.map((item, index) => `
+                                <div class="ord-push-item${!item.batchNumber || !item.expiryDate ? ' is-open' : ''}" data-push-item="${index}">
+                                    <div class="ord-push-item__summary">
+                                        <div class="ord-push-item__main">
+                                            <strong>${this.escapeHtml(item.name)}</strong>
+                                            <small>${this.escapeHtml(item.sku || '')} · Qty ${item.orderQty} · ${this.formatCurrency(item.unitCost)}</small>
+                                        </div>
+                                        <div class="ord-push-item__chips">
+                                            <span class="ord-push-chip ord-push-chip--batch" data-push-chip-batch="${index}">${this.escapeHtml(item.batchNumber || 'Batch pending')}</span>
+                                            <span class="ord-push-chip ord-push-chip--expiry" data-push-chip-expiry="${index}">${this.escapeHtml(item.expiryDate || 'Expiry pending')}</span>
+                                        </div>
+                                        <button type="button" class="ord-push-edit-btn" data-push-edit="${index}"><i class="fas fa-pen-to-square"></i> Edit</button>
+                                    </div>
+                                    <div class="ord-push-item__editor">
+                                        <div class="inv-form-row">
+                                            <div class="inv-form-group">
+                                                <label>Batch Mode</label>
+                                                <select class="ord-push-batch-mode" data-push-mode="${index}">
+                                                    <option value="manual" ${item.batchMode === 'manual' ? 'selected' : ''}>Manual entry</option>
+                                                    <option value="auto" ${item.batchMode !== 'manual' ? 'selected' : ''}>Auto-generate</option>
+                                                </select>
+                                            </div>
+                                            <div class="inv-form-group">
+                                                <label>Expiry Date</label>
+                                                <input type="date" class="ord-push-expiry" data-push-expiry="${index}" value="${this.escapeHtml(item.expiryDate || '')}">
+                                            </div>
+                                        </div>
+                                        <div class="inv-form-group">
+                                            <label>Batch Number</label>
+                                            <div class="inv-sku-row inv-batch-row">
+                                                <input type="text" class="ord-push-batch" data-push-batch="${index}" value="${this.escapeHtml(item.batchNumber || '')}" placeholder="Enter batch number manually">
+                                                <button type="button" class="btn btn-sm btn-outline ord-push-generate" data-push-generate="${index}" title="Generate batch number"><i class="fas fa-dice"></i></button>
+                                            </div>
+                                        </div>
+                                        <div class="ord-push-editor-actions">
+                                            <button type="button" class="btn btn-outline ord-push-done" data-push-done="${index}"><i class="fas fa-check"></i> Done</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                    <div class="dda-modal-footer ord-push-footer">
+                        <button class="dda-btn dda-btn--cancel" id="ord-push-cancel">Cancel</button>
+                        <button class="dda-btn dda-btn--primary" id="ord-push-confirm"><i class="fas fa-arrow-right"></i> Send to Inventory</button>
+                    </div>
+                </div>
+            `;
+
+            document.body.appendChild(modal);
+            setTimeout(() => modal.classList.add('show'), 10);
+
+            const closeModal = () => { modal.classList.remove('show'); setTimeout(() => modal.remove(), 200); };
+            document.getElementById('ord-push-close')?.addEventListener('click', closeModal);
+            document.getElementById('ord-push-cancel')?.addEventListener('click', closeModal);
+            modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+
+            const syncRow = (index) => {
+                const row = modal.querySelector('[data-push-item="' + index + '"]');
+                if (!row) return;
+                const modeEl = row.querySelector('[data-push-mode="' + index + '"]');
+                const batchEl = row.querySelector('[data-push-batch="' + index + '"]');
+                const genBtn = row.querySelector('[data-push-generate="' + index + '"]');
+                const isAuto = modeEl && modeEl.value === 'auto';
+                if (batchEl) {
+                    batchEl.readOnly = isAuto;
+                    batchEl.placeholder = isAuto ? 'Auto-generated batch number' : 'Enter batch number manually';
+                    if (isAuto && !batchEl.value) batchEl.value = this.generateBatchNumber();
+                }
+                if (genBtn) genBtn.disabled = !isAuto;
+                const chipBatch = modal.querySelector('[data-push-chip-batch="' + index + '"]');
+                const chipExpiry = modal.querySelector('[data-push-chip-expiry="' + index + '"]');
+                if (chipBatch && batchEl) chipBatch.textContent = batchEl.value.trim() || 'Batch pending';
+                if (chipExpiry) {
+                    const expiryVal = row.querySelector('[data-push-expiry="' + index + '"]')?.value || '';
+                    chipExpiry.textContent = expiryVal || 'Expiry pending';
+                }
+            };
+
+            pushItems.forEach((_, index) => syncRow(index));
+
+            modal.querySelectorAll('.ord-push-edit-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const index = parseInt(btn.dataset.pushEdit, 10);
+                    const row = modal.querySelector('[data-push-item="' + index + '"]');
+                    if (row) row.classList.toggle('is-open');
+                    syncRow(index);
+                });
+            });
+
+            modal.querySelectorAll('.ord-push-batch-mode').forEach(el => {
+                el.addEventListener('change', () => syncRow(parseInt(el.dataset.pushMode, 10)));
+            });
+            modal.querySelectorAll('.ord-push-generate').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const index = parseInt(btn.dataset.pushGenerate, 10);
+                    const row = modal.querySelector('[data-push-item="' + index + '"]');
+                    const batchEl = row?.querySelector('[data-push-batch="' + index + '"]');
+                    const modeEl = row?.querySelector('[data-push-mode="' + index + '"]');
+                    if (batchEl) batchEl.value = this.generateBatchNumber();
+                    if (modeEl) modeEl.value = 'auto';
+                    syncRow(index);
+                });
+            });
+            modal.querySelectorAll('.ord-push-batch, .ord-push-expiry').forEach(el => {
+                el.addEventListener('input', () => syncRow(parseInt(el.dataset.pushBatch || el.dataset.pushExpiry, 10)));
+                el.addEventListener('change', () => syncRow(parseInt(el.dataset.pushBatch || el.dataset.pushExpiry, 10)));
+            });
+            modal.querySelectorAll('.ord-push-done').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const index = parseInt(btn.dataset.pushDone, 10);
+                    const row = modal.querySelector('[data-push-item="' + index + '"]');
+                    if (row) row.classList.remove('is-open');
+                    syncRow(index);
+                });
+            });
+
+            document.getElementById('ord-push-confirm')?.addEventListener('click', async () => {
+                const collected = this.collectInventoryPushItems(modal, pushItems);
+                if (!collected.ok) {
+                    this.showToast(collected.message || 'Please complete all batch and expiry fields.', 'error');
+                    return;
+                }
+                const confirmText = 'Add these ' + collected.items.length + ' items to inventory?<br><br>This will increase stock quantities and store each batch with its expiry date.';
+                if (!(await PharmaFlow.confirm(confirmText, { title: 'Add to Inventory', confirmText: 'Yes, Add All' }))) return;
+                try {
+                    await this.executeInventoryPush(order, collected.items, closeModal);
+                    closeModal();
+                } catch (err) {
+                    console.error('Inventory push modal error:', err);
+                    this.showToast('Failed to update inventory: ' + err.message, 'error');
+                }
+            });
+        },
+
+        collectInventoryPushItems: function (modal, fallbackItems) {
+            const rows = Array.from(modal.querySelectorAll('[data-push-item]'));
+            const collected = [];
+
+            for (const row of rows) {
+                const index = parseInt(row.dataset.pushItem, 10);
+                const fallback = fallbackItems[index] || {};
+                const mode = row.querySelector('[data-push-mode="' + index + '"]')?.value || 'manual';
+                let batchNumber = row.querySelector('[data-push-batch="' + index + '"]')?.value?.trim() || '';
+                const expiryDate = row.querySelector('[data-push-expiry="' + index + '"]')?.value || '';
+
+                if (mode === 'auto' && !batchNumber) {
+                    batchNumber = this.generateBatchNumber();
+                }
+                if (mode === 'manual' && !batchNumber) {
+                    return { ok: false, message: 'Batch number is required for ' + (fallback.name || 'an item') + '.' };
+                }
+                if (!expiryDate) {
+                    return { ok: false, message: 'Expiry date is required for ' + (fallback.name || 'an item') + '.' };
+                }
+
+                collected.push({
+                    productId: fallback.productId,
+                    name: fallback.name,
+                    sku: fallback.sku,
+                    category: fallback.category,
+                    orderQty: fallback.orderQty,
+                    unitCost: fallback.unitCost,
+                    batchMode: mode,
+                    batchNumber: batchNumber,
+                    expiryDate: expiryDate
+                });
+            }
+
+            return { ok: true, items: collected };
+        },
+
+        executeInventoryPush: async function (order, items, closeModal) {
+            const businessId = this.getBusinessId();
+            if (!businessId) return;
+
+            const profile = PharmaFlow.Auth ? PharmaFlow.Auth.userProfile : null;
+            const addedBy = profile ? (profile.displayName || profile.email) : 'Unknown';
+            const now = new Date().toISOString();
+            let successCount = 0;
+            let failCount = 0;
+
+            for (const item of items) {
+                if (!item.productId) { failCount++; continue; }
+                try {
+                    const ref = getBusinessCollection(businessId, 'inventory').doc(item.productId);
+                    const invDoc = await ref.get();
+                    const qty = parseInt(item.orderQty) || 0;
+                    if (qty <= 0) { failCount++; continue; }
+
+                    if (invDoc.exists) {
+                        const invData = invDoc.data() || {};
+                        const prevQty = invData.quantity || 0;
+                        const expiryTs = firebase.firestore.Timestamp.fromDate(new Date(item.expiryDate));
+                        const existingBatches = Array.isArray(invData.stockBatches) ? invData.stockBatches.slice() : [];
+                        const currentExpiry = invData.expiryDate ? (invData.expiryDate.toDate ? invData.expiryDate.toDate() : new Date(invData.expiryDate)) : null;
+                        const batchExpiry = expiryTs.toDate ? expiryTs.toDate() : new Date(item.expiryDate);
+                        const nextExpiry = !currentExpiry || batchExpiry < currentExpiry ? expiryTs : invData.expiryDate;
+                        const batchRecord = {
+                            batchNumber: item.batchNumber || this.generateBatchNumber(),
+                            quantity: qty,
+                            expiryDate: expiryTs,
+                            addedAt: now,
+                            source: 'order_received',
+                            orderId: order.orderId || order.id,
+                            mode: item.batchMode || 'manual'
+                        };
+
+                        existingBatches.push(batchRecord);
+
+                        await ref.update({
+                            quantity: prevQty + qty,
+                            buyingPrice: item.unitCost || 0,
+                            expiryDate: nextExpiry || expiryTs,
+                            batchNumber: invData.batchNumber || batchRecord.batchNumber,
+                            stockBatches: existingBatches,
+                            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                        });
+
+                        await getBusinessCollection(businessId, 'stock_history').add({
+                            productId: item.productId,
+                            productName: item.name || '',
+                            sku: item.sku || '',
+                            category: item.category || '',
+                            orderId: order.orderId || order.id,
+                            supplierName: order.supplierName || '',
+                            type: 'order_received',
+                            previousQty: prevQty,
+                            addedQty: qty,
+                            newQty: prevQty + qty,
+                            unitCost: item.unitCost || 0,
+                            batchNumber: item.batchNumber || batchRecord.batchNumber,
+                            expiryDate: item.expiryDate,
+                            addedBy: addedBy,
+                            createdAt: now
+                        });
+                    } else {
+                        failCount++;
+                        continue;
+                    }
+                    successCount++;
+                } catch (itemErr) {
+                    console.error('Add to inventory item error:', item.name, itemErr);
+                    failCount++;
+                }
+            }
+
+            await getBusinessCollection(businessId, 'orders').doc(order.id).update({
+                inventoryAdded: true,
+                inventoryAddedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                inventoryAddedBy: addedBy,
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+
+            if (PharmaFlow.ActivityLog) {
+                PharmaFlow.ActivityLog.log({
+                    title: 'Order Stock Added to Inventory',
+                    description: successCount + ' items from order ' + (order.orderId || '') + ' added to inventory',
+                    category: 'Inventory',
+                    status: 'COMPLETED',
+                    metadata: { orderId: order.orderId, successCount: successCount, failCount: failCount }
+                });
+            }
+
+            if (failCount > 0) {
+                this.showToast(successCount + ' items added, ' + failCount + ' failed (product may have been deleted).', 'error');
+            } else {
+                this.showToast('All ' + successCount + ' items added to inventory!');
+            }
+
+            this._loadOrdersPage();
+            this._loadOrderStats();
+        },
+
         // ═══════════════════════════════════════════════
         //  ADD TO INVENTORY (sorted preview + batch)
         // ═══════════════════════════════════════════════
@@ -1377,97 +1879,13 @@
             }
             if (order.inventoryAdded) { this.showToast('Already added to inventory.', 'error'); return; }
 
-            // Sort items alphabetically by name
-            const sortedItems = [...(order.items || [])].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-
-            // Build confirmation preview
-            const itemsPreview = sortedItems.map((item, i) =>
-                (i + 1) + '. ' + item.name + ' (SKU: ' + item.sku + ') — Qty: ' + item.orderQty + ' × ' + this.formatCurrency(item.unitCost)
-            ).join('<br>');
-
-            if (!(await PharmaFlow.confirm('Add these ' + sortedItems.length + ' items to inventory?<br><br>' + itemsPreview + '<br><br>This will increase stock quantities.', { title: 'Add to Inventory', confirmText: 'Yes, Add All' }))) return;
-
-            const businessId = this.getBusinessId();
-            if (!businessId) return;
-
-            try {
-                const profile = PharmaFlow.Auth ? PharmaFlow.Auth.userProfile : null;
-                const addedBy = profile ? (profile.displayName || profile.email) : 'Unknown';
-                const now = new Date().toISOString();
-                let successCount = 0;
-                let failCount = 0;
-
-                for (const item of sortedItems) {
-                    if (!item.productId) { failCount++; continue; }
-                    try {
-                        const ref = getBusinessCollection(businessId, 'inventory').doc(item.productId);
-                        const invDoc = await ref.get();
-                        const qty = parseInt(item.orderQty) || 0;
-                        if (qty <= 0) { failCount++; continue; }
-
-                        if (invDoc.exists) {
-                            const prevQty = invDoc.data().quantity || 0;
-                            await ref.update({
-                                quantity: prevQty + qty,
-                                buyingPrice: item.unitCost || 0,
-                                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-                            });
-
-                            // Record stock history
-                            await getBusinessCollection(businessId, 'stock_history').add({
-                                productId: item.productId,
-                                productName: item.name || '',
-                                sku: item.sku || '',
-                                category: item.category || '',
-                                orderId: order.orderId || order.id,
-                                supplierName: order.supplierName || '',
-                                type: 'order_received',
-                                previousQty: prevQty,
-                                addedQty: qty,
-                                newQty: prevQty + qty,
-                                unitCost: item.unitCost || 0,
-                                addedBy: addedBy,
-                                createdAt: now
-                            });
-                        } else {
-                            // Product was deleted — skip
-                            failCount++;
-                            continue;
-                        }
-                        successCount++;
-                    } catch (itemErr) {
-                        console.error('Add to inventory item error:', item.name, itemErr);
-                        failCount++;
-                    }
-                }
-
-                // Mark order as inventory-added
-                await getBusinessCollection(businessId, 'orders').doc(docId).update({
-                    inventoryAdded: true,
-                    inventoryAddedAt: firebase.firestore.FieldValue.serverTimestamp(),
-                    inventoryAddedBy: addedBy,
-                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-                });
-
-                if (PharmaFlow.ActivityLog) {
-                    PharmaFlow.ActivityLog.log({
-                        title: 'Order Stock Added to Inventory',
-                        description: successCount + ' items from order ' + (order.orderId || '') + ' added to inventory',
-                        category: 'Inventory',
-                        status: 'COMPLETED',
-                        metadata: { orderId: order.orderId, successCount: successCount, failCount: failCount }
-                    });
-                }
-
-                if (failCount > 0) {
-                    this.showToast(successCount + ' items added, ' + failCount + ' failed (product may have been deleted).', 'error');
-                } else {
-                    this.showToast('All ' + successCount + ' items added to inventory!');
-                }
-            } catch (err) {
-                console.error('Add to inventory error:', err);
-                this.showToast('Failed to update inventory: ' + err.message, 'error');
+            const pushItems = this.prepareInventoryPushItems(order);
+            if (!pushItems.length) {
+                this.showToast('This order has no items to push to inventory.', 'error');
+                return;
             }
+
+            this.openInventoryPushModal(order, pushItems);
         },
 
         // ═══════════════════════════════════════════════

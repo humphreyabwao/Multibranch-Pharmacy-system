@@ -42,11 +42,96 @@
             return d.toLocaleDateString('en-KE', { year: 'numeric', month: 'short', day: 'numeric' });
         },
 
+        getStockBatches: function (product) {
+            if (!product) return [];
+            if (Array.isArray(product.stockBatches) && product.stockBatches.length) {
+                return product.stockBatches.slice();
+            }
+
+            if (product.quantity || product.expiryDate || product.batchNumber) {
+                return [{
+                    batchNumber: product.batchNumber || '',
+                    quantity: product.quantity || 0,
+                    expiryDate: product.expiryDate || null,
+                    addedAt: product.createdAt || product.updatedAt || null,
+                    legacy: true
+                }];
+            }
+
+            return [];
+        },
+
+        getPrimaryExpiryFromBatches: function (batches) {
+            const dates = (batches || [])
+                .map(batch => batch && batch.expiryDate ? (batch.expiryDate.toDate ? batch.expiryDate.toDate() : new Date(batch.expiryDate)) : null)
+                .filter(Boolean)
+                .sort((a, b) => a - b);
+
+            return dates.length ? firebase.firestore.Timestamp.fromDate(dates[0]) : null;
+        },
+
+        getBatchLabel: function (product) {
+            const batches = this.getStockBatches(product);
+            if (!batches.length) return product && product.batchNumber ? product.batchNumber : '—';
+            if (batches.length === 1) return batches[0].batchNumber || product.batchNumber || '—';
+
+            const first = batches[0].batchNumber || product.batchNumber || 'Batch';
+            return first + ' +' + (batches.length - 1) + ' more';
+        },
+
+        renderStockBatchHistory: function (product) {
+            const batches = this.getStockBatches(product);
+            if (!batches.length) {
+                return '<div class="inv-batch-history-empty">No batch history yet.</div>';
+            }
+
+            return '<div class="inv-batch-history">' + batches.map((batch, index) => {
+                const expiry = batch.expiryDate ? this.formatDate(batch.expiryDate) : '—';
+                const batchNumber = batch.batchNumber || ('Batch ' + (index + 1));
+                const quantity = batch.quantity || 0;
+                return '<div class="inv-batch-history__item"><strong>' + this.escapeHtml(batchNumber) + '</strong><span>Qty: ' + quantity + '</span><span>Expiry: ' + expiry + '</span></div>';
+            }).join('') + '</div>';
+        },
+
         generateSKU: function () {
             const prefix = 'PF';
             const timestamp = Date.now().toString(36).toUpperCase();
             const random = Math.random().toString(36).substring(2, 6).toUpperCase();
             return prefix + '-' + timestamp + random;
+        },
+
+        generateBatchNumber: function () {
+            const prefix = 'BN';
+            const datePart = new Date().toISOString().slice(2, 10).replace(/-/g, '');
+            const timePart = Date.now().toString(36).toUpperCase().slice(-5);
+            const randomPart = Math.random().toString(36).substring(2, 5).toUpperCase();
+            return prefix + '-' + datePart + '-' + timePart + randomPart;
+        },
+
+        applyBatchMode: function (modeSelectId, inputId, buttonId) {
+            const modeSelect = document.getElementById(modeSelectId);
+            const input = document.getElementById(inputId);
+            const button = document.getElementById(buttonId);
+            if (!modeSelect || !input) return;
+
+            const sync = () => {
+                const isAuto = modeSelect.value === 'auto';
+                input.readOnly = isAuto;
+                input.placeholder = isAuto ? 'Auto-generated batch number' : 'Enter batch number manually';
+                if (button) button.disabled = !isAuto;
+                if (isAuto && !input.value) input.value = this.generateBatchNumber();
+            };
+
+            modeSelect.addEventListener('change', sync);
+            if (button) {
+                button.addEventListener('click', () => {
+                    input.value = this.generateBatchNumber();
+                    modeSelect.value = 'auto';
+                    sync();
+                });
+            }
+
+            sync();
         },
 
         DRUG_CATEGORIES: [
@@ -611,7 +696,7 @@
                         </td>
                         <td>${this.escapeHtml(p.category || '—')}</td>
                         <td>${this.getDrugTypeBadge(p.drugType)}</td>
-                        <td><code>${this.escapeHtml(p.batchNumber || '—')}</code></td>
+                        <td><code>${this.escapeHtml(this.getBatchLabel(p))}</code></td>
                         <td class="${(p.quantity || 0) <= (p.reorderLevel || 10) ? 'inv-qty-warn' : ''}">${p.quantity || 0}</td>
                         <td>${this.formatCurrency(p.buyingPrice || 0)}</td>
                         <td>${this.formatCurrency(p.sellingPrice || 0)}</td>
@@ -1288,8 +1373,17 @@
                                     <h4><i class="fas fa-cubes"></i> Stock Details</h4>
                                     <div class="inv-form-row">
                                         <div class="inv-form-group">
-                                            <label for="inv-batch">Batch Number</label>
-                                            <input type="text" id="inv-batch" placeholder="e.g. BN-20260301">
+                                            <label for="inv-batch-mode">Batch Number</label>
+                                            <select id="inv-batch-mode">
+                                                <option value="manual" selected>Manual entry</option>
+                                                <option value="auto">Auto-generate</option>
+                                            </select>
+                                            <div class="inv-sku-row inv-batch-row">
+                                                <input type="text" id="inv-batch" placeholder="Enter batch number manually">
+                                                <button type="button" class="btn btn-sm btn-outline" id="inv-generate-batch" title="Generate batch number">
+                                                    <i class="fas fa-dice"></i>
+                                                </button>
+                                            </div>
                                         </div>
                                         <div class="inv-form-group">
                                             <label for="inv-quantity">Quantity <span class="req">*</span></label>
@@ -1420,6 +1514,8 @@
                 });
             }
 
+            this.applyBatchMode('inv-batch-mode', 'inv-batch', 'inv-generate-batch');
+
             // Margin calculator
             const buyInput = document.getElementById('inv-buying-price');
             const sellInput = document.getElementById('inv-selling-price');
@@ -1513,6 +1609,13 @@
                 vatType: vatType,
                 vatValue: vatValue,
                 expiryDate: firebase.firestore.Timestamp.fromDate(new Date(expiryStr)),
+                stockBatches: [{
+                    batchNumber: batch || sku,
+                    quantity: quantity,
+                    expiryDate: firebase.firestore.Timestamp.fromDate(new Date(expiryStr)),
+                    addedAt: new Date().toISOString(),
+                    source: 'initial'
+                }],
                 manufacturer: document.getElementById('inv-manufacturer')?.value?.trim() || '',
                 dosage: document.getElementById('inv-dosage')?.value?.trim() || '',
                 description: document.getElementById('inv-description')?.value?.trim() || '',
@@ -1580,6 +1683,24 @@
                             <strong>${this.escapeHtml(product.name)}</strong>
                             <span>Current Stock: <b>${product.quantity || 0}</b></span>
                         </div>
+                        <div class="inv-stock-history-wrap">
+                            <div class="inv-stock-history-title">Existing Batches</div>
+                            ${this.renderStockBatchHistory(product)}
+                            <small style="color:var(--text-tertiary)">Each restock is stored as a separate batch so its expiry date stays intact.</small>
+                        </div>
+                        <div class="inv-form-group" style="margin-top:14px">
+                            <label for="stock-new-batch-mode">New Batch Number</label>
+                            <select id="stock-new-batch-mode">
+                                <option value="manual" selected>Manual entry</option>
+                                <option value="auto">Auto-generate</option>
+                            </select>
+                            <div class="inv-sku-row inv-batch-row">
+                                <input type="text" id="stock-new-batch" placeholder="Enter batch number manually">
+                                <button type="button" class="btn btn-sm btn-outline" id="stock-generate-batch" title="Generate batch number">
+                                    <i class="fas fa-dice"></i>
+                                </button>
+                            </div>
+                        </div>
                         <div class="inv-form-group" style="margin-top:14px">
                             <label for="stock-add-qty">Quantity to Add <span class="req">*</span></label>
                             <input type="number" id="stock-add-qty" min="1" placeholder="e.g. 50" required autofocus>
@@ -1602,6 +1723,8 @@
             document.body.appendChild(modal);
             setTimeout(() => modal.classList.add('show'), 10);
 
+            this.applyBatchMode('stock-new-batch-mode', 'stock-new-batch', 'stock-generate-batch');
+
             const closeModal = () => { modal.classList.remove('show'); setTimeout(() => modal.remove(), 200); };
             document.getElementById('inv-stock-close').addEventListener('click', closeModal);
             document.getElementById('inv-stock-cancel').addEventListener('click', closeModal);
@@ -1610,9 +1733,17 @@
             document.getElementById('inv-stock-confirm').addEventListener('click', async () => {
                 const addQty = parseInt(document.getElementById('stock-add-qty').value);
                 const newExpiry = document.getElementById('stock-new-expiry').value;
+                const newBatchNumber = document.getElementById('stock-new-batch')?.value?.trim() || '';
+                const newBatchMode = document.getElementById('stock-new-batch-mode')?.value || 'manual';
+                const expiryValue = newExpiry || currentExpiry;
 
                 if (!addQty || addQty < 1) {
                     this.showToast('Enter a valid quantity to add.', 'error');
+                    return;
+                }
+
+                if (!expiryValue) {
+                    this.showToast('Please provide an expiry date for the new stock batch.', 'error');
                     return;
                 }
 
@@ -1624,16 +1755,37 @@
                     const businessId = this.getBusinessId();
                     if (!businessId) throw new Error('No business assigned');
 
-                    const updateData = {
-                        quantity: (product.quantity || 0) + addQty,
-                        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-                    };
+                    const docRef = getBusinessCollection(businessId, 'inventory').doc(productId);
+                    const self = this;
 
-                    if (newExpiry) {
-                        updateData.expiryDate = firebase.firestore.Timestamp.fromDate(new Date(newExpiry));
-                    }
+                    await window.db.runTransaction(async (transaction) => {
+                        const snapshot = await transaction.get(docRef);
+                        if (!snapshot.exists) throw new Error('Product not found');
 
-                    await getBusinessCollection(businessId, 'inventory').doc(productId).update(updateData);
+                        const data = snapshot.data() || {};
+                        const currentBatches = Array.isArray(data.stockBatches) && data.stockBatches.length
+                            ? data.stockBatches.slice()
+                            : self.getStockBatches(data);
+                        const expiryTimestamp = firebase.firestore.Timestamp.fromDate(new Date(expiryValue));
+                        const batchRecord = {
+                            batchNumber: newBatchNumber || self.generateBatchNumber(),
+                            quantity: addQty,
+                            expiryDate: expiryTimestamp,
+                            addedAt: new Date().toISOString(),
+                            source: 'restock',
+                            mode: newBatchMode
+                        };
+
+                        currentBatches.push(batchRecord);
+
+                        transaction.update(docRef, {
+                            quantity: (parseInt(data.quantity) || 0) + addQty,
+                            batchNumber: data.batchNumber || batchRecord.batchNumber,
+                            expiryDate: self.getPrimaryExpiryFromBatches(currentBatches) || expiryTimestamp,
+                            stockBatches: currentBatches,
+                            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                        });
+                    });
 
                     // Log activity
                     if (PharmaFlow.ActivityLog) {
