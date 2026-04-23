@@ -4277,6 +4277,7 @@ input, select, textarea {
 .dda-stat-icon--pending { background: #fef3c7; color: #d97706; }
 .dda-stat-icon--dispensed { background: #d1fae5; color: #059669; }
 .dda-stat-icon--today   { background: #dbeafe; color: #2563eb; }
+.dda-stat-icon--loan    { background: #fee2e2; color: #dc2626; }
 
 .dda-stat-info {
     display: flex;
@@ -4291,6 +4292,27 @@ input, select, textarea {
     font-size: 0.75rem;
     color: var(--text-tertiary);
     margin-top: 2px;
+}
+
+.dda-stat-subtext {
+    font-size: 0.72rem;
+    color: var(--text-tertiary);
+    margin-top: 3px;
+    line-height: 1.25;
+}
+
+.dda-stat-card--loan .dda-stat-value {
+    color: #dc2626;
+}
+
+[data-theme="dark"] .dda-stat-icon--loan {
+    background: rgba(220, 38, 38, 0.18);
+    color: #fca5a5;
+}
+
+[data-theme="dark"] .dda-stat-card--loan .dda-stat-value,
+[data-theme="dark"] .dda-stat-subtext {
+    color: #fecaca;
 }
 
 /* Toolbar */
@@ -4775,6 +4797,215 @@ input, select, textarea {
     text-align: right;
 }
 
+.sup-view-orders-overview {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border-color);
+}
+
+.sup-view-section-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 10px;
+}
+
+.sup-view-latest-order,
+.sup-view-recent-orders {
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: var(--bg-secondary);
+    padding: 12px;
+}
+
+.sup-view-order-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.sup-view-order-grid div,
+.sup-view-recent-item {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.sup-view-order-grid span,
+.sup-view-recent-item span {
+    font-size: 0.72rem;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.sup-view-order-grid strong,
+.sup-view-recent-item strong {
+    font-size: 0.84rem;
+    color: var(--text-primary);
+}
+
+.sup-view-recent-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.sup-view-recent-item {
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+}
+
+.sup-view-empty-state {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px dashed var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-size: 0.84rem;
+}
+
+[data-theme="dark"] .sup-view-latest-order,
+[data-theme="dark"] .sup-view-recent-orders,
+[data-theme="dark"] .sup-view-recent-item,
+[data-theme="dark"] .sup-view-empty-state {
+    background: #1f2937;
+    border-color: #334155;
+}
+
+[data-theme="dark"] .sup-view-order-grid strong,
+[data-theme="dark"] .sup-view-recent-item strong,
+[data-theme="dark"] .sup-view-section-title {
+    color: #f8fafc;
+}
+
+[data-theme="dark"] .sup-view-order-grid span,
+[data-theme="dark"] .sup-view-recent-item span,
+[data-theme="dark"] .sup-view-empty-state {
+    color: #cbd5e1;
+}
+
+.ord-settle-card,
+.ord-payment-history-card {
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: var(--bg-secondary);
+    padding: 12px;
+    margin-top: 14px;
+}
+
+.ord-settle-title,
+.ord-payment-history-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 10px;
+}
+
+.ord-settle-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+
+.ord-settle-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 10px;
+}
+
+.ord-payment-history-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.ord-payment-history-item {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-primary);
+}
+
+.ord-payment-history-main {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.ord-payment-history-main strong {
+    font-size: 0.84rem;
+    color: var(--text-primary);
+}
+
+.ord-payment-history-main span,
+.ord-payment-history-amount {
+    font-size: 0.74rem;
+    color: var(--text-tertiary);
+}
+
+.ord-payment-history-amount {
+    white-space: nowrap;
+    font-weight: 700;
+    color: var(--success);
+    display: flex;
+    align-items: center;
+}
+
+.ord-settle-note {
+    margin-top: 10px;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+}
+
+[data-theme="dark"] .ord-settle-card,
+[data-theme="dark"] .ord-payment-history-card,
+[data-theme="dark"] .ord-payment-history-item {
+    background: #1f2937;
+    border-color: #334155;
+}
+
+[data-theme="dark"] .ord-payment-history-main strong,
+[data-theme="dark"] .ord-settle-title,
+[data-theme="dark"] .ord-payment-history-title {
+    color: #f8fafc;
+}
+
+[data-theme="dark"] .ord-payment-history-main span,
+[data-theme="dark"] .ord-payment-history-amount {
+    color: #cbd5e1;
+}
+
+[data-theme="dark"] .ord-settle-note {
+    color: #cbd5e1;
+}
+
+@media (max-width: 768px) {
+    .ord-settle-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
 /* Toast */
 .dda-toast {
     position: fixed;
@@ -5224,6 +5455,7 @@ input, select, textarea {
 
 .ord-payment--paid { background: #dcfce7; color: #166534; }
 .ord-payment--loan { background: #fff7ed; color: #9a3412; }
+.ord-payment--partial { background: #fef3c7; color: #92400e; }
 
 .ord-loan--cleared { background: #dcfce7; color: #166534; }
 .ord-loan--upcoming { background: #eff6ff; color: #1d4ed8; }

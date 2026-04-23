@@ -114,6 +114,14 @@
                                 <span class="dda-stat-label">Inactive</span>
                             </div>
                         </div>
+                        <div class="dda-stat-card dda-stat-card--loan">
+                            <div class="dda-stat-icon dda-stat-icon--loan"><i class="fas fa-hand-holding-dollar"></i></div>
+                            <div class="dda-stat-info">
+                                <span class="dda-stat-value" id="sup-loan-total">KSH 0.00</span>
+                                <span class="dda-stat-label">Loan Owed</span>
+                                <span class="dda-stat-subtext" id="sup-loan-top">No outstanding supplier loans</span>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- Toolbar -->
@@ -418,6 +426,45 @@
             if (el('sup-total')) el('sup-total').textContent = allSuppliers.length;
             if (el('sup-active')) el('sup-active').textContent = allSuppliers.filter(s => s.status !== 'inactive').length;
             if (el('sup-inactive')) el('sup-inactive').textContent = allSuppliers.filter(s => s.status === 'inactive').length;
+
+            let totalLoanOwed = 0;
+            const loanBySupplier = new Map();
+
+            supplierOrdersCache.forEach(order => {
+                const totalAmount = parseFloat(order.totalAmount) || 0;
+                const amountPaid = parseFloat(order.amountPaid) || 0;
+                const explicitOutstanding = parseFloat(order.outstandingAmount);
+                const outstanding = Number.isFinite(explicitOutstanding) ? explicitOutstanding : Math.max(totalAmount - amountPaid, 0);
+                const paymentStatus = order.paymentStatus || (order.paymentMode === 'on-loan' ? 'on-loan' : 'paid');
+                if (paymentStatus === 'paid' || outstanding <= 0) return;
+
+                totalLoanOwed += outstanding;
+
+                const supplierId = order.supplierId || this.normalizeText(order.supplierName || '');
+                if (!supplierId) return;
+
+                const current = loanBySupplier.get(supplierId) || {
+                    name: order.supplierName || 'Unknown Supplier',
+                    amount: 0
+                };
+                current.amount += outstanding;
+                if (!current.name && order.supplierName) current.name = order.supplierName;
+                loanBySupplier.set(supplierId, current);
+            });
+
+            let topLoanSupplier = null;
+            loanBySupplier.forEach((value, key) => {
+                if (!topLoanSupplier || value.amount > topLoanSupplier.amount) {
+                    topLoanSupplier = { key, name: value.name, amount: value.amount };
+                }
+            });
+
+            if (el('sup-loan-total')) el('sup-loan-total').textContent = this.formatCurrency(totalLoanOwed);
+            if (el('sup-loan-top')) {
+                el('sup-loan-top').textContent = topLoanSupplier
+                    ? ('Top: ' + topLoanSupplier.name + ' • ' + this.formatCurrency(topLoanSupplier.amount))
+                    : 'No outstanding supplier loans';
+            }
         },
 
         // ═══════════════════════════════════════════════
@@ -651,6 +698,46 @@
             const statusBadge = (sup.status || 'active') === 'active'
                 ? '<span class="dda-stock-badge dda-stock--ok">Active</span>'
                 : '<span class="dda-stock-badge dda-stock--out">Inactive</span>';
+            const orders = this.getOrdersForSupplier(sup);
+            const latestOrder = orders.length ? orders[0] : null;
+            const recentOrders = orders.slice(0, 3);
+            const totalOrderedValue = orders.reduce((sum, order) => sum + (parseFloat(order.totalAmount) || 0), 0);
+
+            const latestOrderHtml = latestOrder ? `
+                <div class="sup-view-latest-order">
+                    <div class="sup-view-section-title"><i class="fas fa-receipt"></i> Latest Order</div>
+                    <div class="sup-view-order-grid">
+                        <div><span>Invoice</span><strong>${this.escapeHtml(latestOrder.orderId || latestOrder.id || '—')}</strong></div>
+                        <div><span>Date</span><strong>${this.escapeHtml(latestOrder.orderDate || '—')}</strong></div>
+                        <div><span>Status</span><strong>${this.escapeHtml((latestOrder.status || 'pending').replace(/-/g, ' '))}</strong></div>
+                        <div><span>Payment</span><strong>${this.escapeHtml(latestOrder.paymentStatus || (latestOrder.paymentMode === 'on-loan' ? 'on-loan' : 'paid'))}</strong></div>
+                        <div><span>Total</span><strong>${this.formatCurrency(latestOrder.totalAmount || 0)}</strong></div>
+                        <div><span>Outstanding</span><strong>${this.formatCurrency(Math.max((parseFloat(latestOrder.totalAmount) || 0) - (parseFloat(latestOrder.amountPaid) || 0), 0))}</strong></div>
+                    </div>
+                </div>` : `
+                <div class="sup-view-empty-state">
+                    <i class="fas fa-inbox"></i>
+                    <span>No supplier orders recorded yet</span>
+                </div>`;
+
+            const recentOrdersHtml = recentOrders.length ? `
+                <div class="sup-view-recent-orders">
+                    <div class="sup-view-section-title"><i class="fas fa-clock-rotate-left"></i> Recent Orders</div>
+                    <div class="sup-view-recent-list">
+                        ${recentOrders.map(order => `
+                            <div class="sup-view-recent-item">
+                                <div>
+                                    <strong>${this.escapeHtml(order.orderId || order.id || '—')}</strong>
+                                    <span>${this.escapeHtml(order.orderDate || '—')}</span>
+                                </div>
+                                <div>
+                                    <strong>${this.formatCurrency(order.totalAmount || 0)}</strong>
+                                    <span>${this.escapeHtml(order.paymentStatus || (order.paymentMode === 'on-loan' ? 'on-loan' : 'paid'))}</span>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>` : '';
 
             body.innerHTML = `
                 <div class="dda-view-details">
@@ -661,8 +748,14 @@
                     <div class="dda-view-row"><span class="dda-view-label">Location</span><span class="dda-view-value">${this.escapeHtml(sup.location || '—')}</span></div>
                     <div class="dda-view-row"><span class="dda-view-label">Category</span><span class="dda-view-value">${this.escapeHtml(sup.category || '—')}</span></div>
                     <div class="dda-view-row"><span class="dda-view-label">Status</span><span class="dda-view-value">${statusBadge}</span></div>
+                    <div class="dda-view-row"><span class="dda-view-label">Times Ordered</span><span class="dda-view-value"><strong>${orders.length}</strong></span></div>
+                    <div class="dda-view-row"><span class="dda-view-label">Total Ordered Value</span><span class="dda-view-value"><strong>${this.formatCurrency(totalOrderedValue)}</strong></span></div>
                     ${sup.notes ? '<div class="dda-view-row"><span class="dda-view-label">Notes</span><span class="dda-view-value">' + this.escapeHtml(sup.notes) + '</span></div>' : ''}
                     ${sup.createdBy ? '<div class="dda-view-row"><span class="dda-view-label">Added By</span><span class="dda-view-value">' + this.escapeHtml(sup.createdBy) + '</span></div>' : ''}
+                </div>
+                <div class="sup-view-orders-overview">
+                    ${latestOrderHtml}
+                    ${recentOrdersHtml}
                 </div>
             `;
             modal.style.display = 'flex';

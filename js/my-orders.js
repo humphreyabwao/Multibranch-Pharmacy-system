@@ -106,6 +106,9 @@
             if (paymentStatus === 'paid') {
                 return '<span class="ord-payment-badge ord-payment--paid"><i class="fas fa-check-circle"></i> Paid in Full</span>';
             }
+            if (paymentStatus === 'partial') {
+                return '<span class="ord-payment-badge ord-payment--partial"><i class="fas fa-circle-half-stroke"></i> Partial Payment</span>';
+            }
             return '<span class="ord-payment-badge ord-payment--loan"><i class="fas fa-hand-holding-dollar"></i> On Loan</span>';
         },
 
@@ -1250,6 +1253,114 @@
             }
         },
 
+        markOrderAsPaid: async function (order, paymentMeta) {
+            if (!order || !order.id) return;
+
+            const paymentType = String(paymentMeta?.paymentType || 'full').trim().toLowerCase();
+            const paidBy = String(paymentMeta?.paidBy || '').trim() || 'Unknown';
+            const paymentReference = String(paymentMeta?.paymentReference || '').trim();
+            const enteredAmount = Math.max(0, parseFloat(paymentMeta?.amountPaid) || 0);
+            if (!paymentReference) {
+                this.showToast('Payment reference is required.', 'error');
+                return;
+            }
+
+            const totalAmount = parseFloat(order.totalAmount) || 0;
+            const currentPaid = Math.max(0, parseFloat(order.amountPaid) || 0);
+            const currentOutstanding = Math.max(0, parseFloat(order.outstandingAmount) || (totalAmount - currentPaid));
+
+            let paymentThisTime = currentOutstanding;
+            let updatedPaid = totalAmount;
+            let updatedOutstanding = 0;
+            let updatedPaymentStatus = 'paid';
+            let updatedLoanStatus = 'cleared';
+
+            if (paymentType === 'partial') {
+                if (enteredAmount <= 0) {
+                    this.showToast('Enter a valid partial payment amount.', 'error');
+                    return;
+                }
+                paymentThisTime = Math.min(enteredAmount, currentOutstanding);
+                updatedPaid = Math.min(totalAmount, currentPaid + paymentThisTime);
+                updatedOutstanding = Math.max(totalAmount - updatedPaid, 0);
+                updatedPaymentStatus = updatedOutstanding <= 0 ? 'paid' : 'partial';
+                updatedLoanStatus = updatedOutstanding <= 0 ? 'cleared' : 'partial';
+            }
+
+            if (paymentType === 'full' && currentOutstanding <= 0) {
+                this.showToast('This order is already fully paid.', 'error');
+                return;
+            }
+
+            const confirmText = paymentType === 'partial' ? 'Record this partial payment?' : 'Mark this loan order as paid in full?';
+            if (!(await PharmaFlow.confirm(confirmText, { title: 'Mark as Paid', confirmText: 'Yes, Mark Paid' }))) return;
+
+            const businessId = this.getBusinessId();
+            if (!businessId) return;
+
+            try {
+                const profile = PharmaFlow.Auth ? PharmaFlow.Auth.userProfile : null;
+                const paymentEntry = {
+                    paidAt: new Date().toISOString(),
+                    paidBy: paidBy,
+                    paymentReference: paymentReference,
+                    amount: paymentThisTime,
+                    balanceAfter: updatedOutstanding,
+                    paymentType: paymentType,
+                    status: updatedPaymentStatus,
+                    note: paymentType === 'partial' ? 'Partial payment recorded' : 'Loan settled before due date'
+                };
+                const updateData = {
+                    paymentStatus: updatedPaymentStatus,
+                    paymentMode: updatedPaymentStatus === 'paid' ? 'fully-paid' : 'on-loan',
+                    amountPaid: updatedPaid,
+                    outstandingAmount: updatedOutstanding,
+                    loanStatus: updatedLoanStatus,
+                    paymentReference: paymentReference,
+                    paymentHistory: firebase.firestore.FieldValue.arrayUnion(paymentEntry),
+                    lastPaymentAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    lastPaymentBy: paidBy,
+                    lastPaymentReference: paymentReference,
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    updatedBy: profile ? (profile.displayName || profile.email) : 'Unknown'
+                };
+
+                if (updatedPaymentStatus === 'paid') {
+                    updateData.loanClearedAt = firebase.firestore.FieldValue.serverTimestamp();
+                    updateData.loanClearedBy = paidBy;
+                }
+
+                await getBusinessCollection(businessId, 'orders').doc(order.id).update(updateData);
+
+                order.paymentStatus = updatedPaymentStatus;
+                order.paymentMode = updatedPaymentStatus === 'paid' ? 'fully-paid' : 'on-loan';
+                order.amountPaid = updatedPaid;
+                order.outstandingAmount = updatedOutstanding;
+                order.loanStatus = updatedLoanStatus;
+                order.paymentReference = paymentReference;
+                order.paymentHistory = Array.isArray(order.paymentHistory) ? [...order.paymentHistory, paymentEntry] : [paymentEntry];
+                this.showToast(paymentType === 'partial' ? 'Partial payment recorded.' : 'Loan marked as paid in full.');
+
+                const refreshed = ordPageData.find(o => o.id === order.id) || order;
+                if (refreshed) {
+                    refreshed.paymentStatus = updatedPaymentStatus;
+                    refreshed.paymentMode = updatedPaymentStatus === 'paid' ? 'fully-paid' : 'on-loan';
+                    refreshed.amountPaid = updatedPaid;
+                    refreshed.outstandingAmount = updatedOutstanding;
+                    refreshed.loanStatus = updatedLoanStatus;
+                    refreshed.paymentReference = paymentReference;
+                    refreshed.paymentHistory = order.paymentHistory;
+                    this.viewOrder(refreshed);
+                }
+
+                this._loadOrdersPage();
+                this._loadOrderStats();
+            } catch (err) {
+                console.error('Mark order as paid error:', err);
+                this.showToast('Failed to mark order as paid: ' + err.message, 'error');
+            }
+        },
+
         // ═══════════════════════════════════════════════
         //  ADD TO INVENTORY (sorted preview + batch)
         // ═══════════════════════════════════════════════
@@ -1403,6 +1514,57 @@
             `).join('');
 
             const showAddBtn = order.status === 'received' && !order.inventoryAdded;
+            const showMarkPaidBtn = (order.paymentStatus || (order.paymentMode === 'on-loan' ? 'on-loan' : 'paid')) !== 'paid' && (parseFloat(order.outstandingAmount) || 0) > 0;
+            const paymentHistory = Array.isArray(order.paymentHistory) ? [...order.paymentHistory].sort((a, b) => {
+                const at = Date.parse(a.paidAt || a.createdAt || 0) || 0;
+                const bt = Date.parse(b.paidAt || b.createdAt || 0) || 0;
+                return bt - at;
+            }) : [];
+            const paymentHistoryHtml = paymentHistory.length ? `
+                <div class="ord-payment-history-card">
+                    <div class="ord-payment-history-title"><i class="fas fa-clock-rotate-left"></i> Payment History</div>
+                    <div class="ord-payment-history-list">
+                        ${paymentHistory.map(entry => `
+                            <div class="ord-payment-history-item">
+                                <div class="ord-payment-history-main">
+                                    <strong>${this.escapeHtml(entry.paymentReference || 'No reference')}</strong>
+                                    <span>${this.escapeHtml(entry.paidBy || 'Unknown')} · ${this.escapeHtml((entry.paymentType || 'full').toUpperCase())} · ${this.escapeHtml(entry.paidAt || '—')}</span>
+                                </div>
+                                <div class="ord-payment-history-amount">${this.formatCurrency(entry.amount || 0)}${typeof entry.balanceAfter === 'number' ? ' <small style="display:block;font-weight:500;color:var(--text-tertiary)">Balance: ' + this.formatCurrency(entry.balanceAfter) + '</small>' : ''}</div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>` : '';
+            const outstandingAmount = Math.max(0, parseFloat(order.outstandingAmount) || 0);
+            const settleLoanHtml = showMarkPaidBtn ? `
+                <div class="ord-settle-card">
+                    <div class="ord-settle-title"><i class="fas fa-wallet"></i> Settle Loan Early</div>
+                    <div class="ord-settle-grid">
+                        <div class="dda-form-group">
+                            <label>Paid By</label>
+                            <input type="text" id="ord-paid-by" value="${this.escapeHtml((PharmaFlow.Auth && PharmaFlow.Auth.userProfile && (PharmaFlow.Auth.userProfile.displayName || PharmaFlow.Auth.userProfile.email)) || 'Unknown')}" placeholder="Name of person who paid">
+                        </div>
+                        <div class="dda-form-group">
+                            <label>Payment Reference <span class="required">*</span></label>
+                            <input type="text" id="ord-payment-ref" placeholder="Enter manual payment reference">
+                        </div>
+                        <div class="dda-form-group">
+                            <label>Payment Type</label>
+                            <select id="ord-payment-settle-mode">
+                                <option value="full" selected>Pay Full Balance</option>
+                                <option value="partial">Partial Payment</option>
+                            </select>
+                        </div>
+                        <div class="dda-form-group">
+                            <label>Amount Paid (KSH)</label>
+                            <input type="number" id="ord-payment-amount" min="0" step="0.01" value="${outstandingAmount.toFixed(2)}">
+                        </div>
+                    </div>
+                    <div class="ord-settle-note" id="ord-settle-note">Outstanding balance: <strong>${this.formatCurrency(outstandingAmount)}</strong></div>
+                    <div class="ord-settle-actions">
+                        <button class="dda-btn btn-success" id="ord-modal-mark-paid"><i class="fas fa-circle-check"></i> Mark as Paid</button>
+                    </div>
+                </div>` : '';
 
             body.innerHTML = `
                 <div class="dda-view-details">
@@ -1424,6 +1586,8 @@
                     ${order.notes ? '<div class="dda-view-row"><span class="dda-view-label">Notes</span><span class="dda-view-value">' + this.escapeHtml(order.notes) + '</span></div>' : ''}
                     <div class="dda-view-row"><span class="dda-view-label">Total Amount</span><span class="dda-view-value"><strong>${this.formatCurrency(order.totalAmount)}</strong></span></div>
                 </div>
+                ${settleLoanHtml}
+                ${paymentHistoryHtml}
                 <h4 style="margin:18px 0 10px;font-size:0.88rem;color:var(--text-secondary)"><i class="fas fa-list"></i> Order Items (sorted A-Z)</h4>
                 <div class="dda-table-wrap">
                     <table class="dda-table">
@@ -1455,6 +1619,35 @@
                 footer.querySelector('#ord-modal-add-inv')?.addEventListener('click', () => {
                     modal.style.display = 'none';
                     this.addToInventory(order.id);
+                });
+            }
+
+            if (showMarkPaidBtn) {
+                const settleModeEl = document.getElementById('ord-payment-settle-mode');
+                const settleAmountEl = document.getElementById('ord-payment-amount');
+                const settleNoteEl = document.getElementById('ord-settle-note');
+
+                const syncSettleUi = () => {
+                    if (!settleModeEl || !settleAmountEl || !settleNoteEl) return;
+                    const isPartial = settleModeEl.value === 'partial';
+                    settleAmountEl.disabled = !isPartial;
+                    if (!isPartial) {
+                        settleAmountEl.value = outstandingAmount.toFixed(2);
+                        settleNoteEl.innerHTML = 'Outstanding balance: <strong>' + this.formatCurrency(outstandingAmount) + '</strong>';
+                    } else {
+                        settleNoteEl.innerHTML = 'Enter the amount paid now. Remaining balance will stay on loan.';
+                    }
+                };
+
+                settleModeEl?.addEventListener('change', syncSettleUi);
+                syncSettleUi();
+
+                document.getElementById('ord-modal-mark-paid')?.addEventListener('click', () => {
+                    const paidBy = document.getElementById('ord-paid-by')?.value || '';
+                    const paymentReference = document.getElementById('ord-payment-ref')?.value || '';
+                    const paymentType = document.getElementById('ord-payment-settle-mode')?.value || 'full';
+                    const amountPaid = document.getElementById('ord-payment-amount')?.value || '';
+                    this.markOrderAsPaid(order, { paidBy, paymentReference, paymentType, amountPaid });
                 });
             }
 
