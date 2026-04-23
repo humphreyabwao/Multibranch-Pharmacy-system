@@ -60,11 +60,6 @@
                 // Re-render sidebar with role-based filtering
                 if (profile && PharmaFlow.Sidebar) {
                     PharmaFlow.Sidebar.updateForRole(profile.role);
-
-                    // Auto-navigate to dashboard only on first auth
-                    if (!this._authInitialized && !PharmaFlow.Sidebar.activeModuleId) {
-                        PharmaFlow.Sidebar.setActive('dashboard', null);
-                    }
                 }
 
                 // Manage franchise selector visibility based on role

@@ -54,6 +54,37 @@
             this.bindPasswordToggle();
         },
 
+        clearCachedSessionState: function () {
+            try {
+                const keysToRemove = [];
+                for (let i = 0; i < localStorage.length; i++) {
+                    const key = localStorage.key(i);
+                    if (key && key.startsWith('pf_') && key !== 'pf_brand_name' && key !== 'pf_brand_tagline' && key !== 'pf_brand_icon') {
+                        keysToRemove.push(key);
+                    }
+                }
+                keysToRemove.forEach(key => localStorage.removeItem(key));
+
+                const sessionKeysToRemove = [];
+                for (let i = 0; i < sessionStorage.length; i++) {
+                    const key = sessionStorage.key(i);
+                    if (key && key.startsWith('pf_')) {
+                        sessionKeysToRemove.push(key);
+                    }
+                }
+                sessionKeysToRemove.forEach(key => sessionStorage.removeItem(key));
+
+                PharmaFlow.selectedBusinessId = null;
+                if (PharmaFlow.Sidebar) {
+                    PharmaFlow.Sidebar.activeModuleId = null;
+                    PharmaFlow.Sidebar.activeSubModuleId = null;
+                    PharmaFlow.Sidebar.expandedModules = new Set();
+                }
+            } catch (err) {
+                console.warn('Failed to clear cached session state:', err);
+            }
+        },
+
         /**
          * Load user profile from Firestore
          */
@@ -210,7 +241,7 @@
         onAuthRequired: function () {
             const isLoginPage = window.location.pathname.endsWith('login.html');
             if (!isLoginPage) {
-                window.location.href = 'login.html';
+                window.location.replace('login.html');
             }
         },
 
@@ -236,6 +267,10 @@
          */
         signIn: async function (email, password) {
             try {
+                const rememberMe = !!document.getElementById('remember-me')?.checked;
+                await window.auth.setPersistence(
+                    rememberMe ? firebase.auth.Auth.Persistence.LOCAL : firebase.auth.Auth.Persistence.SESSION
+                );
                 await window.auth.signInWithEmailAndPassword(email, password);
             } catch (err) {
                 throw this.parseAuthError(err);
@@ -247,8 +282,9 @@
          */
         signOut: async function () {
             try {
+                this.clearCachedSessionState();
                 await window.auth.signOut();
-                window.location.href = 'login.html';
+                window.location.replace('login.html');
             } catch (err) {
                 console.error('Sign out error:', err);
             }

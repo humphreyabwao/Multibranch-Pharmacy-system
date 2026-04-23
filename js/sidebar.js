@@ -213,7 +213,10 @@
             this.render();
             this.renderSettings();
             this.bindToggle();
-            this.restoreState();
+
+            window.addEventListener('beforeunload', () => {
+                this.saveState();
+            });
         },
 
         /**
@@ -520,12 +523,11 @@
          * Re-render sidebar based on user role (called after auth ready)
          */
         updateForRole: function (role) {
-            // Skip re-render if role hasn't changed
-            if (this._currentRole === role) return;
             this._currentRole = role;
 
             this.render(role);
             this.renderSettings();
+            this.restoreState();
             this.updateActiveState();
         }
     };
