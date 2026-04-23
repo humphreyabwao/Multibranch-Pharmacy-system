@@ -69,6 +69,29 @@
             d.textContent = str;
             return d.innerHTML;
         },
+        getPricingPageUrl: function () {
+            try {
+                return new URL('pricing.html', window.location.href).href;
+            } catch (err) {
+                return 'pricing.html';
+            }
+        },
+        copyTextToClipboard: async function (text) {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(text);
+                return;
+            }
+
+            const temp = document.createElement('textarea');
+            temp.value = text;
+            temp.style.position = 'fixed';
+            temp.style.opacity = '0';
+            document.body.appendChild(temp);
+            temp.focus();
+            temp.select();
+            document.execCommand('copy');
+            temp.remove();
+        },
 
         showToast: function (msg, type) {
             const old = document.querySelector('.adm-toast');
@@ -2241,6 +2264,118 @@
                 }, err => {
                     console.error('Alerts subscribe error:', err);
                 });
+        },
+
+        renderPricingPage: function (container) {
+            this.cleanup();
+
+            const pricingUrl = this.getPricingPageUrl();
+
+            container.innerHTML = `
+                <div class="dda-module adm-pricing-page">
+                    <div class="page-header adm-pricing-header">
+                        <div>
+                            <h2><i class="fas fa-tags"></i> Pricing Page</h2>
+                            <div class="breadcrumb">
+                                <a href="#" data-nav="dashboard">Home</a>
+                                <span>/</span><span>Admin Panel</span>
+                                <span>/</span><span>Pricing Page</span>
+                            </div>
+                        </div>
+                        <div class="adm-pricing-actions">
+                            <button class="dda-btn dda-btn--primary" id="adm-pricing-copy">
+                                <i class="fas fa-copy"></i> Copy Link
+                            </button>
+                            <a class="dda-btn dda-btn--cancel" id="adm-pricing-open" href="${pricingUrl}" target="_blank" rel="noopener">
+                                <i class="fas fa-arrow-up-right-from-square"></i> Open Public Page
+                            </a>
+                        </div>
+                    </div>
+
+                    <div class="adm-pricing-hero-card">
+                        <div>
+                            <span class="adm-pricing-kicker">Public pricing page</span>
+                            <h3>Share this page with customers who want to compare plans.</h3>
+                            <p>This page is clean, mobile friendly, and uses simple solid colours only. It highlights the Starter, Professional, and Enterprise plans without exposing the rest of the admin system.</p>
+                        </div>
+                        <div class="adm-pricing-link-card">
+                            <label for="adm-pricing-url">Public URL</label>
+                            <div class="adm-pricing-link-row">
+                                <input type="text" id="adm-pricing-url" readonly value="${this.escapeHtml(pricingUrl)}">
+                                <button class="dda-btn dda-btn--primary" id="adm-pricing-copy-inline"><i class="fas fa-copy"></i></button>
+                            </div>
+                            <small>Copy this link and send it directly to customers.</small>
+                        </div>
+                    </div>
+
+                    <div class="adm-pricing-grid">
+                        <div class="adm-pricing-card adm-pricing-card--starter">
+                            <div class="adm-pricing-badge adm-pricing-badge--starter">Starter</div>
+                            <h3>Starter Plan</h3>
+                            <div class="adm-pricing-price">KSH 2,500 <small>/ month</small></div>
+                            <p>One-time payment: KSH 70,000.</p>
+                            <ul>
+                                <li>POS</li>
+                                <li>Inventory</li>
+                                <li>Sales</li>
+                                <li>Expenses</li>
+                                <li>Reports</li>
+                                <li>1 user admin</li>
+                            </ul>
+                        </div>
+
+                        <div class="adm-pricing-card adm-pricing-card--pro">
+                            <div class="adm-pricing-badge adm-pricing-badge--pro">Professional</div>
+                            <h3>Professional Plan</h3>
+                            <div class="adm-pricing-price">KSH 3,500 <small>/ month</small></div>
+                            <p>One-time payment: KSH 150,000. Includes 2 users with admin and staff role-based features.</p>
+                            <ul>
+                                <li>Everything in Starter</li>
+                                <li>DDA Registers</li>
+                                <li>Customers</li>
+                                <li>Medication Refill</li>
+                                <li>My Orders</li>
+                                <li>Suppliers</li>
+                                <li>Reports</li>
+                                <li>Accounts</li>
+                                <li>2 users: admin + staff roles</li>
+                            </ul>
+                        </div>
+
+                        <div class="adm-pricing-card adm-pricing-card--enterprise">
+                            <div class="adm-pricing-badge adm-pricing-badge--enterprise">Enterprise</div>
+                            <h3>Enterprise Plan</h3>
+                            <div class="adm-pricing-price">KSH 7,500 <small>/ month</small></div>
+                            <p>One-time payment: KSH 250,000.</p>
+                            <ul>
+                                <li>Everything in Professional</li>
+                                <li>Patient Management</li>
+                                <li>Wholesale</li>
+                                <li>Unlimited users</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="adm-pricing-note">
+                        <strong>Tip:</strong> if you want me to wire exact amounts into the page, send the figures and I’ll update both the tab and the public page.
+                    </div>
+                </div>
+            `;
+
+            const dashLink = container.querySelector('[data-nav="dashboard"]');
+            if (dashLink) dashLink.addEventListener('click', (e) => { e.preventDefault(); PharmaFlow.Sidebar.setActive('dashboard', null); });
+
+            const copyHandler = async () => {
+                try {
+                    await this.copyTextToClipboard(pricingUrl);
+                    this.showToast('Pricing link copied!');
+                } catch (err) {
+                    this.showToast('Unable to copy the link.', 'error');
+                }
+            };
+
+            document.getElementById('adm-pricing-copy')?.addEventListener('click', copyHandler);
+            document.getElementById('adm-pricing-copy-inline')?.addEventListener('click', copyHandler);
         },
 
         _allAlerts: [],

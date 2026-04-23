@@ -395,6 +395,10 @@
                     PharmaFlow.AdminPanel.renderFranchiseAlerts(contentBody);
                     return;
                 }
+                if (subId === 'pricing-page') {
+                    PharmaFlow.AdminPanel.renderPricingPage(contentBody);
+                    return;
+                }
             }
 
             const pageName = subModule ? subModule.label : moduleConfig.label;

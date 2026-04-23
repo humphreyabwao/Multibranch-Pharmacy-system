@@ -5793,6 +5793,199 @@ input, select, textarea {
     background: rgba(37, 99, 235, 0.16);
 }
 
+.adm-pricing-page {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.adm-pricing-header {
+    align-items: flex-start;
+}
+
+.adm-pricing-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.adm-pricing-hero-card {
+    display: grid;
+    grid-template-columns: 1.25fr 0.75fr;
+    gap: 16px;
+    padding: 20px;
+    border: 1px solid var(--border-color);
+    border-radius: 18px;
+    background: var(--bg-card);
+    box-shadow: var(--shadow-sm);
+}
+
+.adm-pricing-kicker {
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: var(--primary-light);
+    color: var(--primary);
+    font-size: 0.76rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 10px;
+}
+
+.adm-pricing-hero-card h3 {
+    margin: 0 0 8px;
+    font-size: clamp(1.4rem, 2.2vw, 2rem);
+    color: var(--text-primary);
+}
+
+.adm-pricing-hero-card p {
+    margin: 0;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+.adm-pricing-link-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 16px;
+    border-radius: 16px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+}
+
+.adm-pricing-link-card label {
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: var(--text-secondary);
+}
+
+.adm-pricing-link-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+}
+
+.adm-pricing-link-row input {
+    width: 100%;
+    padding: 11px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: var(--bg-card);
+    color: var(--text-primary);
+}
+
+.adm-pricing-link-card small,
+.adm-pricing-note {
+    color: var(--text-secondary);
+    line-height: 1.55;
+}
+
+.adm-pricing-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+}
+
+.adm-pricing-card {
+    padding: 18px;
+    border-radius: 18px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-card);
+    box-shadow: var(--shadow-sm);
+}
+
+.adm-pricing-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 10px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 12px;
+}
+
+.adm-pricing-badge--starter { background: #dbeafe; color: #1d4ed8; }
+.adm-pricing-badge--pro { background: #d1fae5; color: #047857; }
+.adm-pricing-badge--enterprise { background: #fef3c7; color: #b45309; }
+
+.adm-pricing-card h3 {
+    margin: 0 0 8px;
+    font-size: 1.2rem;
+}
+
+.adm-pricing-price {
+    margin-bottom: 10px;
+    font-size: 1.65rem;
+    font-weight: 800;
+    color: var(--text-primary);
+}
+
+.adm-pricing-card p {
+    margin: 0 0 14px;
+    color: var(--text-secondary);
+}
+
+.adm-pricing-card ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: 9px;
+}
+
+.adm-pricing-card li {
+    padding-left: 18px;
+    position: relative;
+    color: var(--text-primary);
+}
+
+.adm-pricing-card li::before {
+    content: '•';
+    position: absolute;
+    left: 0;
+    color: var(--primary);
+    font-weight: 900;
+}
+
+.adm-pricing-note {
+    padding: 14px 16px;
+    border-radius: 16px;
+    border: 1px dashed var(--border-color);
+    background: var(--bg-tertiary);
+}
+
+.adm-pricing-note strong {
+    color: var(--text-primary);
+}
+
+@media (max-width: 980px) {
+    .adm-pricing-hero-card,
+    .adm-pricing-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .adm-pricing-actions {
+        width: 100%;
+    }
+}
+
+@media (max-width: 640px) {
+    .adm-pricing-link-row {
+        grid-template-columns: 1fr;
+    }
+
+    .adm-pricing-actions .dda-btn,
+    .adm-pricing-actions .btn {
+        width: 100%;
+        justify-content: center;
+    }
+}
+
 .ord-settle-note {
     margin-top: 10px;
     font-size: 0.78rem;

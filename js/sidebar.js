@@ -179,7 +179,8 @@
                 { id: 'manage-users', label: 'Manage Users', icon: 'fas fa-users-cog', roles: ['superadmin'] },
                 { id: 'manage-franchises', label: 'Manage Franchises', icon: 'fas fa-building', roles: ['superadmin'] },
                 { id: 'admin-analytics', label: 'Analytics', icon: 'fas fa-chart-pie', roles: ['superadmin'] },
-                { id: 'franchise-alerts', label: 'Franchise Alerts', icon: 'fas fa-bell-concierge', roles: ['superadmin'] }
+                { id: 'franchise-alerts', label: 'Franchise Alerts', icon: 'fas fa-bell-concierge', roles: ['superadmin'] },
+                { id: 'pricing-page', label: 'Pricing Page', icon: 'fas fa-tags', roles: ['superadmin'] }
             ]
         }
     ];
