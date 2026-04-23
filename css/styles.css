@@ -2747,6 +2747,15 @@ input, select, textarea {
     margin-bottom: 0;
 }
 
+.inv-input-combo {
+    margin-bottom: 0;
+}
+
+.inv-input-combo select {
+    max-width: 96px;
+    flex: 0 0 96px;
+}
+
 .inv-form-group {
     flex: 1;
     display: flex;
@@ -3359,6 +3368,18 @@ input, select, textarea {
     padding: 5px 0;
     font-size: 0.85rem;
     color: var(--text-secondary);
+    gap: 10px;
+}
+
+.pos-summary-row .checkbox-wrapper {
+    color: var(--text-primary);
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+#pos-net-total,
+#pos-vat-amount {
+    font-weight: 600;
 }
 
 .pos-discount-input {
@@ -3409,6 +3430,30 @@ input, select, textarea {
     color: var(--text-secondary);
     margin-bottom: 8px;
     display: block;
+}
+
+.pos-customer-fields {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.pos-customer-fields input {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    font-size: 0.82rem;
+    background: var(--bg-input);
+    color: var(--text-primary);
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.pos-customer-fields input:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px var(--primary-light);
 }
 
 .pos-payment-methods {
@@ -3526,13 +3571,18 @@ input, select, textarea {
 .pos-receipt-info {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 3px;
     font-size: 0.78rem;
     color: var(--text-secondary);
     border-top: 1px dashed var(--border-color);
     border-bottom: 1px dashed var(--border-color);
     padding: 8px 0;
     margin-top: 8px;
+}
+
+.pos-receipt-customer {
+    color: var(--text-primary);
+    font-weight: 600;
 }
 
 .pos-receipt-table {
@@ -3636,6 +3686,10 @@ input, select, textarea {
 @media (max-width: 768px) {
     .pos-product-grid {
         grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    }
+
+    .pos-customer-fields {
+        grid-template-columns: 1fr;
     }
 }
 
@@ -3973,6 +4027,89 @@ input, select, textarea {
 @media (max-width: 480px) {
     .sales-stats-row {
         grid-template-columns: 1fr;
+    }
+}
+
+/* Pharmacy Customers */
+.pc-customer-cell {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.pc-customer-avatar {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--primary-light);
+    color: var(--primary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.72rem;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+
+.pc-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.55);
+    z-index: 11000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+}
+
+.pc-modal-card {
+    width: min(1000px, 96vw);
+    max-height: 88vh;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xl);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.pc-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.pc-modal-header h3 {
+    font-size: 1rem;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.pc-modal-meta {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+}
+
+.pc-modal-body {
+    padding: 12px 16px 16px;
+    overflow: auto;
+}
+
+@media (max-width: 768px) {
+    .pc-modal-meta {
+        flex-direction: column;
+        gap: 6px;
     }
 }
 
@@ -4602,6 +4739,37 @@ input, select, textarea {
 .ord-card-header i { color: var(--primary); }
 .ord-card-body { padding: 20px; }
 
+.ord-id-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.ord-id-row input {
+    flex: 1;
+}
+
+.ord-pay-summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    margin-top: 24px;
+}
+
+.ord-pay-summary--paid {
+    background: #dcfce7;
+    color: #166534;
+}
+
+.ord-pay-summary--loan {
+    background: #fff7ed;
+    color: #9a3412;
+}
+
 /* Item search results dropdown */
 .ord-item-picker { position: relative; }
 .ord-search-results {
@@ -4641,6 +4809,71 @@ input, select, textarea {
     box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
 }
 
+.ord-vat-cell {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: nowrap;
+    min-width: 230px;
+}
+
+.ord-vat-cell .ord-inline-input {
+    text-align: center;
+    padding: 4px 6px;
+    height: 30px;
+}
+
+.ord-vat-cell .ord-vat-enabled {
+    width: 78px;
+}
+
+.ord-vat-cell .ord-vat-value {
+    width: 72px;
+}
+
+.ord-vat-cell .ord-vat-type {
+    width: 56px;
+}
+
+.ord-vat-meta {
+    font-size: 0.68rem;
+    color: var(--text-tertiary);
+    white-space: nowrap;
+    margin-left: 2px;
+}
+
+.ord-line-total-cell {
+    text-align: right;
+    white-space: nowrap;
+}
+
+.ord-line-total-main {
+    display: block;
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.ord-line-total-base {
+    display: block;
+    margin-top: 2px;
+    font-size: 0.74rem;
+    color: var(--text-tertiary);
+}
+
+#ord-items-tfoot td {
+    text-align: right;
+    vertical-align: middle;
+}
+
+#ord-items-total {
+    display: inline-block;
+    min-width: 130px;
+    font-size: 0.95rem;
+    text-align: right;
+}
+
 /* Submit bar */
 .ord-submit-bar {
     display: flex; justify-content: flex-end; gap: 12px;
@@ -4658,6 +4891,27 @@ input, select, textarea {
 .ord-status--approved  { background: #d1fae5; color: #065f46; }
 .ord-status--received  { background: #dbeafe; color: #1e40af; }
 .ord-status--cancelled { background: #fee2e2; color: #991b1b; }
+
+.ord-payment-badge,
+.ord-loan-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-size: 0.74rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.ord-payment--paid { background: #dcfce7; color: #166534; }
+.ord-payment--loan { background: #fff7ed; color: #9a3412; }
+
+.ord-loan--cleared { background: #dcfce7; color: #166534; }
+.ord-loan--upcoming { background: #eff6ff; color: #1d4ed8; }
+.ord-loan--due-today { background: #fef3c7; color: #92400e; }
+.ord-loan--overdue { background: #fee2e2; color: #991b1b; }
+.ord-loan--missing { background: #f3f4f6; color: #374151; }
 
 /* Order priority badges */
 .ord-priority-badge {

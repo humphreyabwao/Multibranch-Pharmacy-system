@@ -36,6 +36,7 @@
                     if (PharmaFlow.POS) PharmaFlow.POS.cleanup();
                     if (PharmaFlow.TodaysSales) PharmaFlow.TodaysSales.cleanup();
                     if (PharmaFlow.AllSales) PharmaFlow.AllSales.cleanup();
+                    if (PharmaFlow.PharmacyCustomers) PharmaFlow.PharmacyCustomers.cleanup();
                     break;
                 case 'dda-register': if (PharmaFlow.DdaRegister) PharmaFlow.DdaRegister.cleanup(); break;
                 case 'supplier': if (PharmaFlow.Supplier) PharmaFlow.Supplier.cleanup(); break;
@@ -178,6 +179,7 @@
                 if (PharmaFlow.POS) PharmaFlow.POS.cleanup();
                 if (PharmaFlow.TodaysSales) PharmaFlow.TodaysSales.cleanup();
                 if (PharmaFlow.AllSales) PharmaFlow.AllSales.cleanup();
+                if (PharmaFlow.PharmacyCustomers) PharmaFlow.PharmacyCustomers.cleanup();
                 if (PharmaFlow.Prescription) PharmaFlow.Prescription.cleanup();
 
                 if (subId === 'pos' && PharmaFlow.POS) {
@@ -190,6 +192,10 @@
                 }
                 if (subId === 'all-sales' && PharmaFlow.AllSales) {
                     PharmaFlow.AllSales.render(contentBody);
+                    return;
+                }
+                if (subId === 'customers' && PharmaFlow.PharmacyCustomers) {
+                    PharmaFlow.PharmacyCustomers.render(contentBody);
                     return;
                 }
                 if (subId === 'prescription' && PharmaFlow.Prescription) {

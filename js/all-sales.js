@@ -122,7 +122,7 @@
                     <div class="sales-toolbar">
                         <div class="sales-search">
                             <i class="fas fa-search"></i>
-                            <input type="text" id="as-search" placeholder="Search by receipt #, cashier, or item...">
+                            <input type="text" id="as-search" placeholder="Search by receipt #, cashier, customer, phone, or item...">
                         </div>
                         <div class="sales-filters">
                             <div class="sales-date-range">
@@ -164,6 +164,7 @@
                                     <th>Items</th>
                                     <th>Subtotal</th>
                                     <th>Discount</th>
+                                    <th>VAT</th>
                                     <th>Total</th>
                                     <th>Profit</th>
                                     <th>Payment</th>
@@ -352,8 +353,12 @@
 
                 // Search
                 if (query) {
+                    const customerName = (sale.customer?.name || '').toLowerCase();
+                    const customerPhone = (sale.customer?.phone || '').toLowerCase();
                     const match = (sale.saleId || '').toLowerCase().includes(query)
                         || (sale.soldBy || '').toLowerCase().includes(query)
+                        || customerName.includes(query)
+                        || customerPhone.includes(query)
                         || (sale.items || []).some(item => (item.name || '').toLowerCase().includes(query));
                     if (!match) return false;
                 }
@@ -411,6 +416,7 @@
                     <td>${sale.itemCount || 0}</td>
                     <td>${this.formatCurrency(sale.subtotal)}</td>
                     <td>${sale.discountAmount > 0 ? '- ' + this.formatCurrency(sale.discountAmount) : '—'}</td>
+                    <td>${this.formatCurrency(sale.vatAmount || 0)}</td>
                     <td><strong>${this.formatCurrency(sale.total)}</strong></td>
                     <td class="${(sale.totalProfit || 0) >= 0 ? 'sales-profit-pos' : 'sales-profit-neg'}">${this.formatCurrency(sale.totalProfit)}</td>
                     <td>${payBadge}</td>
@@ -589,6 +595,7 @@
                 'Items': sale.itemCount || 0,
                 'Subtotal': sale.subtotal || 0,
                 'Discount': sale.discountAmount || 0,
+                'VAT': sale.vatAmount || 0,
                 'Total': sale.total || 0,
                 'Profit': sale.totalProfit || 0,
                 'Payment': (sale.paymentMethod || '').toUpperCase(),
@@ -618,6 +625,7 @@
                 sale.saleDateStr || '',
                 sale.itemCount || 0,
                 this.formatCurrency(sale.subtotal),
+                this.formatCurrency(sale.vatAmount || 0),
                 this.formatCurrency(sale.total),
                 this.formatCurrency(sale.totalProfit),
                 (sale.paymentMethod || '').toUpperCase(),
@@ -626,7 +634,7 @@
 
             doc.autoTable({
                 startY: 32,
-                head: [['#', 'Receipt #', 'Date', 'Items', 'Subtotal', 'Total', 'Profit', 'Payment', 'Cashier']],
+                head: [['#', 'Receipt #', 'Date', 'Items', 'Subtotal', 'VAT', 'Total', 'Profit', 'Payment', 'Cashier']],
                 body: rows,
                 styles: { fontSize: 8 },
                 headStyles: { fillColor: [37, 99, 235] }

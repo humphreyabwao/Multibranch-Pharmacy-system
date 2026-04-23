@@ -37,6 +37,7 @@
                 { id: 'pos', label: 'POS', icon: 'fas fa-cash-register' },
                 { id: 'todays-sales', label: "Today's Sales", icon: 'fas fa-chart-line' },
                 { id: 'all-sales', label: 'All Sales', icon: 'fas fa-receipt' },
+                { id: 'customers', label: 'Customers', icon: 'fas fa-users' },
                 { id: 'prescription', label: 'Prescription', icon: 'fas fa-prescription' }
             ]
         },

@@ -134,6 +134,15 @@
             return type ? '<span class="drug-type-badge ' + cls + '">' + type + '</span>' : '—';
         },
 
+        getVatDisplay: function (product) {
+            const enabled = !!product.vatEnabled;
+            const value = parseFloat(product.vatValue) || 0;
+            const type = product.vatType || 'percent';
+            if (!enabled || value <= 0) return '—';
+            if (type === 'amount') return this.formatCurrency(value);
+            return value + '%';
+        },
+
         showToast: function (message, type) {
             const existing = document.querySelector('.inv-toast');
             if (existing) existing.remove();
@@ -267,6 +276,7 @@
                                         <th>Qty</th>
                                         <th>Buying Price</th>
                                         <th>Selling Price</th>
+                                        <th>VAT</th>
                                         <th>Expiry Date</th>
                                         <th>Status</th>
                                         <th>Actions</th>
@@ -274,7 +284,7 @@
                                 </thead>
                                 <tbody id="inv-table-body">
                                     <tr>
-                                        <td colspan="11" class="inv-loading-cell">
+                                        <td colspan="12" class="inv-loading-cell">
                                             <i class="fas fa-spinner fa-spin"></i> Loading inventory...
                                         </td>
                                     </tr>
@@ -404,7 +414,7 @@
                     console.error('Inventory listener error:', err);
                     const tbody = document.getElementById('inv-table-body');
                     if (tbody) {
-                        tbody.innerHTML = '<tr><td colspan="9" class="inv-loading-cell" style="color:var(--danger)"><i class="fas fa-exclamation-triangle"></i> Failed to load inventory</td></tr>';
+                        tbody.innerHTML = '<tr><td colspan="12" class="inv-loading-cell" style="color:var(--danger)"><i class="fas fa-exclamation-triangle"></i> Failed to load inventory</td></tr>';
                     }
                 }
             );
@@ -559,7 +569,7 @@
             if (totalFiltered === 0) {
                 tbody.innerHTML = `
                     <tr>
-                        <td colspan="11" class="inv-empty-cell">
+                        <td colspan="12" class="inv-empty-cell">
                             <div class="inv-empty">
                                 <i class="fas fa-box-open"></i>
                                 <p>No products found</p>
@@ -605,6 +615,7 @@
                         <td class="${(p.quantity || 0) <= (p.reorderLevel || 10) ? 'inv-qty-warn' : ''}">${p.quantity || 0}</td>
                         <td>${this.formatCurrency(p.buyingPrice || 0)}</td>
                         <td>${this.formatCurrency(p.sellingPrice || 0)}</td>
+                        <td>${this.getVatDisplay(p)}</td>
                         <td>${this.formatDate(p.expiryDate)}</td>
                         <td><span class="status-badge ${statusClass}">${statusLabel}</span></td>
                         <td>
@@ -738,6 +749,7 @@
                 'Quantity': p.quantity || 0,
                 'Buying Price': p.buyingPrice || 0,
                 'Selling Price': p.sellingPrice || 0,
+                'VAT': p.vatEnabled ? (p.vatType === 'amount' ? (p.vatValue || 0) : ((p.vatValue || 0) + '%')) : '',
                 'Expiry Date': p.expiryDate ? (p.expiryDate.toDate ? p.expiryDate.toDate() : new Date(p.expiryDate)).toISOString().split('T')[0] : '',
                 'Manufacturer': p.manufacturer || '',
                 'Supplier': p.supplier || '',
@@ -781,7 +793,7 @@
             doc.text('Total Products: ' + allProducts.length, 14, 25);
 
             const products = filteredProducts.length ? filteredProducts : allProducts;
-            const headers = ['SKU', 'Product', 'Category', 'Type', 'Batch', 'Qty', 'Buy Price', 'Sell Price', 'Expiry', 'Status'];
+            const headers = ['SKU', 'Product', 'Category', 'Type', 'Batch', 'Qty', 'Buy Price', 'Sell Price', 'VAT', 'Expiry', 'Status'];
             const rows = products.map(p => [
                 p.sku || '',
                 p.name || '',
@@ -791,6 +803,7 @@
                 String(p.quantity || 0),
                 this.formatCurrency(p.buyingPrice || 0),
                 this.formatCurrency(p.sellingPrice || 0),
+                this.getVatDisplay(p),
                 p.expiryDate ? (p.expiryDate.toDate ? p.expiryDate.toDate() : new Date(p.expiryDate)).toISOString().split('T')[0] : '',
                 this.getProductStatus(p).replace(/-/g, ' ')
             ]);
@@ -1321,6 +1334,25 @@
                                     </div>
                                     <div class="inv-form-row">
                                         <div class="inv-form-group">
+                                            <label for="inv-vat-enabled">VAT Applies</label>
+                                            <select id="inv-vat-enabled">
+                                                <option value="false" selected>No VAT</option>
+                                                <option value="true">VAT Applicable</option>
+                                            </select>
+                                        </div>
+                                        <div class="inv-form-group">
+                                            <label for="inv-vat-value">VAT Value</label>
+                                            <div class="inv-form-row inv-input-combo">
+                                                <input type="number" id="inv-vat-value" min="0" step="0.01" value="0" placeholder="e.g. 16">
+                                                <select id="inv-vat-type">
+                                                    <option value="percent" selected>%</option>
+                                                    <option value="amount">KSH</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="inv-form-row">
+                                        <div class="inv-form-group">
                                             <label>Profit Margin</label>
                                             <div class="inv-margin-display" id="inv-margin">—</div>
                                         </div>
@@ -1433,6 +1465,9 @@
             const quantity = parseInt(document.getElementById('inv-quantity')?.value) || 0;
             const buyingPrice = parseFloat(document.getElementById('inv-buying-price')?.value) || 0;
             const sellingPrice = parseFloat(document.getElementById('inv-selling-price')?.value) || 0;
+            const vatEnabled = (document.getElementById('inv-vat-enabled')?.value || 'false') === 'true';
+            const vatValueRaw = parseFloat(document.getElementById('inv-vat-value')?.value) || 0;
+            const vatType = document.getElementById('inv-vat-type')?.value || 'percent';
             const expiryStr = document.getElementById('inv-expiry')?.value;
 
             const drugType = document.getElementById('inv-drug-type')?.value || '';
@@ -1447,6 +1482,15 @@
                 this.showToast('Selling price should not be less than buying price.', 'error');
                 return;
             }
+
+            if (vatEnabled && vatValueRaw < 0) {
+                this.showToast('VAT value cannot be negative.', 'error');
+                return;
+            }
+
+            const vatValue = vatEnabled
+                ? (vatType === 'percent' ? Math.min(vatValueRaw, 100) : vatValueRaw)
+                : 0;
 
             // Disable button
             if (submitBtn) {
@@ -1465,6 +1509,9 @@
                 unit: document.getElementById('inv-unit')?.value || 'Tablets',
                 buyingPrice: buyingPrice,
                 sellingPrice: sellingPrice,
+                vatEnabled: vatEnabled,
+                vatType: vatType,
+                vatValue: vatValue,
                 expiryDate: firebase.firestore.Timestamp.fromDate(new Date(expiryStr)),
                 manufacturer: document.getElementById('inv-manufacturer')?.value?.trim() || '',
                 dosage: document.getElementById('inv-dosage')?.value?.trim() || '',
@@ -1670,6 +1717,25 @@
                             </div>
                             <div class="inv-form-row">
                                 <div class="inv-form-group">
+                                    <label>VAT Applies</label>
+                                    <select id="edit-vat-enabled">
+                                        <option value="false" ${product.vatEnabled ? '' : 'selected'}>No VAT</option>
+                                        <option value="true" ${product.vatEnabled ? 'selected' : ''}>VAT Applicable</option>
+                                    </select>
+                                </div>
+                                <div class="inv-form-group">
+                                    <label>VAT Value</label>
+                                    <div class="inv-form-row inv-input-combo">
+                                        <input type="number" id="edit-vat-value" min="0" step="0.01" value="${product.vatValue || 0}">
+                                        <select id="edit-vat-type">
+                                            <option value="percent" ${(product.vatType || 'percent') === 'percent' ? 'selected' : ''}>%</option>
+                                            <option value="amount" ${product.vatType === 'amount' ? 'selected' : ''}>KSH</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="inv-form-row">
+                                <div class="inv-form-group">
                                     <label>Reorder Level</label>
                                     <input type="number" id="edit-reorder" min="0" value="${product.reorderLevel || 10}">
                                 </div>
@@ -1737,6 +1803,11 @@
             const submitBtn = document.getElementById('inv-edit-submit-btn');
             if (submitBtn) { submitBtn.disabled = true; submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...'; }
 
+            const vatEnabled = (document.getElementById('edit-vat-enabled')?.value || 'false') === 'true';
+            const vatType = document.getElementById('edit-vat-type')?.value || 'percent';
+            const vatRaw = parseFloat(document.getElementById('edit-vat-value')?.value) || 0;
+            const vatValue = vatEnabled ? (vatType === 'percent' ? Math.min(vatRaw, 100) : vatRaw) : 0;
+
             const expiryStr = document.getElementById('edit-expiry')?.value;
             const updates = {
                 name: document.getElementById('edit-name')?.value?.trim() || '',
@@ -1745,6 +1816,9 @@
                 quantity: parseInt(document.getElementById('edit-quantity')?.value) || 0,
                 buyingPrice: parseFloat(document.getElementById('edit-buying-price')?.value) || 0,
                 sellingPrice: parseFloat(document.getElementById('edit-selling-price')?.value) || 0,
+                vatEnabled: vatEnabled,
+                vatType: vatType,
+                vatValue: vatValue,
                 reorderLevel: parseInt(document.getElementById('edit-reorder')?.value) || 10,
                 drugType: document.getElementById('edit-drug-type')?.value || '',
                 manufacturer: document.getElementById('edit-manufacturer')?.value?.trim() || '',

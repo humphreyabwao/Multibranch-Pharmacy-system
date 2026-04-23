@@ -81,6 +81,94 @@
             return 'PO-' + y + m + d + '-' + r;
         },
 
+        getLoanStatusFromValues: function (paymentStatus, loanDueDate, outstandingAmount) {
+            const outstanding = parseFloat(outstandingAmount) || 0;
+            if (paymentStatus === 'paid' || outstanding <= 0) {
+                return { key: 'cleared', label: 'Cleared' };
+            }
+
+            if (!loanDueDate) {
+                return { key: 'no-due-date', label: 'Due date missing' };
+            }
+
+            const today = new Date().toISOString().split('T')[0];
+            if (loanDueDate < today) {
+                return { key: 'overdue', label: 'Overdue (' + loanDueDate + ')' };
+            }
+            if (loanDueDate === today) {
+                return { key: 'due-today', label: 'Due today' };
+            }
+            return { key: 'upcoming', label: 'Due ' + loanDueDate };
+        },
+
+        getPaymentBadge: function (order) {
+            const paymentStatus = order.paymentStatus || (order.paymentMode === 'on-loan' ? 'on-loan' : 'paid');
+            if (paymentStatus === 'paid') {
+                return '<span class="ord-payment-badge ord-payment--paid"><i class="fas fa-check-circle"></i> Paid in Full</span>';
+            }
+            return '<span class="ord-payment-badge ord-payment--loan"><i class="fas fa-hand-holding-dollar"></i> On Loan</span>';
+        },
+
+        getLoanStatusBadge: function (order) {
+            const info = this.getLoanStatusFromValues(order.paymentStatus, order.loanDueDate, order.outstandingAmount);
+            const cls = {
+                'cleared': 'ord-loan--cleared',
+                'upcoming': 'ord-loan--upcoming',
+                'due-today': 'ord-loan--due-today',
+                'overdue': 'ord-loan--overdue',
+                'no-due-date': 'ord-loan--missing'
+            }[info.key] || 'ord-loan--upcoming';
+            const icon = {
+                'cleared': 'fa-circle-check',
+                'upcoming': 'fa-calendar-days',
+                'due-today': 'fa-hourglass-half',
+                'overdue': 'fa-triangle-exclamation',
+                'no-due-date': 'fa-circle-question'
+            }[info.key] || 'fa-calendar-days';
+            return '<span class="ord-loan-badge ' + cls + '"><i class="fas ' + icon + '"></i> ' + info.label + '</span>';
+        },
+
+        updatePaymentUi: function () {
+            const modeEl = document.getElementById('ord-payment-mode');
+            const amountEl = document.getElementById('ord-amount-paid');
+            const dueGroup = document.getElementById('ord-loan-due-group');
+            const dueEl = document.getElementById('ord-loan-due');
+            const summaryEl = document.getElementById('ord-payment-summary');
+            if (!modeEl || !amountEl || !dueGroup || !dueEl || !summaryEl) return;
+
+            const mode = modeEl.value || 'fully-paid';
+            const total = orderItems.reduce((s, item) => s + (item.unitCost * item.orderQty), 0);
+
+            if (mode === 'fully-paid') {
+                amountEl.value = total.toFixed(2);
+                amountEl.disabled = true;
+                dueGroup.style.display = 'none';
+                dueEl.required = false;
+                summaryEl.innerHTML = '<span class="ord-pay-summary ord-pay-summary--paid"><i class="fas fa-check-circle"></i> This order will be marked as paid in full.</span>';
+            } else {
+                amountEl.disabled = false;
+                dueGroup.style.display = '';
+                dueEl.required = true;
+                const paidVal = Math.max(0, parseFloat(amountEl.value) || 0);
+                const outstanding = Math.max(0, total - paidVal);
+                summaryEl.innerHTML = '<span class="ord-pay-summary ord-pay-summary--loan"><i class="fas fa-wallet"></i> Outstanding: ' + this.formatCurrency(outstanding) + '</span>';
+            }
+        },
+
+        getItemVatAmount: function (item) {
+            if (!item || !item.vatEnabled) return 0;
+            const vatValue = parseFloat(item.vatValue) || 0;
+            if (vatValue <= 0) return 0;
+            if ((item.vatType || 'percent') === 'amount') return vatValue * (item.orderQty || 0);
+            const subtotal = (item.unitCost || 0) * (item.orderQty || 0);
+            return subtotal * (vatValue / 100);
+        },
+
+        getItemLineTotal: function (item) {
+            const subtotal = (item.unitCost || 0) * (item.orderQty || 0);
+            return subtotal + this.getItemVatAmount(item);
+        },
+
         // ═══════════════════════════════════════════════
         //  CREATE ORDER
         // ═══════════════════════════════════════════════
@@ -110,6 +198,15 @@
                             <div class="ord-card-body">
                                 <div class="dda-form-row">
                                     <div class="dda-form-group">
+                                        <label>Order / Invoice Number</label>
+                                        <div class="ord-id-row">
+                                            <input type="text" id="ord-order-id" placeholder="Auto-generated if left empty" value="${this.generateOrderId()}">
+                                            <button type="button" class="dda-btn dda-btn--export" id="ord-generate-id" title="Generate order number">
+                                                <i class="fas fa-wand-magic-sparkles"></i> Auto
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div class="dda-form-group">
                                         <label>Supplier <span class="required">*</span></label>
                                         <select id="ord-supplier">
                                             <option value="">Loading suppliers...</option>
@@ -133,6 +230,26 @@
                                             <option value="low">Low</option>
                                         </select>
                                     </div>
+                                </div>
+                                <div class="dda-form-row">
+                                    <div class="dda-form-group">
+                                        <label>Payment Type</label>
+                                        <select id="ord-payment-mode">
+                                            <option value="fully-paid" selected>Paid in Full</option>
+                                            <option value="on-loan">On Loan / Credit</option>
+                                        </select>
+                                    </div>
+                                    <div class="dda-form-group">
+                                        <label>Amount Paid (KSH)</label>
+                                        <input type="number" id="ord-amount-paid" min="0" step="0.01" value="0">
+                                    </div>
+                                </div>
+                                <div class="dda-form-row" id="ord-loan-due-group" style="display:none">
+                                    <div class="dda-form-group">
+                                        <label>Loan Due Date <span class="required">*</span></label>
+                                        <input type="date" id="ord-loan-due">
+                                    </div>
+                                    <div class="dda-form-group" id="ord-payment-summary"></div>
                                 </div>
                                 <div class="dda-form-group">
                                     <label>Notes</label>
@@ -164,16 +281,17 @@
                                                 <th>Current Stock</th>
                                                 <th>Unit Cost</th>
                                                 <th>Order Qty</th>
+                                                <th>VAT</th>
                                                 <th>Line Total</th>
                                                 <th></th>
                                             </tr>
                                         </thead>
                                         <tbody id="ord-items-tbody">
-                                            <tr><td colspan="8" class="dda-loading"><i class="fas fa-inbox"></i> No items added yet</td></tr>
+                                            <tr><td colspan="9" class="dda-loading"><i class="fas fa-inbox"></i> No items added yet</td></tr>
                                         </tbody>
                                         <tfoot id="ord-items-tfoot" style="display:none">
                                             <tr>
-                                                <td colspan="5"></td>
+                                                <td colspan="6"></td>
                                                 <td><strong>Total:</strong></td>
                                                 <td><strong id="ord-items-total">KSH 0.00</strong></td>
                                                 <td></td>
@@ -234,10 +352,24 @@
             }
 
             document.getElementById('ord-submit-btn')?.addEventListener('click', () => this.submitOrder());
+            document.getElementById('ord-generate-id')?.addEventListener('click', () => {
+                const idEl = document.getElementById('ord-order-id');
+                if (idEl) idEl.value = this.generateOrderId();
+            });
+
+            document.getElementById('ord-payment-mode')?.addEventListener('change', () => this.updatePaymentUi());
+            document.getElementById('ord-amount-paid')?.addEventListener('input', () => this.updatePaymentUi());
             document.getElementById('ord-clear-btn')?.addEventListener('click', () => {
                 orderItems = [];
                 this.renderOrderItems();
                 document.getElementById('ord-notes').value = '';
+                const idEl = document.getElementById('ord-order-id');
+                if (idEl) idEl.value = this.generateOrderId();
+                const modeEl = document.getElementById('ord-payment-mode');
+                if (modeEl) modeEl.value = 'fully-paid';
+                const dueEl = document.getElementById('ord-loan-due');
+                if (dueEl) dueEl.value = '';
+                this.updatePaymentUi();
             });
 
             // Low-stock panel toggle
@@ -262,6 +394,8 @@
 
             const dashLink = container.querySelector('[data-nav="dashboard"]');
             if (dashLink) dashLink.addEventListener('click', (e) => { e.preventDefault(); PharmaFlow.Sidebar.setActive('dashboard', null); });
+
+            this.updatePaymentUi();
         },
 
         loadSuppliers: async function () {
@@ -415,7 +549,10 @@
                 category: product.category || '',
                 currentStock: product.quantity || 0,
                 unitCost: product.buyingPrice || 0,
-                orderQty: 1
+                orderQty: 1,
+                vatEnabled: !!product.vatEnabled,
+                vatType: product.vatType || 'percent',
+                vatValue: parseFloat(product.vatValue) || 0
             });
             this.renderOrderItems();
         },
@@ -426,13 +563,15 @@
             if (!tbody) return;
 
             if (orderItems.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="8" class="dda-loading"><i class="fas fa-inbox"></i> No items added yet</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="9" class="dda-loading"><i class="fas fa-inbox"></i> No items added yet</td></tr>';
                 if (tfoot) tfoot.style.display = 'none';
                 return;
             }
 
             tbody.innerHTML = orderItems.map((item, i) => {
-                const lineTotal = item.unitCost * item.orderQty;
+                const subtotal = (item.unitCost || 0) * (item.orderQty || 0);
+                const lineVat = this.getItemVatAmount(item);
+                const lineTotal = this.getItemLineTotal(item);
                 return `<tr>
                     <td>${i + 1}</td>
                     <td><strong>${this.escapeHtml(item.name)}</strong></td>
@@ -444,7 +583,24 @@
                     <td>
                         <input type="number" class="ord-inline-input ord-qty-input" data-idx="${i}" value="${item.orderQty}" min="1">
                     </td>
-                    <td><strong>${this.formatCurrency(lineTotal)}</strong></td>
+                    <td>
+                        <div class="ord-vat-cell">
+                            <select class="ord-inline-input ord-vat-enabled" data-idx="${i}">
+                                <option value="false" ${item.vatEnabled ? '' : 'selected'}>No VAT</option>
+                                <option value="true" ${item.vatEnabled ? 'selected' : ''}>VAT</option>
+                            </select>
+                            <input type="number" class="ord-inline-input ord-vat-value" data-idx="${i}" value="${item.vatValue || 0}" min="0" step="0.01" ${item.vatEnabled ? '' : 'disabled'}>
+                            <select class="ord-inline-input ord-vat-type" data-idx="${i}" ${item.vatEnabled ? '' : 'disabled'}>
+                                <option value="percent" ${(item.vatType || 'percent') === 'percent' ? 'selected' : ''}>%</option>
+                                <option value="amount" ${item.vatType === 'amount' ? 'selected' : ''}>KSH</option>
+                            </select>
+                            <small class="ord-vat-meta">${lineVat > 0 ? ('VAT: ' + this.formatCurrency(lineVat)) : 'VAT: —'}</small>
+                        </div>
+                    </td>
+                    <td class="ord-line-total-cell">
+                        <strong class="ord-line-total-main">${this.formatCurrency(lineTotal)}</strong>
+                        <small class="ord-line-total-base">Base: ${this.formatCurrency(subtotal)}</small>
+                    </td>
                     <td>
                         <button class="sales-action-btn sup-delete ord-remove-item" data-idx="${i}" style="background:#fee2e2;color:#dc2626" title="Remove">
                             <i class="fas fa-times"></i>
@@ -468,6 +624,30 @@
                     this.renderOrderItems();
                 });
             });
+            tbody.querySelectorAll('.ord-vat-enabled').forEach(input => {
+                input.addEventListener('change', () => {
+                    const idx = parseInt(input.dataset.idx);
+                    orderItems[idx].vatEnabled = input.value === 'true';
+                    if (!orderItems[idx].vatEnabled) {
+                        orderItems[idx].vatValue = 0;
+                    }
+                    this.renderOrderItems();
+                });
+            });
+            tbody.querySelectorAll('.ord-vat-value').forEach(input => {
+                input.addEventListener('change', () => {
+                    const idx = parseInt(input.dataset.idx);
+                    orderItems[idx].vatValue = Math.max(0, parseFloat(input.value) || 0);
+                    this.renderOrderItems();
+                });
+            });
+            tbody.querySelectorAll('.ord-vat-type').forEach(input => {
+                input.addEventListener('change', () => {
+                    const idx = parseInt(input.dataset.idx);
+                    orderItems[idx].vatType = input.value || 'percent';
+                    this.renderOrderItems();
+                });
+            });
             tbody.querySelectorAll('.ord-remove-item').forEach(btn => {
                 btn.addEventListener('click', () => {
                     orderItems.splice(parseInt(btn.dataset.idx), 1);
@@ -476,10 +656,11 @@
             });
 
             // Update total
-            const total = orderItems.reduce((s, item) => s + (item.unitCost * item.orderQty), 0);
+            const total = orderItems.reduce((s, item) => s + this.getItemLineTotal(item), 0);
             const totalEl = document.getElementById('ord-items-total');
             if (totalEl) totalEl.textContent = this.formatCurrency(total);
             if (tfoot) tfoot.style.display = '';
+            this.updatePaymentUi();
         },
 
         submitOrder: async function () {
@@ -496,9 +677,34 @@
             try {
                 const supplier = suppliersCache.find(s => s.id === supplierId);
                 const profile = PharmaFlow.Auth ? PharmaFlow.Auth.userProfile : null;
-                const orderId = this.generateOrderId();
-                const totalAmount = orderItems.reduce((s, item) => s + (item.unitCost * item.orderQty), 0);
+                const typedOrderId = document.getElementById('ord-order-id')?.value?.trim() || '';
+                const orderId = typedOrderId || this.generateOrderId();
+                const totalAmount = orderItems.reduce((s, item) => s + this.getItemLineTotal(item), 0);
                 const totalQty = orderItems.reduce((s, item) => s + item.orderQty, 0);
+                const paymentMode = document.getElementById('ord-payment-mode')?.value || 'fully-paid';
+                const paidInput = parseFloat(document.getElementById('ord-amount-paid')?.value) || 0;
+                const amountPaid = paymentMode === 'fully-paid' ? totalAmount : Math.min(Math.max(paidInput, 0), totalAmount);
+                const outstandingAmount = Math.max(0, totalAmount - amountPaid);
+                const loanDueDate = paymentMode === 'on-loan' ? (document.getElementById('ord-loan-due')?.value || '') : '';
+                const paymentStatus = outstandingAmount <= 0 ? 'paid' : 'on-loan';
+                const loanInfo = this.getLoanStatusFromValues(paymentStatus, loanDueDate, outstandingAmount);
+
+                if (orderId.indexOf('/') !== -1) {
+                    this.showToast('Order number cannot contain "/".', 'error');
+                    return;
+                }
+
+                if (paymentMode === 'on-loan' && outstandingAmount > 0 && !loanDueDate) {
+                    this.showToast('Please set a loan due date for loan orders.', 'error');
+                    return;
+                }
+
+                const orderRef = getBusinessCollection(businessId, 'orders').doc(orderId);
+                const existing = await orderRef.get();
+                if (existing.exists) {
+                    this.showToast('Order number already exists. Use another or auto-generate.', 'error');
+                    return;
+                }
 
                 const orderData = {
                     orderId: orderId,
@@ -515,11 +721,22 @@
                         category: item.category,
                         unitCost: item.unitCost,
                         orderQty: item.orderQty,
-                        lineTotal: item.unitCost * item.orderQty
+                        vatEnabled: !!item.vatEnabled,
+                        vatType: item.vatType || 'percent',
+                        vatValue: parseFloat(item.vatValue) || 0,
+                        lineVat: this.getItemVatAmount(item),
+                        lineSubtotal: (item.unitCost || 0) * (item.orderQty || 0),
+                        lineTotal: this.getItemLineTotal(item)
                     })),
                     totalAmount: totalAmount,
                     totalItems: orderItems.length,
                     totalQty: totalQty,
+                    paymentMode: paymentMode,
+                    paymentStatus: paymentStatus,
+                    amountPaid: amountPaid,
+                    outstandingAmount: outstandingAmount,
+                    loanDueDate: loanDueDate,
+                    loanStatus: loanInfo.key,
                     status: 'pending',
                     createdBy: profile ? (profile.displayName || profile.email) : 'Unknown',
                     createdByUid: firebase.auth().currentUser ? firebase.auth().currentUser.uid : null,
@@ -527,7 +744,7 @@
                     orderTimestamp: firebase.firestore.Timestamp.fromDate(new Date())
                 };
 
-                await getBusinessCollection(businessId, 'orders').doc(orderId).set(orderData);
+                await orderRef.set(orderData);
                 this.showToast('Order ' + orderId + ' submitted successfully!');
 
                 // Clear form
@@ -535,6 +752,13 @@
                 this.renderOrderItems();
                 document.getElementById('ord-notes').value = '';
                 document.getElementById('ord-supplier').value = '';
+                const idEl = document.getElementById('ord-order-id');
+                if (idEl) idEl.value = this.generateOrderId();
+                const modeEl = document.getElementById('ord-payment-mode');
+                if (modeEl) modeEl.value = 'fully-paid';
+                const dueEl = document.getElementById('ord-loan-due');
+                if (dueEl) dueEl.value = '';
+                this.updatePaymentUi();
 
             } catch (err) {
                 console.error('Submit order error:', err);
@@ -664,12 +888,14 @@
                                     <th>Total Amount</th>
                                     <th>Priority</th>
                                     <th>Status</th>
+                                    <th>Payment</th>
+                                    <th>Loan Status</th>
                                     <th>Created By</th>
                                     <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody id="ord-manage-tbody">
-                                <tr><td colspan="10" class="dda-loading"><i class="fas fa-spinner fa-spin"></i> Loading orders...</td></tr>
+                                <tr><td colspan="12" class="dda-loading"><i class="fas fa-spinner fa-spin"></i> Loading orders...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -785,7 +1011,7 @@
             ordIsLoading = true;
 
             const tbody = document.getElementById('ord-manage-tbody');
-            if (tbody) tbody.innerHTML = '<tr><td colspan="10" class="dda-loading"><i class="fas fa-spinner fa-spin"></i> Loading orders...</td></tr>';
+            if (tbody) tbody.innerHTML = '<tr><td colspan="12" class="dda-loading"><i class="fas fa-spinner fa-spin"></i> Loading orders...</td></tr>';
 
             try {
                 let q = this._buildOrderQuery();
@@ -832,7 +1058,7 @@
                 this.renderOrdersPage();
             } catch (err) {
                 console.error('Load orders page error:', err);
-                if (tbody) tbody.innerHTML = '<tr><td colspan="10" class="dda-loading"><i class="fas fa-exclamation-circle"></i> Failed to load orders</td></tr>';
+                if (tbody) tbody.innerHTML = '<tr><td colspan="12" class="dda-loading"><i class="fas fa-exclamation-circle"></i> Failed to load orders</td></tr>';
             } finally {
                 ordIsLoading = false;
             }
@@ -903,7 +1129,7 @@
             const start = (ordPage - 1) * ordPageSize;
 
             if (ordPageData.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="10" class="dda-loading"><i class="fas fa-inbox"></i> No orders found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="12" class="dda-loading"><i class="fas fa-inbox"></i> No orders found</td></tr>';
                 this.renderPagination();
                 return;
             }
@@ -920,6 +1146,8 @@
                     <td><strong>${this.formatCurrency(o.totalAmount)}</strong></td>
                     <td>${this.getPriorityBadge(o.priority)}</td>
                     <td>${this.getStatusBadge(o.status)}${o.inventoryAdded ? ' <span class="ord-inv-tag"><i class="fas fa-check"></i> Stocked</span>' : ''}</td>
+                    <td>${this.getPaymentBadge(o)}</td>
+                    <td>${this.getLoanStatusBadge(o)}</td>
                     <td>${this.escapeHtml(o.createdBy || '—')}</td>
                     <td>
                         <button class="sales-action-btn sales-action--view ord-view" data-id="${o.id}" title="View"><i class="fas fa-eye"></i></button>
@@ -1184,6 +1412,11 @@
                     <div class="dda-view-row"><span class="dda-view-label">Expected Delivery</span><span class="dda-view-value">${order.expectedDelivery || '—'}</span></div>
                     <div class="dda-view-row"><span class="dda-view-label">Priority</span><span class="dda-view-value">${this.getPriorityBadge(order.priority)}</span></div>
                     <div class="dda-view-row"><span class="dda-view-label">Status</span><span class="dda-view-value">${this.getStatusBadge(order.status)}${order.inventoryAdded ? ' <span class="ord-inv-tag"><i class="fas fa-check"></i> Added to Inventory</span>' : ''}</span></div>
+                    <div class="dda-view-row"><span class="dda-view-label">Payment</span><span class="dda-view-value">${this.getPaymentBadge(order)}</span></div>
+                    <div class="dda-view-row"><span class="dda-view-label">Loan Status</span><span class="dda-view-value">${this.getLoanStatusBadge(order)}</span></div>
+                    <div class="dda-view-row"><span class="dda-view-label">Amount Paid</span><span class="dda-view-value">${this.formatCurrency(order.amountPaid || 0)}</span></div>
+                    <div class="dda-view-row"><span class="dda-view-label">Outstanding</span><span class="dda-view-value"><strong>${this.formatCurrency(order.outstandingAmount || 0)}</strong></span></div>
+                    ${order.loanDueDate ? '<div class="dda-view-row"><span class="dda-view-label">Loan Due Date</span><span class="dda-view-value">' + order.loanDueDate + '</span></div>' : ''}
                     <div class="dda-view-row"><span class="dda-view-label">Created By</span><span class="dda-view-value">${this.escapeHtml(order.createdBy || '—')}</span></div>
                     ${order.approvedBy ? '<div class="dda-view-row"><span class="dda-view-label">Approved By</span><span class="dda-view-value">' + this.escapeHtml(order.approvedBy) + '</span></div>' : ''}
                     ${order.receivedBy ? '<div class="dda-view-row"><span class="dda-view-label">Received By</span><span class="dda-view-value">' + this.escapeHtml(order.receivedBy) + '</span></div>' : ''}
@@ -1287,6 +1520,9 @@
                     '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;font-family:monospace">' + self.escapeHtml(item.sku) + '</td>' +
                     '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;text-align:center">' + item.orderQty + '</td>' +
                     '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;text-align:right">' + self.formatCurrency(item.unitCost) + '</td>' +
+                    '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;text-align:right">' +
+                    (item.vatEnabled ? ((item.vatType === 'amount' ? self.formatCurrency(item.vatValue || 0) : ((item.vatValue || 0) + '%')) + ' (' + self.formatCurrency(item.lineVat || 0) + ')') : '—') +
+                    '</td>' +
                     '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;text-align:right;font-weight:600">' + self.formatCurrency(item.lineTotal) + '</td>' +
                     '</tr>'
                 ).join('');
@@ -1319,6 +1555,10 @@
                     '<tr><td style="padding:2px 12px 2px 0;font-weight:600">Date:</td><td>' + (order.orderDate || '—') + '</td></tr>' +
                     '<tr><td style="padding:2px 12px 2px 0;font-weight:600">Expected Delivery:</td><td>' + (order.expectedDelivery || '—') + '</td></tr>' +
                     '<tr><td style="padding:2px 12px 2px 0;font-weight:600">Priority:</td><td>' + (order.priority || 'normal').toUpperCase() + '</td></tr>' +
+                    '<tr><td style="padding:2px 12px 2px 0;font-weight:600">Payment:</td><td>' + ((order.paymentStatus || (order.paymentMode === 'on-loan' ? 'on-loan' : 'paid')) === 'paid' ? 'PAID IN FULL' : 'ON LOAN') + '</td></tr>' +
+                    (order.loanDueDate ? '<tr><td style="padding:2px 12px 2px 0;font-weight:600">Loan Due:</td><td>' + order.loanDueDate + '</td></tr>' : '') +
+                    '<tr><td style="padding:2px 12px 2px 0;font-weight:600">Amount Paid:</td><td>' + self.formatCurrency(order.amountPaid || 0) + '</td></tr>' +
+                    '<tr><td style="padding:2px 12px 2px 0;font-weight:600">Outstanding:</td><td>' + self.formatCurrency(order.outstandingAmount || 0) + '</td></tr>' +
                     '<tr><td style="padding:2px 12px 2px 0;font-weight:600">Created By:</td><td>' + self.escapeHtml(order.createdBy || '—') + '</td></tr>' +
                     (order.approvedBy ? '<tr><td style="padding:2px 12px 2px 0;font-weight:600">Approved By:</td><td>' + self.escapeHtml(order.approvedBy) + '</td></tr>' : '') +
                     (order.receivedBy ? '<tr><td style="padding:2px 12px 2px 0;font-weight:600">Received By:</td><td>' + self.escapeHtml(order.receivedBy) + '</td></tr>' : '') +
@@ -1331,6 +1571,7 @@
                     '<th style="padding:8px 10px;text-align:left">SKU</th>' +
                     '<th style="padding:8px 10px;text-align:center">Qty</th>' +
                     '<th style="padding:8px 10px;text-align:right">Unit Cost</th>' +
+                    '<th style="padding:8px 10px;text-align:right">VAT</th>' +
                     '<th style="padding:8px 10px;text-align:right">Total</th>' +
                     '</tr></thead>' +
                     '<tbody>' + itemsRows + '</tbody>' +
@@ -1382,12 +1623,14 @@
                 this.formatCurrency(o.totalAmount),
                 o.priority || 'normal',
                 o.status || 'pending',
+                (o.paymentStatus || (o.paymentMode === 'on-loan' ? 'on-loan' : 'paid')) === 'paid' ? 'Paid in Full' : 'On Loan',
+                this.getLoanStatusFromValues(o.paymentStatus || (o.paymentMode === 'on-loan' ? 'on-loan' : 'paid'), o.loanDueDate, o.outstandingAmount).label,
                 o.createdBy || ''
             ]);
 
             doc.autoTable({
                 startY: 34,
-                head: [['#', 'Order ID', 'Date', 'Supplier', 'Items', 'Amount', 'Priority', 'Status', 'Created By']],
+                head: [['#', 'Order ID', 'Date', 'Supplier', 'Items', 'Amount', 'Priority', 'Status', 'Payment', 'Loan Status', 'Created By']],
                 body: rows,
                 styles: { fontSize: 8, cellPadding: 2 },
                 headStyles: { fillColor: [79, 70, 229], textColor: 255 }

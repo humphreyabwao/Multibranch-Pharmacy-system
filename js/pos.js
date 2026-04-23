@@ -130,6 +130,27 @@
                                         </select>
                                     </div>
                                 </div>
+                                <div class="pos-summary-row">
+                                    <span>Net Total</span>
+                                    <span id="pos-net-total">KSH 0.00</span>
+                                </div>
+                                <div class="pos-summary-row">
+                                    <label class="checkbox-wrapper" style="margin:0;">
+                                        <input type="checkbox" id="pos-apply-vat">
+                                        <span>Apply VAT</span>
+                                    </label>
+                                    <div class="pos-discount-input">
+                                        <input type="number" id="pos-vat" min="0" value="0" placeholder="0">
+                                        <select id="pos-vat-type">
+                                            <option value="percent">%</option>
+                                            <option value="amount">KSH</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="pos-summary-row">
+                                    <span>VAT</span>
+                                    <span id="pos-vat-amount">KSH 0.00</span>
+                                </div>
                                 <div class="pos-summary-total">
                                     <span>Total</span>
                                     <span id="pos-total">KSH 0.00</span>
@@ -137,6 +158,12 @@
                             </div>
 
                             <div class="pos-payment-section">
+                                <label>Customer (Optional)</label>
+                                <div class="pos-customer-fields">
+                                    <input type="text" id="pos-customer-name" placeholder="Customer name (optional)" autocomplete="off">
+                                    <input type="tel" id="pos-customer-phone" placeholder="Phone number (optional)" autocomplete="tel">
+                                </div>
+
                                 <label>Payment Method</label>
                                 <div class="pos-payment-methods">
                                     <button class="pos-pay-method active" data-method="cash">
@@ -242,6 +269,16 @@
             if (discountInput) discountInput.addEventListener('input', () => this.updateTotals());
             if (discountType) discountType.addEventListener('change', () => this.updateTotals());
 
+            // VAT input
+            const vatInput = document.getElementById('pos-vat');
+            const vatType = document.getElementById('pos-vat-type');
+            const applyVat = document.getElementById('pos-apply-vat');
+            if (vatInput) vatInput.addEventListener('input', () => this.updateTotals());
+            if (vatType) vatType.addEventListener('change', () => this.updateTotals());
+            if (applyVat) {
+                applyVat.addEventListener('change', () => this.updateTotals());
+            }
+
             // Checkout
             document.getElementById('pos-checkout-btn')?.addEventListener('click', () => this.completeSale());
 
@@ -257,6 +294,27 @@
             // Show cash tender if Cash is active by default
             const cashTender = document.getElementById('pos-cash-tender');
             if (cashTender) cashTender.style.display = 'block';
+
+            this.applyCustomerPrefill();
+            this.updateTotals();
+        },
+
+        applyCustomerPrefill: function () {
+            try {
+                const raw = localStorage.getItem('pf_pos_customer_prefill');
+                if (!raw) return;
+                const data = JSON.parse(raw);
+
+                const nameInput = document.getElementById('pos-customer-name');
+                const phoneInput = document.getElementById('pos-customer-phone');
+
+                if (nameInput) nameInput.value = data && data.name ? data.name : '';
+                if (phoneInput) phoneInput.value = data && data.phone ? data.phone : '';
+
+                localStorage.removeItem('pf_pos_customer_prefill');
+            } catch (e) {
+                localStorage.removeItem('pf_pos_customer_prefill');
+            }
         },
 
         // ─── INVENTORY SUBSCRIPTION ─────────────────────────
@@ -502,34 +560,70 @@
 
         // ─── TOTALS ─────────────────────────────────────────
 
-        updateTotals: function () {
+        getCurrentTotals: function () {
             const subtotal = cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
             const discountInput = document.getElementById('pos-discount');
             const discountType = document.getElementById('pos-discount-type');
+            const vatInput = document.getElementById('pos-vat');
+            const vatType = document.getElementById('pos-vat-type');
+            const applyVat = document.getElementById('pos-apply-vat');
 
             let discount = 0;
-            const discVal = parseFloat(discountInput?.value) || 0;
-            if (discVal > 0) {
+            const discountValue = parseFloat(discountInput?.value) || 0;
+            if (discountValue > 0) {
                 if (discountType?.value === 'percent') {
-                    discount = subtotal * (Math.min(discVal, 100) / 100);
+                    discount = subtotal * (Math.min(discountValue, 100) / 100);
                 } else {
-                    discount = Math.min(discVal, subtotal);
+                    discount = Math.min(discountValue, subtotal);
                 }
             }
 
-            const total = Math.max(subtotal - discount, 0);
+            const netTotal = Math.max(subtotal - discount, 0);
+
+            let vatAmount = 0;
+            const vatValue = parseFloat(vatInput?.value) || 0;
+            const vatEnabled = !!applyVat?.checked;
+            if (vatEnabled && vatValue > 0) {
+                if (vatType?.value === 'percent') {
+                    vatAmount = netTotal * (Math.min(vatValue, 100) / 100);
+                } else {
+                    vatAmount = Math.min(vatValue, netTotal);
+                }
+            }
+
+            const total = netTotal + vatAmount;
+
+            return {
+                subtotal,
+                discountValue,
+                discountType: discountType?.value || 'amount',
+                discountAmount: discount,
+                netTotal,
+                vatEnabled,
+                vatValue,
+                vatType: vatType?.value || 'percent',
+                vatAmount,
+                total
+            };
+        },
+
+        updateTotals: function () {
+            const totals = this.getCurrentTotals();
 
             const subtotalEl = document.getElementById('pos-subtotal');
+            const netTotalEl = document.getElementById('pos-net-total');
+            const vatAmountEl = document.getElementById('pos-vat-amount');
             const totalEl = document.getElementById('pos-total');
-            if (subtotalEl) subtotalEl.textContent = this.formatCurrency(subtotal);
-            if (totalEl) totalEl.textContent = this.formatCurrency(total);
+            if (subtotalEl) subtotalEl.textContent = this.formatCurrency(totals.subtotal);
+            if (netTotalEl) netTotalEl.textContent = this.formatCurrency(totals.netTotal);
+            if (vatAmountEl) vatAmountEl.textContent = this.formatCurrency(totals.vatAmount);
+            if (totalEl) totalEl.textContent = this.formatCurrency(totals.total);
 
             this.computeChange();
         },
 
         computeChange: function () {
-            const totalText = document.getElementById('pos-total')?.textContent || '0';
-            const total = parseFloat(totalText.replace(/[^0-9.]/g, '')) || 0;
+            const total = this.getCurrentTotals().total;
             const paid = parseFloat(document.getElementById('pos-amount-paid')?.value) || 0;
             const changeEl = document.getElementById('pos-change-due');
             const changeAmt = document.getElementById('pos-change-amount');
@@ -559,24 +653,12 @@
             if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...'; }
 
             try {
-                const subtotal = cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
-                const discountInput = document.getElementById('pos-discount');
-                const discountType = document.getElementById('pos-discount-type');
-                const discVal = parseFloat(discountInput?.value) || 0;
-                let discount = 0;
-                if (discVal > 0) {
-                    if (discountType?.value === 'percent') {
-                        discount = subtotal * (Math.min(discVal, 100) / 100);
-                    } else {
-                        discount = Math.min(discVal, subtotal);
-                    }
-                }
-                const total = Math.max(subtotal - discount, 0);
-                const totalProfit = cart.reduce((sum, item) => sum + ((item.price - item.buyingPrice) * item.qty), 0) - discount;
+                const totals = this.getCurrentTotals();
+                const totalProfit = cart.reduce((sum, item) => sum + ((item.price - item.buyingPrice) * item.qty), 0) - totals.discountAmount;
 
                 const paymentMethod = document.querySelector('.pos-pay-method.active')?.dataset.method || 'cash';
-                const amountPaid = paymentMethod === 'cash' ? (parseFloat(document.getElementById('pos-amount-paid')?.value) || total) : total;
-                const changeDue = Math.max(amountPaid - total, 0);
+                const amountPaid = paymentMethod === 'cash' ? (parseFloat(document.getElementById('pos-amount-paid')?.value) || totals.total) : totals.total;
+                const changeDue = Math.max(amountPaid - totals.total, 0);
 
                 const saleId = this.generateSaleId();
                 const now = new Date();
@@ -584,6 +666,10 @@
 
                 const saleData = {
                     saleId: saleId,
+                    customer: {
+                        name: (document.getElementById('pos-customer-name')?.value || '').trim(),
+                        phone: (document.getElementById('pos-customer-phone')?.value || '').trim()
+                    },
                     items: cart.map(item => ({
                         productId: item.id,
                         name: item.name,
@@ -596,11 +682,16 @@
                         lineTotal: item.price * item.qty,
                         profit: (item.price - item.buyingPrice) * item.qty
                     })),
-                    subtotal: subtotal,
-                    discountValue: discVal,
-                    discountType: discountType?.value || 'amount',
-                    discountAmount: discount,
-                    total: total,
+                    subtotal: totals.subtotal,
+                    discountValue: totals.discountValue,
+                    discountType: totals.discountType,
+                    discountAmount: totals.discountAmount,
+                    netTotal: totals.netTotal,
+                    vatEnabled: totals.vatEnabled,
+                    vatValue: totals.vatValue,
+                    vatType: totals.vatType,
+                    vatAmount: totals.vatAmount,
+                    total: totals.total,
                     totalProfit: totalProfit,
                     paymentMethod: paymentMethod,
                     amountPaid: amountPaid,
@@ -644,10 +735,10 @@
                 if (PharmaFlow.ActivityLog) {
                     PharmaFlow.ActivityLog.log({
                         title: 'Sale Completed',
-                        description: 'Sale ' + saleId + ' — ' + cart.length + ' item(s) totaling ' + this.formatCurrency(total) + ' via ' + paymentMethod,
+                        description: 'Sale ' + saleId + ' — ' + cart.length + ' item(s) totaling ' + this.formatCurrency(totals.total) + ' via ' + paymentMethod,
                         category: 'Sale',
                         status: 'COMPLETED',
-                        amount: total,
+                        amount: totals.total,
                         metadata: { saleId: saleId, itemCount: saleData.itemCount, paymentMethod: paymentMethod, profit: totalProfit }
                     });
                 }
@@ -665,6 +756,10 @@
                 if (di) di.value = '0';
                 const ap = document.getElementById('pos-amount-paid');
                 if (ap) ap.value = '';
+                const cn = document.getElementById('pos-customer-name');
+                const cp = document.getElementById('pos-customer-phone');
+                if (cn) cn.value = '';
+                if (cp) cp.value = '';
 
                 this.showToast('Sale completed! Receipt generated.');
 
@@ -713,6 +808,8 @@
                                 <span><strong>Date:</strong> ${dateStr}</span>
                                 <span><strong>Time:</strong> ${timeStr}</span>
                                 <span><strong>Cashier:</strong> ${this.escapeHtml(sale.soldBy)}</span>
+                                ${sale.customer && sale.customer.name ? '<span class="pos-receipt-customer"><strong>Customer:</strong> ' + this.escapeHtml(sale.customer.name) + '</span>' : ''}
+                                ${sale.customer && sale.customer.phone ? '<span class="pos-receipt-customer"><strong>Phone:</strong> ' + this.escapeHtml(sale.customer.phone) + '</span>' : ''}
                             </div>
                         </div>
 
@@ -740,6 +837,15 @@
                             <div class="pos-receipt-row">
                                 <span>Discount ${sale.discountType === 'percent' ? '(' + sale.discountValue + '%)' : ''}</span>
                                 <span>- ${this.formatCurrency(sale.discountAmount)}</span>
+                            </div>` : ''}
+                            <div class="pos-receipt-row">
+                                <span>Net Total</span>
+                                <span>${this.formatCurrency(sale.netTotal != null ? sale.netTotal : (sale.subtotal - (sale.discountAmount || 0)))}</span>
+                            </div>
+                            ${(sale.vatAmount || 0) > 0 ? `
+                            <div class="pos-receipt-row">
+                                <span>VAT ${sale.vatType === 'percent' ? '(' + sale.vatValue + '%)' : ''}</span>
+                                <span>${this.formatCurrency(sale.vatAmount)}</span>
                             </div>` : ''}
                             <div class="pos-receipt-row pos-receipt-grand-total">
                                 <span>TOTAL</span>
@@ -794,6 +900,7 @@
                         .pos-receipt-logo h2 { font-size: 1.3rem; }
                         .pos-receipt-subtitle { font-size: 0.85rem; margin: 4px 0; }
                         .pos-receipt-info { font-size: 0.75rem; display: flex; flex-direction: column; gap: 2px; border-top: 1px dashed #000; border-bottom: 1px dashed #000; padding: 8px 0; margin-top: 8px; }
+                        .pos-receipt-customer { font-weight: 700; }
                         table { width: 100%; border-collapse: collapse; font-size: 0.78rem; margin: 10px 0; }
                         th, td { padding: 4px 2px; text-align: left; }
                         th { border-bottom: 1px solid #000; }

@@ -229,8 +229,12 @@
                 if (payFilter && sale.paymentMethod !== payFilter) return false;
                 if (statusFilter && (sale.status || 'completed') !== statusFilter) return false;
                 if (query) {
+                    const customerName = (sale.customer?.name || '').toLowerCase();
+                    const customerPhone = (sale.customer?.phone || '').toLowerCase();
                     const match = (sale.saleId || '').toLowerCase().includes(query)
                         || (sale.soldBy || '').toLowerCase().includes(query)
+                        || customerName.includes(query)
+                        || customerPhone.includes(query)
                         || (sale.items || []).some(item => (item.name || '').toLowerCase().includes(query));
                     if (!match) return false;
                 }
