@@ -65,6 +65,33 @@
                 dt.toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
         },
 
+        getCustomerFrequencyMeta: function (transactions) {
+            const tx = parseInt(transactions, 10) || 0;
+            if (tx >= 10) return { key: 'loyal', label: 'Loyal' };
+            if (tx >= 6) return { key: 'frequent', label: 'Frequent' };
+            if (tx >= 3) return { key: 'regular', label: 'Regular' };
+            if (tx >= 2) return { key: 'potential', label: 'Potential' };
+            return { key: 'new', label: 'New' };
+        },
+
+        normalizeWhatsAppPhone: function (phone) {
+            const raw = String(phone || '').trim();
+            if (!raw || raw === '—') return '';
+            const cleaned = raw.replace(/[^0-9+]/g, '');
+            if (!cleaned) return '';
+
+            // KE-friendly normalization: 07xxxxxxxx -> 2547xxxxxxxx
+            if (cleaned.startsWith('+')) return cleaned.slice(1);
+            if (cleaned.startsWith('254')) return cleaned;
+            if (cleaned.startsWith('0')) return '254' + cleaned.slice(1);
+            return cleaned;
+        },
+
+        buildCustomerMessage: function (customer) {
+            const name = customer && customer.name && customer.name !== 'Walk-in Customer' ? customer.name : 'Customer';
+            return 'Hello ' + name + ', this is PharmaFlow. Thank you for choosing us. We are here to assist you with your medication and refill needs.';
+        },
+
         render: function (container) {
             currentPage = 1;
 
@@ -142,6 +169,7 @@
                                     <th>Customer</th>
                                     <th>Phone</th>
                                     <th>Transactions</th>
+                                    <th>Frequency</th>
                                     <th>Items</th>
                                     <th>Total Spent</th>
                                     <th>Last Purchase</th>
@@ -150,7 +178,7 @@
                                 </tr>
                             </thead>
                             <tbody id="pc-tbody">
-                                <tr><td colspan="9" class="sales-loading"><i class="fas fa-spinner fa-spin"></i> Loading customer activity...</td></tr>
+                                <tr><td colspan="10" class="sales-loading"><i class="fas fa-spinner fa-spin"></i> Loading customer activity...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -249,6 +277,7 @@
                         key: key,
                         name: name || 'Walk-in Customer',
                         phone: phone || '—',
+                        email: (sale.customer?.email || '').trim(),
                         transactions: 0,
                         items: 0,
                         totalSpent: 0,
@@ -273,6 +302,10 @@
                 if (!c.lastPurchase || (dt && c.lastPurchase && dt.getTime() > c.lastPurchase.getTime()) || (dt && !c.lastPurchase)) {
                     c.lastPurchase = dt;
                     c.lastPayment = (sale.paymentMethod || '').toUpperCase() || '—';
+                }
+
+                if (!c.email && sale.customer?.email) {
+                    c.email = String(sale.customer.email).trim();
                 }
             });
 
@@ -351,7 +384,7 @@
             const pageData = filteredCustomerRows.slice(start, start + pageSize);
 
             if (pageData.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="9" class="sales-loading"><i class="fas fa-inbox"></i> No customers found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="10" class="sales-loading"><i class="fas fa-inbox"></i> No customers found</td></tr>';
                 this.renderPagination(0, 0);
                 return;
             }
@@ -367,6 +400,7 @@
                     </td>
                     <td>${this.escapeHtml(c.phone)}</td>
                     <td>${c.transactions}</td>
+                    <td><span class="pc-frequency-badge pc-frequency--${this.getCustomerFrequencyMeta(c.transactions).key}">${this.getCustomerFrequencyMeta(c.transactions).label}</span></td>
                     <td>${c.items}</td>
                     <td><strong>${this.formatCurrency(c.totalSpent)}</strong></td>
                     <td>${this.formatDate(c.lastPurchase)}</td>
@@ -378,6 +412,9 @@
                         <button class="sales-action-btn sales-action--approve" data-action="new-sale" data-key="${this.escapeHtml(c.key)}" title="New Sale for Customer">
                             <i class="fas fa-cart-plus"></i>
                         </button>
+                        <button class="sales-action-btn pc-message-btn" data-action="message" data-key="${this.escapeHtml(c.key)}" title="Message Customer">
+                            <i class="fas fa-comments"></i>
+                        </button>
                     </td>
                 </tr>
             `).join('');
@@ -388,6 +425,10 @@
 
             tbody.querySelectorAll('[data-action="new-sale"]').forEach(btn => {
                 btn.addEventListener('click', () => this.openPosWithCustomer(btn.dataset.key));
+            });
+
+            tbody.querySelectorAll('[data-action="message"]').forEach(btn => {
+                btn.addEventListener('click', () => this.openMessageModal(btn.dataset.key));
             });
 
             this.renderPagination(totalPages, filteredCustomerRows.length);
@@ -513,6 +554,86 @@
             });
         },
 
+        openMessageModal: function (key) {
+            const customer = customerRows.find(c => c.key === key);
+            if (!customer) return;
+
+            const existing = document.getElementById('pc-message-modal');
+            if (existing) existing.remove();
+
+            const phoneForWhatsapp = this.normalizeWhatsAppPhone(customer.phone);
+            const defaultMessage = this.buildCustomerMessage(customer);
+            const modal = document.createElement('div');
+            modal.className = 'pc-modal-overlay';
+            modal.id = 'pc-message-modal';
+            modal.innerHTML = `
+                <div class="pc-modal-card pc-message-modal-card">
+                    <div class="pc-modal-header">
+                        <h3><i class="fas fa-comments"></i> Message ${this.escapeHtml(customer.name)}</h3>
+                        <button class="slide-panel-close" id="pc-msg-close"><i class="fas fa-times"></i></button>
+                    </div>
+                    <div class="pc-modal-meta">
+                        <span><strong>Phone:</strong> ${this.escapeHtml(customer.phone)}</span>
+                        <span><strong>Email:</strong> ${this.escapeHtml(customer.email || '—')}</span>
+                    </div>
+                    <div class="pc-modal-body">
+                        <div class="pc-msg-fields">
+                            <div class="pc-msg-group">
+                                <label>Phone</label>
+                                <input type="text" id="pc-msg-phone" value="${this.escapeHtml(customer.phone === '—' ? '' : customer.phone)}" placeholder="e.g. 0712345678">
+                            </div>
+                            <div class="pc-msg-group">
+                                <label>Email</label>
+                                <input type="email" id="pc-msg-email" value="${this.escapeHtml(customer.email || '')}" placeholder="customer@email.com">
+                            </div>
+                            <div class="pc-msg-group pc-msg-group--full">
+                                <label>Message</label>
+                                <textarea id="pc-msg-text" rows="4" placeholder="Type message...">${this.escapeHtml(defaultMessage)}</textarea>
+                            </div>
+                        </div>
+                        <div class="pc-msg-actions">
+                            <button class="btn btn-outline" id="pc-send-sms"><i class="fas fa-message"></i> SMS</button>
+                            <button class="btn btn-primary" id="pc-send-whatsapp"><i class="fab fa-whatsapp"></i> WhatsApp</button>
+                            <button class="btn btn-outline" id="pc-send-email"><i class="fas fa-envelope"></i> Email</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            document.body.appendChild(modal);
+
+            const close = () => modal.remove();
+            document.getElementById('pc-msg-close')?.addEventListener('click', close);
+            modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+
+            const getMsg = () => document.getElementById('pc-msg-text')?.value?.trim() || '';
+            const getPhone = () => document.getElementById('pc-msg-phone')?.value?.trim() || '';
+            const getEmail = () => document.getElementById('pc-msg-email')?.value?.trim() || '';
+
+            document.getElementById('pc-send-whatsapp')?.addEventListener('click', () => {
+                const phone = this.normalizeWhatsAppPhone(getPhone() || phoneForWhatsapp);
+                const msg = getMsg();
+                if (!phone) { this.showToast('Customer phone is required for WhatsApp.', 'error'); return; }
+                const url = 'https://wa.me/' + encodeURIComponent(phone) + '?text=' + encodeURIComponent(msg);
+                window.open(url, '_blank');
+            });
+
+            document.getElementById('pc-send-sms')?.addEventListener('click', () => {
+                const phone = getPhone();
+                const msg = getMsg();
+                if (!phone) { this.showToast('Customer phone is required for SMS.', 'error'); return; }
+                window.location.href = 'sms:' + encodeURIComponent(phone) + '?body=' + encodeURIComponent(msg);
+            });
+
+            document.getElementById('pc-send-email')?.addEventListener('click', () => {
+                const email = getEmail();
+                const msg = getMsg();
+                if (!email) { this.showToast('Customer email is required for email.', 'error'); return; }
+                const subject = 'Message from ' + (PharmaFlow.Settings ? PharmaFlow.Settings.getBusinessName() : 'PharmaFlow');
+                window.location.href = 'mailto:' + encodeURIComponent(email) + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(msg);
+            });
+        },
+
         exportExcel: function () {
             if (filteredCustomerRows.length === 0) {
                 this.showToast('No customers to export', 'error');
@@ -523,6 +644,7 @@
                 'Customer': c.name,
                 'Phone': c.phone === '—' ? '' : c.phone,
                 'Transactions': c.transactions || 0,
+                'Frequency': this.getCustomerFrequencyMeta(c.transactions).label,
                 'Items': c.items || 0,
                 'Total Spent': c.totalSpent || 0,
                 'Last Purchase': c.lastPurchase ? this.formatDateTime(c.lastPurchase) : '',
@@ -555,6 +677,7 @@
                 c.name,
                 c.phone === '—' ? '' : c.phone,
                 c.transactions || 0,
+                this.getCustomerFrequencyMeta(c.transactions).label,
                 c.items || 0,
                 this.formatCurrency(c.totalSpent || 0),
                 c.lastPurchase ? this.formatDate(c.lastPurchase) : '—',
@@ -563,7 +686,7 @@
 
             doc.autoTable({
                 startY: 32,
-                head: [['#', 'Customer', 'Phone', 'Transactions', 'Items', 'Total Spent', 'Last Purchase', 'Last Payment']],
+                head: [['#', 'Customer', 'Phone', 'Transactions', 'Frequency', 'Items', 'Total Spent', 'Last Purchase', 'Last Payment']],
                 body: rows,
                 styles: { fontSize: 8 },
                 headStyles: { fillColor: [37, 99, 235] }

@@ -12,6 +12,8 @@
     let inventoryCache = [];
     let cart = [];
     let unsubPosInventory = null;
+    let unsubPosCustomers = null;
+    let customerDirectory = [];
 
     const POS = {
 
@@ -32,6 +34,14 @@
             const div = document.createElement('div');
             div.textContent = str || '';
             return div.innerHTML;
+        },
+
+        normalizeCustomerName: function (name) {
+            return String(name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+        },
+
+        normalizePhone: function (phone) {
+            return String(phone || '').replace(/\s+/g, '').replace(/[^0-9+]/g, '');
         },
 
         showToast: function (message, type) {
@@ -163,6 +173,9 @@
                                     <input type="text" id="pos-customer-name" placeholder="Customer name (optional)" autocomplete="off">
                                     <input type="tel" id="pos-customer-phone" placeholder="Phone number (optional)" autocomplete="tel">
                                 </div>
+                                <datalist id="pos-customer-name-list"></datalist>
+                                <datalist id="pos-customer-phone-list"></datalist>
+                                <div class="pos-customer-match" id="pos-customer-match" style="display:none;"></div>
 
                                 <label>Payment Method</label>
                                 <div class="pos-payment-methods">
@@ -201,6 +214,7 @@
 
             this.bindEvents(container);
             this.subscribeToInventory(businessId);
+            this.subscribeToCustomers(businessId);
         },
 
         // ─── EVENTS ─────────────────────────────────────────
@@ -279,6 +293,8 @@
                 applyVat.addEventListener('change', () => this.updateTotals());
             }
 
+            this.setupCustomerAutoDetect();
+
             // Checkout
             document.getElementById('pos-checkout-btn')?.addEventListener('click', () => this.completeSale());
 
@@ -299,6 +315,105 @@
             this.updateTotals();
         },
 
+        setupCustomerAutoDetect: function () {
+            const nameInput = document.getElementById('pos-customer-name');
+            const phoneInput = document.getElementById('pos-customer-phone');
+            if (!nameInput || !phoneInput) return;
+
+            nameInput.setAttribute('list', 'pos-customer-name-list');
+            phoneInput.setAttribute('list', 'pos-customer-phone-list');
+
+            nameInput.addEventListener('input', () => this.detectExistingCustomer('name'));
+            phoneInput.addEventListener('input', () => this.detectExistingCustomer('phone'));
+            nameInput.addEventListener('blur', () => this.detectExistingCustomer('name'));
+            phoneInput.addEventListener('blur', () => this.detectExistingCustomer('phone'));
+
+            this.renderCustomerDatalists();
+            this.detectExistingCustomer();
+        },
+
+        renderCustomerDatalists: function () {
+            const nameList = document.getElementById('pos-customer-name-list');
+            const phoneList = document.getElementById('pos-customer-phone-list');
+            if (!nameList || !phoneList) return;
+
+            const nameOptions = customerDirectory
+                .filter(c => c.name)
+                .sort((a, b) => (b.transactions || 0) - (a.transactions || 0))
+                .slice(0, 200)
+                .map(c => '<option value="' + this.escapeHtml(c.name) + '"></option>')
+                .join('');
+
+            const phoneOptions = customerDirectory
+                .filter(c => c.phone)
+                .sort((a, b) => (b.transactions || 0) - (a.transactions || 0))
+                .slice(0, 200)
+                .map(c => '<option value="' + this.escapeHtml(c.phone) + '"></option>')
+                .join('');
+
+            nameList.innerHTML = nameOptions;
+            phoneList.innerHTML = phoneOptions;
+        },
+
+        setCustomerMatchUi: function (customer, mode) {
+            const nameInput = document.getElementById('pos-customer-name');
+            const phoneInput = document.getElementById('pos-customer-phone');
+            const matchEl = document.getElementById('pos-customer-match');
+            if (!nameInput || !phoneInput || !matchEl) return;
+
+            nameInput.classList.remove('pos-customer-input--matched');
+            phoneInput.classList.remove('pos-customer-input--matched');
+
+            if (!customer) {
+                matchEl.style.display = 'none';
+                matchEl.textContent = '';
+                return;
+            }
+
+            if (mode === 'name' || mode === 'both') nameInput.classList.add('pos-customer-input--matched');
+            if (mode === 'phone' || mode === 'both') phoneInput.classList.add('pos-customer-input--matched');
+
+            matchEl.style.display = 'block';
+            matchEl.innerHTML = '<i class="fas fa-user-check"></i> Existing customer detected: <strong>'
+                + this.escapeHtml(customer.name || 'Unnamed Customer') + '</strong>'
+                + (customer.phone ? ' (' + this.escapeHtml(customer.phone) + ')' : '');
+        },
+
+        detectExistingCustomer: function (source) {
+            const nameInput = document.getElementById('pos-customer-name');
+            const phoneInput = document.getElementById('pos-customer-phone');
+            if (!nameInput || !phoneInput) return;
+
+            const nameNorm = this.normalizeCustomerName(nameInput.value);
+            const phoneNorm = this.normalizePhone(phoneInput.value);
+
+            if (!nameNorm && !phoneNorm) {
+                this.setCustomerMatchUi(null);
+                return;
+            }
+
+            const phoneExact = phoneNorm
+                ? customerDirectory.find(c => c.phoneNorm && c.phoneNorm === phoneNorm)
+                : null;
+            const nameExact = nameNorm
+                ? customerDirectory.find(c => c.nameNorm && c.nameNorm === nameNorm)
+                : null;
+
+            const matched = phoneExact || nameExact || null;
+            if (!matched) {
+                this.setCustomerMatchUi(null);
+                return;
+            }
+
+            if (source === 'name' && !phoneNorm && matched.phone) phoneInput.value = matched.phone;
+            if (source === 'phone' && !nameNorm && matched.name) nameInput.value = matched.name;
+
+            const hasName = !!this.normalizeCustomerName(nameInput.value);
+            const hasPhone = !!this.normalizePhone(phoneInput.value);
+            const mode = hasName && hasPhone ? 'both' : (hasPhone ? 'phone' : 'name');
+            this.setCustomerMatchUi(matched, mode);
+        },
+
         applyCustomerPrefill: function () {
             try {
                 const raw = localStorage.getItem('pf_pos_customer_prefill');
@@ -310,6 +425,8 @@
 
                 if (nameInput) nameInput.value = data && data.name ? data.name : '';
                 if (phoneInput) phoneInput.value = data && data.phone ? data.phone : '';
+
+                this.detectExistingCustomer();
 
                 localStorage.removeItem('pf_pos_customer_prefill');
             } catch (e) {
@@ -334,6 +451,53 @@
                 this.filterProducts(document.getElementById('pos-search')?.value || '');
             }, err => {
                 console.error('POS inventory subscription error:', err);
+            });
+        },
+
+        subscribeToCustomers: function (businessId) {
+            if (unsubPosCustomers) { unsubPosCustomers(); unsubPosCustomers = null; }
+            customerDirectory = [];
+            if (!businessId) return;
+
+            const col = getBusinessCollection(businessId, 'sales');
+            if (!col) return;
+
+            unsubPosCustomers = col.onSnapshot(snapshot => {
+                const byName = new Map();
+                const byPhone = new Map();
+
+                snapshot.forEach(doc => {
+                    const sale = doc.data() || {};
+                    const customer = sale.customer || {};
+                    const name = String(customer.name || '').trim();
+                    const phone = String(customer.phone || '').trim();
+                    const nameNorm = this.normalizeCustomerName(name);
+                    const phoneNorm = this.normalizePhone(phone);
+                    if (!nameNorm && !phoneNorm) return;
+
+                    const existing = byPhone.get(phoneNorm) || byName.get(nameNorm);
+                    const next = existing || {
+                        key: phoneNorm || nameNorm,
+                        name: name,
+                        phone: phone,
+                        nameNorm: nameNorm,
+                        phoneNorm: phoneNorm,
+                        transactions: 0
+                    };
+
+                    if (!next.name && name) next.name = name;
+                    if (!next.phone && phone) next.phone = phone;
+                    next.transactions += 1;
+
+                    if (next.nameNorm) byName.set(next.nameNorm, next);
+                    if (next.phoneNorm) byPhone.set(next.phoneNorm, next);
+                });
+
+                customerDirectory = Array.from(new Set([...byPhone.values(), ...byName.values()]));
+                this.renderCustomerDatalists();
+                this.detectExistingCustomer();
+            }, err => {
+                console.error('POS customer subscription error:', err);
             });
         },
 
@@ -760,6 +924,7 @@
                 const cp = document.getElementById('pos-customer-phone');
                 if (cn) cn.value = '';
                 if (cp) cp.value = '';
+                this.detectExistingCustomer();
 
                 this.showToast('Sale completed! Receipt generated.');
 
@@ -923,12 +1088,14 @@
 
         cleanup: function () {
             if (unsubPosInventory) { unsubPosInventory(); unsubPosInventory = null; }
+            if (unsubPosCustomers) { unsubPosCustomers(); unsubPosCustomers = null; }
             if (this._keyboardHandler) {
                 document.removeEventListener('keydown', this._keyboardHandler);
                 this._keyboardHandler = null;
             }
             cart = [];
             inventoryCache = [];
+            customerDirectory = [];
         }
     };
 

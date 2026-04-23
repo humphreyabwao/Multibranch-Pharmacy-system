@@ -10,11 +10,16 @@
     window.PharmaFlow = window.PharmaFlow || {};
 
     let supplierListener = null;
+    let supplierOrdersListener = null;
     let allSuppliers = [];
     let filteredSuppliers = [];
+    let supplierOrdersCache = [];
+    let supplierOrderCountById = {};
+    let supplierOrderCountByName = {};
     let currentPage = 1;
     const PAGE_SIZE = 25;
     let editingSupplierId = null;
+    let activeSupplierOrdersSupplierId = null;
 
     const Supplier = {
 
@@ -50,9 +55,18 @@
 
         cleanup: function () {
             if (supplierListener) { supplierListener(); supplierListener = null; }
+            if (supplierOrdersListener) { supplierOrdersListener(); supplierOrdersListener = null; }
             allSuppliers = [];
             filteredSuppliers = [];
+            supplierOrdersCache = [];
+            supplierOrderCountById = {};
+            supplierOrderCountByName = {};
             editingSupplierId = null;
+            activeSupplierOrdersSupplierId = null;
+        },
+
+        normalizeText: function (value) {
+            return String(value || '').trim().toLowerCase();
         },
 
         // ═══════════════════════════════════════════════
@@ -131,11 +145,12 @@
                                     <th>Location</th>
                                     <th>Category</th>
                                     <th>Status</th>
+                                    <th>Orders</th>
                                     <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody id="sup-tbody">
-                                <tr><td colspan="9" class="dda-loading"><i class="fas fa-spinner fa-spin"></i> Loading suppliers...</td></tr>
+                                <tr><td colspan="10" class="dda-loading"><i class="fas fa-spinner fa-spin"></i> Loading suppliers...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -228,6 +243,40 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- Supplier Orders Modal -->
+                <div class="dda-modal-overlay" id="sup-orders-modal" style="display:none">
+                    <div class="dda-modal sup-orders-modal">
+                        <div class="dda-modal-header">
+                            <h3><i class="fas fa-receipt"></i> Supplier Orders</h3>
+                            <button class="dda-modal-close" id="sup-orders-close">&times;</button>
+                        </div>
+                        <div class="dda-modal-body">
+                            <div class="sup-orders-summary" id="sup-orders-summary"></div>
+                            <div class="dda-table-wrap">
+                                <table class="dda-table">
+                                    <thead>
+                                        <tr>
+                                            <th>#</th>
+                                            <th>Order ID</th>
+                                            <th>Order Date</th>
+                                            <th>Status</th>
+                                            <th>Payment</th>
+                                            <th>Total Amount</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="sup-orders-tbody">
+                                        <tr><td colspan="7" class="dda-loading"><i class="fas fa-spinner fa-spin"></i> Loading orders...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <div class="dda-modal-footer">
+                            <button class="dda-btn dda-btn--cancel" id="sup-orders-close-btn">Close</button>
+                        </div>
+                    </div>
+                </div>
             `;
 
             this.bindEvents(container);
@@ -248,6 +297,8 @@
             document.getElementById('sup-save')?.addEventListener('click', () => this.save());
             document.getElementById('sup-view-close')?.addEventListener('click', () => { document.getElementById('sup-view-modal').style.display = 'none'; });
             document.getElementById('sup-view-close-btn')?.addEventListener('click', () => { document.getElementById('sup-view-modal').style.display = 'none'; });
+            document.getElementById('sup-orders-close')?.addEventListener('click', () => this.closeSupplierOrdersModal());
+            document.getElementById('sup-orders-close-btn')?.addEventListener('click', () => this.closeSupplierOrdersModal());
 
             const dashLink = container.querySelector('[data-nav="dashboard"]');
             if (dashLink) dashLink.addEventListener('click', (e) => { e.preventDefault(); PharmaFlow.Sidebar.setActive('dashboard', null); });
@@ -261,6 +312,7 @@
             const businessId = this.getBusinessId();
             if (!businessId) return;
             if (supplierListener) supplierListener();
+            this.subscribeOrderStats();
 
             supplierListener = getBusinessCollection(businessId, 'suppliers')
                 .onSnapshot(snap => {
@@ -271,8 +323,84 @@
                 }, err => {
                     console.error('Supplier subscribe error:', err);
                     const tbody = document.getElementById('sup-tbody');
-                    if (tbody) tbody.innerHTML = '<tr><td colspan="9" class="dda-loading"><i class="fas fa-exclamation-circle"></i> Failed to load suppliers</td></tr>';
+                    if (tbody) tbody.innerHTML = '<tr><td colspan="10" class="dda-loading"><i class="fas fa-exclamation-circle"></i> Failed to load suppliers</td></tr>';
                 });
+        },
+
+        subscribeOrderStats: function () {
+            const businessId = this.getBusinessId();
+            if (!businessId) return;
+            if (supplierOrdersListener) { supplierOrdersListener(); supplierOrdersListener = null; }
+
+            supplierOrdersListener = getBusinessCollection(businessId, 'orders')
+                .onSnapshot(snap => {
+                    supplierOrdersCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                    const byId = {};
+                    const byName = {};
+
+                    supplierOrdersCache.forEach(order => {
+                        const supplierId = order.supplierId || '';
+                        const supplierName = this.normalizeText(order.supplierName || '');
+                        if (supplierId) byId[supplierId] = (byId[supplierId] || 0) + 1;
+                        if (supplierName) byName[supplierName] = (byName[supplierName] || 0) + 1;
+                    });
+
+                    supplierOrderCountById = byId;
+                    supplierOrderCountByName = byName;
+
+                    // Keep supplier table counts current
+                    if (document.getElementById('sup-tbody')) this.renderPage();
+
+                    // Keep open supplier-orders modal current
+                    if (activeSupplierOrdersSupplierId) this.openSupplierOrdersModal(activeSupplierOrdersSupplierId, true);
+                }, err => {
+                    console.error('Supplier order stats subscribe error:', err);
+                });
+        },
+
+        getSupplierOrderCount: function (supplier) {
+            if (!supplier) return 0;
+            const byId = supplierOrderCountById[supplier.id] || 0;
+            const byName = supplierOrderCountByName[this.normalizeText(supplier.name)] || 0;
+            return Math.max(byId, byName);
+        },
+
+        getOrdersForSupplier: function (supplier) {
+            const supplierId = supplier ? supplier.id : '';
+            const supplierName = this.normalizeText(supplier ? supplier.name : '');
+
+            const rows = supplierOrdersCache.filter(order => {
+                if (supplierId && order.supplierId === supplierId) return true;
+                return !order.supplierId && this.normalizeText(order.supplierName) === supplierName;
+            });
+
+            rows.sort((a, b) => {
+                const ta = a.orderTimestamp && a.orderTimestamp.toDate ? a.orderTimestamp.toDate().getTime() : Date.parse(a.createdAt || a.orderDate || 0);
+                const tb = b.orderTimestamp && b.orderTimestamp.toDate ? b.orderTimestamp.toDate().getTime() : Date.parse(b.createdAt || b.orderDate || 0);
+                return tb - ta;
+            });
+            return rows;
+        },
+
+        getOrderStatusBadge: function (status) {
+            const map = {
+                pending: 'ord-status--pending',
+                approved: 'ord-status--approved',
+                received: 'ord-status--received',
+                cancelled: 'ord-status--cancelled'
+            };
+            const key = status || 'pending';
+            const cls = map[key] || map.pending;
+            const label = key.charAt(0).toUpperCase() + key.slice(1);
+            return '<span class="ord-status-badge ' + cls + '">' + label + '</span>';
+        },
+
+        getOrderPaymentBadge: function (order) {
+            const paymentStatus = order.paymentStatus || (order.paymentMode === 'on-loan' ? 'on-loan' : 'paid');
+            if (paymentStatus === 'paid') {
+                return '<span class="ord-payment-badge ord-payment--paid"><i class="fas fa-check-circle"></i> Paid in Full</span>';
+            }
+            return '<span class="ord-payment-badge ord-payment--loan"><i class="fas fa-hand-holding-dollar"></i> On Loan</span>';
         },
 
         updateStats: function () {
@@ -313,13 +441,14 @@
             const pageData = filteredSuppliers.slice(start, start + PAGE_SIZE);
 
             if (pageData.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="9" class="dda-loading"><i class="fas fa-inbox"></i> No suppliers found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="10" class="dda-loading"><i class="fas fa-inbox"></i> No suppliers found</td></tr>';
                 this.renderPagination();
                 return;
             }
 
             tbody.innerHTML = pageData.map((s, i) => {
                 const st = s.status || 'active';
+                const orderCount = this.getSupplierOrderCount(s);
                 const statusBadge = st === 'active'
                     ? '<span class="dda-stock-badge dda-stock--ok">Active</span>'
                     : '<span class="dda-stock-badge dda-stock--out">Inactive</span>';
@@ -333,6 +462,7 @@
                     <td>${this.escapeHtml(s.location || '—')}</td>
                     <td>${this.escapeHtml(s.category || '—')}</td>
                     <td>${statusBadge}</td>
+                    <td><button class="sup-orders-btn" data-id="${s.id}" title="View supplier orders"><i class="fas fa-receipt"></i> ${orderCount}</button></td>
                     <td>
                         <button class="sales-action-btn sales-action--view sup-view" data-id="${s.id}" title="View"><i class="fas fa-eye"></i></button>
                         <button class="sales-action-btn sales-action--approve sup-edit" data-id="${s.id}" title="Edit"><i class="fas fa-pen"></i></button>
@@ -353,6 +483,9 @@
             });
             tbody.querySelectorAll('.sup-delete').forEach(btn => {
                 btn.addEventListener('click', () => this.deleteSupplier(btn.dataset.id));
+            });
+            tbody.querySelectorAll('.sup-orders-btn').forEach(btn => {
+                btn.addEventListener('click', () => this.openSupplierOrdersModal(btn.dataset.id));
             });
 
             this.renderPagination();
@@ -523,6 +656,149 @@
                 </div>
             `;
             modal.style.display = 'flex';
+        },
+
+        openSupplierOrdersModal: function (supplierId, fromRefresh) {
+            const modal = document.getElementById('sup-orders-modal');
+            const tbody = document.getElementById('sup-orders-tbody');
+            const summary = document.getElementById('sup-orders-summary');
+            if (!modal || !tbody || !summary) return;
+
+            const supplier = allSuppliers.find(s => s.id === supplierId);
+            if (!supplier) return;
+
+            activeSupplierOrdersSupplierId = supplierId;
+            const orders = this.getOrdersForSupplier(supplier);
+            const paidCount = orders.filter(o => (o.paymentStatus || (o.paymentMode === 'on-loan' ? 'on-loan' : 'paid')) === 'paid').length;
+            const loanCount = orders.length - paidCount;
+
+            let totalPaidInFullAmount = 0;
+            let totalLoanOutstandingAmount = 0;
+            let overdueCount = 0;
+            let dueTodayCount = 0;
+            let upcomingCount = 0;
+            let nextDueDate = null;
+            const today = new Date().toISOString().split('T')[0];
+
+            orders.forEach(order => {
+                const totalAmount = parseFloat(order.totalAmount) || 0;
+                const amountPaid = parseFloat(order.amountPaid) || 0;
+                const explicitOutstanding = parseFloat(order.outstandingAmount);
+                const outstanding = Number.isFinite(explicitOutstanding) ? explicitOutstanding : Math.max(totalAmount - amountPaid, 0);
+                const paymentStatus = order.paymentStatus || (order.paymentMode === 'on-loan' ? 'on-loan' : 'paid');
+
+                if (paymentStatus === 'paid' || outstanding <= 0) {
+                    totalPaidInFullAmount += totalAmount;
+                } else {
+                    totalLoanOutstandingAmount += outstanding;
+                    const dueDate = (order.loanDueDate || '').trim();
+                    if (dueDate) {
+                        if (dueDate < today) {
+                            overdueCount++;
+                        } else if (dueDate === today) {
+                            dueTodayCount++;
+                        } else {
+                            upcomingCount++;
+                            if (!nextDueDate || dueDate < nextDueDate) nextDueDate = dueDate;
+                        }
+                    }
+                }
+            });
+
+            summary.innerHTML =
+                '<div class="sup-orders-summary-title"><strong>' + this.escapeHtml(supplier.name) + '</strong></div>' +
+                '<div class="sup-orders-summary-meta">' +
+                '<span><i class="fas fa-receipt"></i> Total Orders: ' + orders.length + '</span>' +
+                '<span><i class="fas fa-check-circle"></i> Paid in Full: ' + paidCount + '</span>' +
+                '<span><i class="fas fa-hand-holding-dollar"></i> On Loan: ' + loanCount + '</span>' +
+                '</div>' +
+                '<div class="sup-orders-cards">' +
+                '  <div class="sup-orders-card sup-orders-card--loan">' +
+                '    <div class="sup-orders-card-label">Loan Outstanding</div>' +
+                '    <div class="sup-orders-card-value">' + this.formatCurrency(totalLoanOutstandingAmount) + '</div>' +
+                '  </div>' +
+                '  <div class="sup-orders-card sup-orders-card--paid">' +
+                '    <div class="sup-orders-card-label">Paid In Full Amount</div>' +
+                '    <div class="sup-orders-card-value">' + this.formatCurrency(totalPaidInFullAmount) + '</div>' +
+                '  </div>' +
+                '  <div class="sup-orders-card sup-orders-card--reminder">' +
+                '    <div class="sup-orders-card-label">Payment Reminders</div>' +
+                '    <div class="sup-orders-card-reminders">Overdue: <strong>' + overdueCount + '</strong> · Due Today: <strong>' + dueTodayCount + '</strong> · Upcoming: <strong>' + upcomingCount + '</strong></div>' +
+                '    <div class="sup-orders-card-note">' + (nextDueDate ? ('Next due date: ' + nextDueDate) : 'No upcoming loan due date') + '</div>' +
+                '  </div>' +
+                '</div>';
+
+            if (orders.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="dda-loading"><i class="fas fa-inbox"></i> No orders found for this supplier</td></tr>';
+                if (!fromRefresh) modal.style.display = 'flex';
+                return;
+            }
+
+            tbody.innerHTML = orders.map((order, idx) => {
+                const date = order.orderDate || '—';
+                return '<tr>' +
+                    '<td>' + (idx + 1) + '</td>' +
+                    '<td><code class="sales-receipt-code">' + this.escapeHtml(order.orderId || order.id || '') + '</code></td>' +
+                    '<td>' + this.escapeHtml(date) + '</td>' +
+                    '<td>' + this.getOrderStatusBadge(order.status) + '</td>' +
+                    '<td>' + this.getOrderPaymentBadge(order) + '</td>' +
+                    '<td><strong>' + this.formatCurrency(order.totalAmount || 0) + '</strong></td>' +
+                    '<td><button class="dda-btn dda-btn--export sup-order-print" data-id="' + this.escapeHtml(order.id) + '"><i class="fas fa-print"></i> Print Invoice</button></td>' +
+                    '</tr>';
+            }).join('');
+
+            tbody.querySelectorAll('.sup-order-print').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const order = orders.find(o => o.id === btn.dataset.id);
+                    if (order) this.printSupplierOrderInvoice(order);
+                });
+            });
+
+            if (!fromRefresh) modal.style.display = 'flex';
+        },
+
+        closeSupplierOrdersModal: function () {
+            const modal = document.getElementById('sup-orders-modal');
+            if (modal) modal.style.display = 'none';
+            activeSupplierOrdersSupplierId = null;
+        },
+
+        printSupplierOrderInvoice: function (order) {
+            if (PharmaFlow.MyOrders && typeof PharmaFlow.MyOrders.printInvoice === 'function') {
+                PharmaFlow.MyOrders.printInvoice(order);
+                return;
+            }
+
+            // Fallback lightweight invoice if MyOrders print helper is unavailable
+            const win = window.open('', '_blank', 'width=860,height=700');
+            if (!win) {
+                this.showToast('Unable to open print window.', 'error');
+                return;
+            }
+            const items = (order.items || []).map((item, i) => (
+                '<tr>' +
+                '<td>' + (i + 1) + '</td>' +
+                '<td>' + this.escapeHtml(item.name || '') + '</td>' +
+                '<td>' + this.escapeHtml(item.sku || '') + '</td>' +
+                '<td style="text-align:center">' + (item.orderQty || 0) + '</td>' +
+                '<td style="text-align:right">' + this.formatCurrency(item.unitCost || 0) + '</td>' +
+                '<td style="text-align:right"><strong>' + this.formatCurrency(item.lineTotal || 0) + '</strong></td>' +
+                '</tr>'
+            )).join('');
+
+            const html =
+                '<!DOCTYPE html><html><head><title>Invoice - ' + this.escapeHtml(order.orderId || order.id || '') + '</title>' +
+                '<style>body{font-family:Segoe UI,Arial,sans-serif;padding:24px;color:#0f172a}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid #e2e8f0;padding:8px;font-size:12px}th{background:#f8fafc;text-align:left}.meta{margin:8px 0 16px;color:#475569;font-size:13px}.total{margin-top:16px;text-align:right;font-size:15px;font-weight:700}.btn{margin-top:18px;padding:9px 14px;background:#2563eb;color:#fff;border:0;border-radius:6px;cursor:pointer}</style>' +
+                '</head><body>' +
+                '<h2>Purchase Order Invoice</h2>' +
+                '<div class="meta">Order: <strong>' + this.escapeHtml(order.orderId || order.id || '') + '</strong> | Date: ' + this.escapeHtml(order.orderDate || '—') + ' | Supplier: ' + this.escapeHtml(order.supplierName || '—') + '</div>' +
+                '<table><thead><tr><th>#</th><th>Item</th><th>SKU</th><th>Qty</th><th>Unit Cost</th><th>Total</th></tr></thead><tbody>' + items + '</tbody></table>' +
+                '<div class="total">Grand Total: ' + this.formatCurrency(order.totalAmount || 0) + '</div>' +
+                '<button class="btn" onclick="window.print()">Print Invoice</button>' +
+                '</body></html>';
+
+            win.document.write(html);
+            win.document.close();
         },
 
         // ═══════════════════════════════════════════════
