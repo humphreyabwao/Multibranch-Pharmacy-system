@@ -228,6 +228,57 @@
             return value + '%';
         },
 
+        /** Unit selling price + product VAT (same rules as POS for qty 1). Used for add-form preview. */
+        getUnitSellingInclProductVat: function (sellingPrice, vatEnabled, vatType, vatValue) {
+            const sell = parseFloat(sellingPrice) || 0;
+            const raw = parseFloat(vatValue) || 0;
+            if (!vatEnabled || raw <= 0 || sell <= 0) return Math.round(sell * 100) / 100;
+            const base = Math.round(sell * 100) / 100;
+            const type = (vatType || 'percent') === 'amount' ? 'amount' : 'percent';
+            if (type === 'amount') {
+                return Math.round((base + raw) * 100) / 100;
+            }
+            const pct = Math.min(Math.max(raw, 0), 100);
+            const vatAmt = Math.round(base * (pct / 100) * 100) / 100;
+            return Math.round((base + vatAmt) * 100) / 100;
+        },
+
+        updateAddFormVatTotalPreview: function () {
+            const sell = parseFloat(document.getElementById('inv-selling-price')?.value) || 0;
+            const vatEn = (document.getElementById('inv-vat-enabled')?.value || 'false') === 'true';
+            const vatRaw = parseFloat(document.getElementById('inv-vat-value')?.value) || 0;
+            const vatType = document.getElementById('inv-vat-type')?.value || 'percent';
+            const row = document.getElementById('inv-row-total-with-vat');
+            const out = document.getElementById('inv-total-with-vat');
+            if (!row || !out) return;
+            if (!vatEn || vatRaw <= 0 || sell <= 0) {
+                row.style.display = 'none';
+                out.textContent = '—';
+                return;
+            }
+            const total = this.getUnitSellingInclProductVat(sell, vatEn, vatType, vatRaw);
+            row.style.display = '';
+            out.textContent = this.formatCurrency(total);
+        },
+
+        updateEditFormVatTotalPreview: function () {
+            const sell = parseFloat(document.getElementById('edit-selling-price')?.value) || 0;
+            const vatEn = (document.getElementById('edit-vat-enabled')?.value || 'false') === 'true';
+            const vatRaw = parseFloat(document.getElementById('edit-vat-value')?.value) || 0;
+            const vatType = document.getElementById('edit-vat-type')?.value || 'percent';
+            const row = document.getElementById('edit-row-total-with-vat');
+            const out = document.getElementById('edit-total-with-vat');
+            if (!row || !out) return;
+            if (!vatEn || vatRaw <= 0 || sell <= 0) {
+                row.style.display = 'none';
+                out.textContent = '—';
+                return;
+            }
+            const total = this.getUnitSellingInclProductVat(sell, vatEn, vatType, vatRaw);
+            row.style.display = '';
+            out.textContent = this.formatCurrency(total);
+        },
+
         showToast: function (message, type) {
             const existing = document.querySelector('.inv-toast');
             if (existing) existing.remove();
@@ -313,7 +364,7 @@
                     <div class="inv-toolbar">
                         <div class="inv-search">
                             <i class="fas fa-search"></i>
-                            <input type="text" id="inv-search-input" placeholder="Search by name, batch, or category...">
+                            <input type="text" id="inv-search-input" placeholder="Search by brand name, generic name, batch, or category...">
                         </div>
                         <div class="inv-filters">
                             <select id="inv-filter-category">
@@ -354,7 +405,7 @@
                                 <thead>
                                     <tr>
                                         <th>SKU</th>
-                                        <th>Product Name</th>
+                                        <th>Brand / trade name</th>
                                         <th>Category</th>
                                         <th>Drug Type</th>
                                         <th>Batch No.</th>
@@ -595,10 +646,11 @@
                 // Search
                 if (search) {
                     const name = (p.name || '').toLowerCase();
+                    const generic = (p.genericName || '').toLowerCase();
                     const batch = (p.batchNumber || '').toLowerCase();
                     const cat = (p.category || '').toLowerCase();
                     const sku = (p.sku || '').toLowerCase();
-                    if (!name.includes(search) && !batch.includes(search) && !cat.includes(search) && !sku.includes(search)) return false;
+                    if (!name.includes(search) && !generic.includes(search) && !batch.includes(search) && !cat.includes(search) && !sku.includes(search)) return false;
                 }
                 // Category
                 if (catVal && p.category !== catVal) return false;
@@ -691,6 +743,7 @@
                         <td>
                             <div class="inv-product-name">
                                 <strong>${this.escapeHtml(p.name || '')}</strong>
+                                ${p.genericName ? '<small class="inv-product-generic">' + this.escapeHtml(p.genericName) + '</small>' : ''}
                                 ${p.manufacturer ? '<small>' + this.escapeHtml(p.manufacturer) + '</small>' : ''}
                             </div>
                         </td>
@@ -827,7 +880,8 @@
         exportExcel: function () {
             const data = (filteredProducts.length ? filteredProducts : allProducts).map(p => ({
                 'SKU': p.sku || '',
-                'Product Name': p.name || '',
+                'Brand / trade name': p.name || '',
+                'Generic name': p.genericName || '',
                 'Category': p.category || '',
                 'Drug Type': p.drugType || '',
                 'Batch Number': p.batchNumber || '',
@@ -878,10 +932,11 @@
             doc.text('Total Products: ' + allProducts.length, 14, 25);
 
             const products = filteredProducts.length ? filteredProducts : allProducts;
-            const headers = ['SKU', 'Product', 'Category', 'Type', 'Batch', 'Qty', 'Buy Price', 'Sell Price', 'VAT', 'Expiry', 'Status'];
+            const headers = ['SKU', 'Brand', 'Generic', 'Category', 'Type', 'Batch', 'Qty', 'Buy Price', 'Sell Price', 'VAT', 'Expiry', 'Status'];
             const rows = products.map(p => [
                 p.sku || '',
                 p.name || '',
+                p.genericName || '',
                 p.category || '',
                 p.drugType || '',
                 p.batchNumber || '',
@@ -909,15 +964,70 @@
 
         // ─── BULK IMPORT ─────────────────────────────────────
 
+        /** Normalize a single CSV / Excel header (BOM, spaces, case). */
+        normalizeImportHeaderCell: function (h) {
+            let s = String(h == null ? '' : h).trim();
+            if (s.charCodeAt(0) === 0xfeff) {
+                s = s.slice(1).trim();
+            }
+            return s.toLowerCase().replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+        },
+
+        /**
+         * Parse expiry from CSV/Excel: ISO dates, locale strings, Excel serial numbers.
+         */
+        parseImportExpiry: function (raw) {
+            if (raw == null || raw === '') return null;
+            if (typeof raw === 'number' && !isNaN(raw)) {
+                if (raw > 20000 && raw < 100000) {
+                    const utcMs = Math.round((raw - 25569) * 86400 * 1000);
+                    const d = new Date(utcMs);
+                    if (!isNaN(d.getTime())) return firebase.firestore.Timestamp.fromDate(d);
+                }
+            }
+            const s = String(raw).trim();
+            if (!s) return null;
+            if (/^\d+(\.\d+)?$/.test(s)) {
+                const n = parseFloat(s);
+                if (n > 20000 && n < 100000) {
+                    const utcMs = Math.round((n - 25569) * 86400 * 1000);
+                    const d = new Date(utcMs);
+                    if (!isNaN(d.getTime())) return firebase.firestore.Timestamp.fromDate(d);
+                }
+            }
+            let d = new Date(s);
+            if (!isNaN(d.getTime())) return firebase.firestore.Timestamp.fromDate(d);
+            const m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+            if (m) {
+                const a = parseInt(m[1], 10);
+                const b = parseInt(m[2], 10);
+                let y = parseInt(m[3], 10);
+                if (y < 100) y += y >= 50 ? 1900 : 2000;
+                const tryOrder = [{ day: a, month: b - 1 }, { day: b, month: a - 1 }];
+                for (let i = 0; i < tryOrder.length; i++) {
+                    const dt = new Date(y, tryOrder[i].month, tryOrder[i].day);
+                    if (!isNaN(dt.getTime()) && dt.getFullYear() === y) {
+                        return firebase.firestore.Timestamp.fromDate(dt);
+                    }
+                }
+            }
+            return null;
+        },
+
+        /** Default expiry when column missing (2 years). */
+        _defaultImportExpiry: function () {
+            return firebase.firestore.Timestamp.fromDate(new Date(Date.now() + 730 * 24 * 60 * 60 * 1000));
+        },
+
         getImportTemplateHeaders: function () {
-            return ['Name', 'Category', 'Drug Type', 'Batch Number', 'Quantity', 'Buying Price', 'Selling Price', 'Expiry Date', 'Manufacturer', 'Supplier', 'Unit', 'Reorder Level', 'Dosage'];
+            return ['Name', 'Generic Name', 'Category', 'Drug Type', 'Batch Number', 'Quantity', 'Buying Price', 'Selling Price', 'Expiry Date', 'Manufacturer', 'Supplier', 'Unit', 'Reorder Level', 'Dosage'];
         },
 
         getImportSampleRows: function () {
             return [
-                ['Paracetamol 500mg', 'Analgesics & Antipyretics', 'OTC', 'BTN-2026-001', '500', '3.50', '8.00', '2027-06-15', 'GSK', 'MedSupply Ltd', 'Tablets', '50', '500mg'],
-                ['Amoxicillin 250mg', 'Antibiotics', 'POM', 'BTN-2026-002', '200', '12.00', '25.00', '2027-03-20', 'Cipla', 'PharmaDist', 'Capsules', '30', '250mg'],
-                ['Loratadine 10mg', 'Antihistamines & Allergy', 'OTC', 'BTN-2026-003', '150', '5.00', '15.00', '2028-01-10', 'Bayer', 'HealthCorp', 'Tablets', '20', '10mg']
+                ['Panadol 500mg', 'Paracetamol', 'Analgesics & Antipyretics', 'OTC', 'BTN-2026-001', '500', '3.50', '8.00', '2027-06-15', 'GSK', 'MedSupply Ltd', 'Tablets', '50', '500mg'],
+                ['Amoxicillin caps 250mg', 'Amoxicillin', 'Antibiotics', 'POM', 'BTN-2026-002', '200', '12.00', '25.00', '2027-03-20', 'Cipla', 'PharmaDist', 'Capsules', '30', '250mg'],
+                ['Claritin 10mg', 'Loratadine', 'Antihistamines & Allergy', 'OTC', 'BTN-2026-003', '150', '5.00', '15.00', '2028-01-10', 'Bayer', 'HealthCorp', 'Tablets', '20', '10mg']
             ];
         },
 
@@ -978,7 +1088,7 @@
                         <!-- Step 2: Upload File -->
                         <div class="inv-import-section">
                             <div class="inv-import-section-title"><span class="inv-import-step">2</span> Upload Your File</div>
-                            <p class="inv-import-hint">Supports <strong>.csv</strong> and <strong>.xlsx / .xls</strong> (Excel) files.</p>
+                        <p class="inv-import-hint">Supports <strong>.csv</strong> and <strong>.xlsx / .xls</strong> (Excel). Attach one file (max 50MB). UTF-8 CSV supported.</p>
                             <div class="inv-import-dropzone" id="inv-import-dropzone">
                                 <input type="file" id="inv-import-file-input" accept=".csv,.xlsx,.xls" style="display:none">
                                 <div class="inv-dropzone-inner" id="inv-dropzone-inner">
@@ -994,6 +1104,7 @@
                         <div class="inv-import-section inv-import-preview-section" id="inv-import-preview-section" style="display:none">
                             <div class="inv-import-section-title"><span class="inv-import-step">3</span> Preview &amp; Import</div>
                             <div class="inv-import-file-info" id="inv-import-file-info"></div>
+                            <div id="inv-import-warnings" class="inv-import-warnings" style="display:none" aria-live="polite"></div>
                             <div class="inv-import-preview" id="inv-import-preview-table"></div>
                             <div class="inv-import-progress" id="inv-import-progress" style="display:none">
                                 <div class="inv-progress-bar"><div class="inv-progress-fill" id="inv-progress-fill"></div></div>
@@ -1032,9 +1143,15 @@
             browseLink.addEventListener('click', (e) => { e.preventDefault(); fileInput.click(); });
 
             fileInput.addEventListener('change', (e) => {
-                if (e.target.files[0]) self.processImportFile(e.target.files[0], businessId, (products) => {
-                    parsedProducts = products;
-                });
+                const f = e.target.files && e.target.files[0];
+                if (f) {
+                    if (e.target.files.length > 1) {
+                        self.showToast('Multiple files selected — importing the first file only.', 'success');
+                    }
+                    self.processImportFile(f, businessId, (products) => {
+                        parsedProducts = products;
+                    });
+                }
             });
 
             // Drag and drop
@@ -1044,8 +1161,18 @@
             dropzone.addEventListener('drop', (e) => {
                 e.preventDefault();
                 dropzone.classList.remove('dragover');
-                const file = e.dataTransfer.files[0];
-                if (file) self.processImportFile(file, businessId, (products) => {
+                const files = e.dataTransfer && e.dataTransfer.files;
+                if (!files || !files.length) return;
+                if (files.length > 1) {
+                    self.showToast('Multiple files dropped — importing the first file only.', 'success');
+                }
+                const file = files[0];
+                const lower = file.name.toLowerCase();
+                if (!lower.endsWith('.csv') && !lower.endsWith('.xlsx') && !lower.endsWith('.xls')) {
+                    self.showToast('Please drop a CSV or Excel file (.csv, .xlsx, .xls).', 'error');
+                    return;
+                }
+                self.processImportFile(file, businessId, (products) => {
                     parsedProducts = products;
                 });
             });
@@ -1067,64 +1194,102 @@
                 this.showToast('File too large. Maximum 50MB.', 'error');
                 return;
             }
+            if (!name.endsWith('.csv') && !name.endsWith('.xlsx') && !name.endsWith('.xls')) {
+                this.showToast('Unsupported format. Use .csv, .xlsx, or .xls', 'error');
+                return;
+            }
 
-            // Update dropzone to show selected file
+            const fmtSize = file.size >= 1048576
+                ? (file.size / 1048576).toFixed(1) + ' MB'
+                : (file.size / 1024).toFixed(1) + ' KB';
+
             const inner = document.getElementById('inv-dropzone-inner');
             const ext = name.split('.').pop();
             const icon = ext === 'csv' ? 'fa-file-csv' : 'fa-file-excel';
-            inner.innerHTML = '<i class="fas ' + icon + ' inv-file-icon--' + ext + '"></i><p>' + this.escapeHtml(file.name) + '</p><small>' + (file.size / 1024).toFixed(1) + ' KB</small>';
+            if (inner) {
+                inner.innerHTML =
+                    '<div class="inv-import-attachment-card">' +
+                    '<i class="fas fa-paperclip inv-import-attach-icon"></i>' +
+                    '<div class="inv-import-attach-meta">' +
+                    '<strong class="inv-import-attach-name">' + this.escapeHtml(file.name) + '</strong>' +
+                    '<small class="inv-import-attach-size">' + this.escapeHtml(fmtSize) + ' · ' + String(ext || '').toUpperCase() + '</small>' +
+                    '</div></div>' +
+                    '<p class="inv-import-attach-hint"><a href="#" id="inv-browse-link-again">Choose a different file</a></p>';
+
+                const again = document.getElementById('inv-browse-link-again');
+                const fileInput = document.getElementById('inv-import-file-input');
+                if (again && fileInput) {
+                    again.addEventListener('click', (ev) => { ev.preventDefault(); fileInput.click(); });
+                }
+            }
 
             if (name.endsWith('.csv')) {
                 const reader = new FileReader();
+                reader.onerror = () => {
+                    this.showToast('Could not read the file. Try saving CSV as UTF-8 and upload again.', 'error');
+                };
                 reader.onload = (e) => {
-                    const products = this.parseCsvToProducts(e.target.result);
-                    if (products) {
-                        this.showImportPreview(products);
-                        onParsed(products);
+                    const parsed = this.parseCsvToProducts(e.target.result);
+                    if (parsed) {
+                        this.showImportPreview(parsed.products, parsed.stats);
+                        onParsed(parsed.products);
                     }
                 };
                 reader.readAsText(file);
             } else if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
                 if (typeof XLSX === 'undefined') {
-                    this.showToast('Excel library loading... try again.', 'error');
+                    this.showToast('Excel library loading... try again in a moment.', 'error');
                     return;
                 }
                 const reader = new FileReader();
+                reader.onerror = () => {
+                    this.showToast('Could not read the Excel file.', 'error');
+                };
                 reader.onload = (e) => {
-                    const data = new Uint8Array(e.target.result);
-                    const workbook = XLSX.read(data, { type: 'array', cellDates: true });
-                    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-                    const csvText = XLSX.utils.sheet_to_csv(firstSheet);
-                    const products = this.parseCsvToProducts(csvText);
-                    if (products) {
-                        this.showImportPreview(products);
-                        onParsed(products);
+                    try {
+                        const data = new Uint8Array(e.target.result);
+                        const workbook = XLSX.read(data, { type: 'array', cellDates: true });
+                        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+                        if (!firstSheet) {
+                            this.showToast('The workbook has no data on the first sheet.', 'error');
+                            return;
+                        }
+                        const csvText = XLSX.utils.sheet_to_csv(firstSheet, { FS: ',', RS: '\n' });
+                        const parsed = this.parseCsvToProducts(csvText);
+                        if (parsed) {
+                            this.showImportPreview(parsed.products, parsed.stats);
+                            onParsed(parsed.products);
+                        }
+                    } catch (err) {
+                        console.error('Excel import parse error:', err);
+                        this.showToast('Could not parse this Excel file. Check the first sheet has headers and data.', 'error');
                     }
                 };
                 reader.readAsArrayBuffer(file);
             } else {
-                this.showToast('Unsupported file format. Use CSV or Excel.', 'error');
+                this.showToast('Unsupported file format.', 'error');
             }
         },
 
         parseCsvToProducts: function (csvText) {
-            const lines = csvText.split(/\r?\n/).filter(l => l.trim());
+            const lines = csvText.split(/\r?\n/).filter(l => String(l).trim());
             if (lines.length < 2) {
                 this.showToast('File is empty or has no data rows.', 'error');
                 return null;
             }
 
-            const headers = this.parseCsvRow(lines[0]).map(h => h.trim().toLowerCase());
+            const headers = this.parseCsvRow(lines[0]).map(h => this.normalizeImportHeaderCell(h));
 
             const colMap = {
-                name: headers.indexOf('name') >= 0 ? headers.indexOf('name') : headers.indexOf('product name'),
-                category: headers.indexOf('category'),
-                drugType: this.findHeaderIdx(headers, ['drug type', 'drugtype', 'type', 'classification']),
+                name: this.findHeaderIdx(headers, ['name', 'product name', 'brand name', 'trade name', 'product']),
+                genericName: this.findHeaderIdx(headers, ['generic name', 'genericname', 'generic', 'inn']),
+                category: this.findHeaderIdx(headers, ['category', 'product category']),
+                drugType: this.findHeaderIdx(headers, ['drug type', 'drugtype', 'type', 'classification', 'drug classification']),
                 batchNumber: this.findHeaderIdx(headers, ['batch number', 'batchnumber', 'batch no', 'batch']),
-                quantity: this.findHeaderIdx(headers, ['quantity', 'qty']),
-                buyingPrice: this.findHeaderIdx(headers, ['buying price', 'buyingprice', 'cost price', 'cost']),
-                sellingPrice: this.findHeaderIdx(headers, ['selling price', 'sellingprice', 'price', 'sell price']),
-                expiryDate: this.findHeaderIdx(headers, ['expiry date', 'expirydate', 'expiry', 'exp date']),
+                quantity: this.findHeaderIdx(headers, ['quantity', 'qty', 'stock']),
+                buyingPrice: this.findHeaderIdx(headers, ['buying price', 'buyingprice', 'cost price', 'cost', 'buy price']),
+                sellingPrice: this.findHeaderIdx(headers, ['selling price', 'sellingprice', 'sell price', 'sale price', 'price']),
+                expiryDate: this.findHeaderIdx(headers, ['expiry date', 'expirydate', 'expiry', 'exp date', 'expiration']),
                 manufacturer: this.findHeaderIdx(headers, ['manufacturer', 'mfg']),
                 supplier: this.findHeaderIdx(headers, ['supplier']),
                 unit: this.findHeaderIdx(headers, ['unit', 'unit of measure', 'uom']),
@@ -1134,41 +1299,80 @@
             };
 
             if (colMap.name < 0) {
-                this.showToast('File must have a "Name" or "Product Name" column.', 'error');
+                this.showToast('File must have a Name or Product Name column.', 'error');
+                return null;
+            }
+
+            if (colMap.sellingPrice < 0) {
+                this.showToast('File must include a selling price column (Selling Price or Price).', 'error');
                 return null;
             }
 
             const products = [];
+            let defaultedDrugType = 0;
+            let defaultedExpiry = 0;
+
             for (let i = 1; i < lines.length; i++) {
                 const cols = this.parseCsvRow(lines[i]);
                 const name = (cols[colMap.name] || '').trim();
                 if (!name) continue;
 
-                const expiryRaw = colMap.expiryDate >= 0 ? (cols[colMap.expiryDate] || '').trim() : '';
-                let expiryTs = null;
-                if (expiryRaw) {
-                    const d = new Date(expiryRaw);
-                    if (!isNaN(d.getTime())) expiryTs = firebase.firestore.Timestamp.fromDate(d);
+                const expiryRaw = colMap.expiryDate >= 0 ? cols[colMap.expiryDate] : '';
+                let expiryTs = this.parseImportExpiry(expiryRaw);
+                if (!expiryTs) {
+                    expiryTs = this._defaultImportExpiry();
+                    defaultedExpiry++;
                 }
 
-                const drugType = colMap.drugType >= 0 ? (cols[colMap.drugType] || '').trim().toUpperCase() : '';
+                const rawDrug = colMap.drugType >= 0 ? String(cols[colMap.drugType] || '').trim().toUpperCase() : '';
                 const validTypes = ['OTC', 'POM', 'PO', 'DDA'];
+                let drugType = validTypes.includes(rawDrug) ? rawDrug : '';
+                if (!drugType) {
+                    drugType = 'OTC';
+                    defaultedDrugType++;
+                }
+
+                const qRaw = colMap.quantity >= 0 ? cols[colMap.quantity] : '';
+                const qtyParsed = parseFloat(String(qRaw != null ? qRaw : '').replace(/,/g, ''));
+                const quantity = Math.max(0, Math.floor(isFinite(qtyParsed) ? qtyParsed : 0));
+
+                const sku = colMap.sku >= 0 && String(cols[colMap.sku] || '').trim()
+                    ? String(cols[colMap.sku]).trim()
+                    : this.generateSKU();
+
+                const batchNumber = colMap.batchNumber >= 0 ? String(cols[colMap.batchNumber] || '').trim() : '';
+
+                const buyingPrice = colMap.buyingPrice >= 0 ? (parseFloat(String(cols[colMap.buyingPrice] || '').replace(/,/g, '')) || 0) : 0;
+                const sellingPrice = parseFloat(String(cols[colMap.sellingPrice] || '').replace(/,/g, '')) || 0;
 
                 products.push({
                     name: name,
-                    category: colMap.category >= 0 ? (cols[colMap.category] || '').trim() : '',
-                    drugType: validTypes.includes(drugType) ? drugType : '',
-                    batchNumber: colMap.batchNumber >= 0 ? (cols[colMap.batchNumber] || '').trim() : '',
-                    quantity: colMap.quantity >= 0 ? (parseInt(cols[colMap.quantity]) || 0) : 0,
-                    buyingPrice: colMap.buyingPrice >= 0 ? (parseFloat(cols[colMap.buyingPrice]) || 0) : 0,
-                    sellingPrice: colMap.sellingPrice >= 0 ? (parseFloat(cols[colMap.sellingPrice]) || 0) : 0,
+                    genericName: colMap.genericName >= 0 ? String(cols[colMap.genericName] || '').trim() : '',
+                    category: colMap.category >= 0 ? String(cols[colMap.category] || '').trim() : '',
+                    drugType: drugType,
+                    batchNumber: batchNumber,
+                    quantity: quantity,
+                    buyingPrice: buyingPrice,
+                    sellingPrice: sellingPrice,
                     expiryDate: expiryTs,
-                    manufacturer: colMap.manufacturer >= 0 ? (cols[colMap.manufacturer] || '').trim() : '',
-                    supplier: colMap.supplier >= 0 ? (cols[colMap.supplier] || '').trim() : '',
-                    unit: colMap.unit >= 0 ? (cols[colMap.unit] || 'Tablets').trim() : 'Tablets',
-                    reorderLevel: colMap.reorderLevel >= 0 ? (parseInt(cols[colMap.reorderLevel]) || 10) : 10,
-                    dosage: colMap.dosage >= 0 ? (cols[colMap.dosage] || '').trim() : '',
-                    sku: colMap.sku >= 0 && (cols[colMap.sku] || '').trim() ? (cols[colMap.sku]).trim() : this.generateSKU(),
+                    stockBatches: [{
+                        batchNumber: batchNumber || sku,
+                        quantity: quantity,
+                        expiryDate: expiryTs,
+                        addedAt: new Date().toISOString(),
+                        source: 'import'
+                    }],
+                    manufacturer: colMap.manufacturer >= 0 ? String(cols[colMap.manufacturer] || '').trim() : '',
+                    dosage: colMap.dosage >= 0 ? String(cols[colMap.dosage] || '').trim() : '',
+                    description: '',
+                    supplier: colMap.supplier >= 0 ? String(cols[colMap.supplier] || '').trim() : '',
+                    invoiceNumber: '',
+                    unit: colMap.unit >= 0 ? String(cols[colMap.unit] || 'Tablets').trim() : 'Tablets',
+                    reorderLevel: colMap.reorderLevel >= 0 ? (parseInt(String(cols[colMap.reorderLevel]), 10) || 10) : 10,
+                    sku: sku,
+                    vatEnabled: false,
+                    vatType: 'percent',
+                    vatValue: 0,
                     createdAt: new Date().toISOString(),
                     updatedAt: new Date().toISOString(),
                     createdBy: PharmaFlow.Auth?.currentUser?.uid || ''
@@ -1180,7 +1384,13 @@
                 return null;
             }
 
-            return products;
+            return {
+                products: products,
+                stats: {
+                    defaultedDrugType: defaultedDrugType,
+                    defaultedExpiry: defaultedExpiry
+                }
+            };
         },
 
         parseCsvRow: function (line) {
@@ -1211,10 +1421,11 @@
             return -1;
         },
 
-        showImportPreview: function (products) {
+        showImportPreview: function (products, stats) {
             const section = document.getElementById('inv-import-preview-section');
             const previewEl = document.getElementById('inv-import-preview-table');
             const fileInfo = document.getElementById('inv-import-file-info');
+            const warnEl = document.getElementById('inv-import-warnings');
             const confirmBtn = document.getElementById('inv-import-confirm');
 
             if (!section || !previewEl) return;
@@ -1225,12 +1436,31 @@
 
             fileInfo.innerHTML = '<i class="fas fa-check-circle" style="color:var(--success)"></i> <strong>' + products.length + '</strong> products ready to import';
 
+            if (warnEl) {
+                const defExp = stats && stats.defaultedExpiry > 0 ? stats.defaultedExpiry : 0;
+                const defDrug = stats && stats.defaultedDrugType > 0 ? stats.defaultedDrugType : 0;
+                if (defExp > 0 || defDrug > 0) {
+                    warnEl.style.display = 'block';
+                    const parts = [];
+                    if (defDrug > 0) {
+                        parts.push('Drug type was missing or invalid for <strong>' + defDrug + '</strong> row(s); set to <code>OTC</code>.');
+                    }
+                    if (defExp > 0) {
+                        parts.push('Expiry was missing or invalid for <strong>' + defExp + '</strong> row(s); defaulted to ~2 years from import date.');
+                    }
+                    warnEl.innerHTML = '<strong>Defaults applied</strong><ul>' + parts.map(p => '<li>' + p + '</li>').join('') + '</ul>';
+                } else {
+                    warnEl.style.display = 'none';
+                    warnEl.innerHTML = '';
+                }
+            }
+
             const showCount = Math.min(products.length, 10);
-            previewEl.innerHTML = '<table class="inv-preview-table"><thead><tr><th>#</th><th>Name</th><th>Category</th><th>Drug Type</th><th>Qty</th><th>Buy Price</th><th>Sell Price</th></tr></thead><tbody>' +
+            previewEl.innerHTML = '<table class="inv-preview-table"><thead><tr><th>#</th><th>Name</th><th>Generic</th><th>Category</th><th>Drug Type</th><th>Qty</th><th>Buy Price</th><th>Sell Price</th></tr></thead><tbody>' +
                 products.slice(0, showCount).map((p, i) => {
-                    return '<tr><td>' + (i + 1) + '</td><td>' + this.escapeHtml(p.name) + '</td><td>' + this.escapeHtml(p.category) + '</td><td>' + (p.drugType || '-') + '</td><td>' + p.quantity + '</td><td>' + this.formatCurrency(p.buyingPrice) + '</td><td>' + this.formatCurrency(p.sellingPrice) + '</td></tr>';
+                    return '<tr><td>' + (i + 1) + '</td><td>' + this.escapeHtml(p.name) + '</td><td>' + this.escapeHtml(p.genericName || '—') + '</td><td>' + this.escapeHtml(p.category) + '</td><td>' + (p.drugType || '-') + '</td><td>' + p.quantity + '</td><td>' + this.formatCurrency(p.buyingPrice) + '</td><td>' + this.formatCurrency(p.sellingPrice) + '</td></tr>';
                 }).join('') +
-                (products.length > showCount ? '<tr><td colspan="7" style="text-align:center;color:var(--text-tertiary);font-style:italic">... and ' + (products.length - showCount) + ' more products</td></tr>' : '') +
+                (products.length > showCount ? '<tr><td colspan="8" style="text-align:center;color:var(--text-tertiary);font-style:italic">... and ' + (products.length - showCount) + ' more products</td></tr>' : '') +
                 '</tbody></table>';
 
             // Scroll preview into view
@@ -1282,6 +1512,15 @@
                     this.showToast('Imported ' + imported + ' products. ' + failed + ' failed.', 'error');
                 } else {
                     this.showToast('Successfully imported ' + imported + ' products!');
+                    if (PharmaFlow.ActivityLog) {
+                        PharmaFlow.ActivityLog.log({
+                            title: 'Bulk inventory import',
+                            description: 'Imported ' + imported + ' product(s) from file.',
+                            category: 'Inventory',
+                            status: 'COMPLETED',
+                            metadata: { count: imported, businessId: businessId }
+                        });
+                    }
                 }
             }, 800);
         },
@@ -1318,8 +1557,8 @@
                                     <h4><i class="fas fa-info-circle"></i> Product Information</h4>
                                     <div class="inv-form-row">
                                         <div class="inv-form-group">
-                                            <label for="inv-name">Product Name <span class="req">*</span></label>
-                                            <input type="text" id="inv-name" required placeholder="e.g. Paracetamol 500mg">
+                                            <label for="inv-name">Brand / trade name <span class="req">*</span></label>
+                                            <input type="text" id="inv-name" required placeholder="e.g. Panadol 500mg">
                                         </div>
                                         <div class="inv-form-group">
                                             <label for="inv-category">Category <span class="req">*</span></label>
@@ -1327,6 +1566,12 @@
                                                 <option value="">Select Category</option>
                                                 ${this.DRUG_CATEGORIES.map(c => '<option value="' + c + '">' + c + '</option>').join('')}
                                             </select>
+                                        </div>
+                                    </div>
+                                    <div class="inv-form-row">
+                                        <div class="inv-form-group full-width">
+                                            <label for="inv-generic-name">Generic name</label>
+                                            <input type="text" id="inv-generic-name" placeholder="e.g. Paracetamol (optional)">
                                         </div>
                                     </div>
                                     <div class="inv-form-row">
@@ -1445,6 +1690,12 @@
                                             </div>
                                         </div>
                                     </div>
+                                    <div class="inv-form-row" id="inv-row-total-with-vat" style="display:none;">
+                                        <div class="inv-form-group full-width">
+                                            <label>Total with VAT (per unit)</label>
+                                            <div class="inv-margin-display inv-total-with-vat" id="inv-total-with-vat">—</div>
+                                        </div>
+                                    </div>
                                     <div class="inv-form-row">
                                         <div class="inv-form-group">
                                             <label>Profit Margin</label>
@@ -1535,7 +1786,18 @@
                 }
             };
             if (buyInput) buyInput.addEventListener('input', updateMargin);
-            if (sellInput) sellInput.addEventListener('input', updateMargin);
+            if (sellInput) sellInput.addEventListener('input', () => {
+                updateMargin();
+                this.updateAddFormVatTotalPreview();
+            });
+            const vatEn = document.getElementById('inv-vat-enabled');
+            const vatVal = document.getElementById('inv-vat-value');
+            const vatTyp = document.getElementById('inv-vat-type');
+            const vatUpd = () => this.updateAddFormVatTotalPreview();
+            if (vatEn) vatEn.addEventListener('change', vatUpd);
+            if (vatVal) vatVal.addEventListener('input', vatUpd);
+            if (vatTyp) vatTyp.addEventListener('change', vatUpd);
+            this.updateAddFormVatTotalPreview();
 
             // Form submit
             const form = document.getElementById('inv-add-form');
@@ -1556,6 +1818,7 @@
 
             const submitBtn = document.getElementById('inv-submit-btn');
             const name = document.getElementById('inv-name')?.value?.trim();
+            const genericName = document.getElementById('inv-generic-name')?.value?.trim() || '';
             const category = document.getElementById('inv-category')?.value?.trim();
             const batch = document.getElementById('inv-batch')?.value?.trim();
             const quantity = parseInt(document.getElementById('inv-quantity')?.value) || 0;
@@ -1596,6 +1859,7 @@
 
             const product = {
                 name: name,
+                genericName: genericName,
                 category: category,
                 drugType: drugType,
                 sku: sku,
@@ -1681,6 +1945,7 @@
                     <div class="inv-modal-body">
                         <div class="inv-stock-info">
                             <strong>${this.escapeHtml(product.name)}</strong>
+                            ${product.genericName ? '<small class="inv-product-generic">' + this.escapeHtml(product.genericName) + '</small>' : ''}
                             <span>Current Stock: <b>${product.quantity || 0}</b></span>
                         </div>
                         <div class="inv-stock-history-wrap">
@@ -1836,7 +2101,7 @@
                         <div class="inv-modal-body">
                             <div class="inv-form-row">
                                 <div class="inv-form-group">
-                                    <label>Product Name <span class="req">*</span></label>
+                                    <label>Brand / trade name <span class="req">*</span></label>
                                     <input type="text" id="edit-name" required value="${this.escapeHtml(product.name || '')}">
                                 </div>
                                 <div class="inv-form-group">
@@ -1845,6 +2110,12 @@
                                         <option value="">Select Category</option>
                                         ${this.DRUG_CATEGORIES.map(c => '<option value="' + c + '"' + (product.category === c ? ' selected' : '') + '>' + c + '</option>').join('')}
                                     </select>
+                                </div>
+                            </div>
+                            <div class="inv-form-row">
+                                <div class="inv-form-group full-width">
+                                    <label for="edit-generic-name">Generic name</label>
+                                    <input type="text" id="edit-generic-name" value="${this.escapeHtml(product.genericName || '')}" placeholder="Optional">
                                 </div>
                             </div>
                             <div class="inv-form-row">
@@ -1884,6 +2155,12 @@
                                             <option value="amount" ${product.vatType === 'amount' ? 'selected' : ''}>KSH</option>
                                         </select>
                                     </div>
+                                </div>
+                            </div>
+                            <div class="inv-form-row" id="edit-row-total-with-vat" style="display:none;">
+                                <div class="inv-form-group full-width">
+                                    <label>Total with VAT (per unit)</label>
+                                    <div class="inv-margin-display inv-total-with-vat" id="edit-total-with-vat">—</div>
                                 </div>
                             </div>
                             <div class="inv-form-row">
@@ -1946,6 +2223,13 @@
                 e.preventDefault();
                 await this.handleEditProduct(productId, closeModal);
             });
+
+            const editVatUpd = () => this.updateEditFormVatTotalPreview();
+            document.getElementById('edit-selling-price')?.addEventListener('input', editVatUpd);
+            document.getElementById('edit-vat-enabled')?.addEventListener('change', editVatUpd);
+            document.getElementById('edit-vat-value')?.addEventListener('input', editVatUpd);
+            document.getElementById('edit-vat-type')?.addEventListener('change', editVatUpd);
+            this.updateEditFormVatTotalPreview();
         },
 
         handleEditProduct: async function (productId, closeModal) {
@@ -1963,6 +2247,7 @@
             const expiryStr = document.getElementById('edit-expiry')?.value;
             const updates = {
                 name: document.getElementById('edit-name')?.value?.trim() || '',
+                genericName: document.getElementById('edit-generic-name')?.value?.trim() || '',
                 category: document.getElementById('edit-category')?.value?.trim() || '',
                 batchNumber: document.getElementById('edit-batch')?.value?.trim() || '',
                 quantity: parseInt(document.getElementById('edit-quantity')?.value) || 0,

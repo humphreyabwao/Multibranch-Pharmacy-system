@@ -54,6 +54,49 @@
             this.bindPasswordToggle();
         },
 
+        /**
+         * Show/hide login page alert boxes (.login-hidden uses !important; must toggle class)
+         */
+        _setLoginAlertVisible: function (elementId, visible) {
+            const el = document.getElementById(elementId);
+            if (!el) return;
+            if (visible) {
+                el.classList.remove('login-hidden');
+            } else {
+                el.classList.add('login-hidden');
+            }
+        },
+
+        /**
+         * Login button: show animated loading state
+         */
+        setLoginSubmitLoading: function (loading) {
+            const btn = document.getElementById('login-btn');
+            const defaultEl = document.getElementById('login-btn-default');
+            const loadingEl = document.getElementById('login-btn-loading');
+            if (!btn) return;
+
+            if (loading) {
+                btn.classList.add('is-loading');
+                btn.disabled = true;
+                btn.setAttribute('aria-busy', 'true');
+                if (defaultEl) defaultEl.setAttribute('aria-hidden', 'true');
+                if (loadingEl) {
+                    loadingEl.classList.remove('login-hidden');
+                    loadingEl.setAttribute('aria-hidden', 'false');
+                }
+            } else {
+                btn.classList.remove('is-loading');
+                btn.disabled = false;
+                btn.setAttribute('aria-busy', 'false');
+                if (defaultEl) defaultEl.setAttribute('aria-hidden', 'false');
+                if (loadingEl) {
+                    loadingEl.classList.add('login-hidden');
+                    loadingEl.setAttribute('aria-hidden', 'true');
+                }
+            }
+        },
+
         clearCachedSessionState: function () {
             try {
                 const keysToRemove = [];
@@ -250,16 +293,16 @@
          */
         showLoginError: function (msg) {
             const errorDiv = document.getElementById('login-error');
+            const msgEl = document.getElementById('login-error-text');
+            if (msgEl) msgEl.textContent = msg || '';
             if (errorDiv) {
-                errorDiv.textContent = msg;
-                errorDiv.style.display = 'flex';
+                errorDiv.classList.remove('login-shake');
+                void errorDiv.offsetWidth;
+                errorDiv.classList.add('login-shake');
+                this._setLoginAlertVisible('login-error', true);
             }
-            // Reset login button state
-            const btn = document.getElementById('login-btn');
-            if (btn) {
-                btn.disabled = false;
-                btn.innerHTML = '<span>Sign In</span><i class="fas fa-arrow-right"></i>';
-            }
+            this._setLoginAlertVisible('login-success', false);
+            this.setLoginSubmitLoading(false);
         },
 
         /**
@@ -360,22 +403,26 @@
                 e.preventDefault();
                 const email = document.getElementById('login-email').value.trim();
                 const password = document.getElementById('login-password').value;
-                const btn = document.getElementById('login-btn');
                 const errorDiv = document.getElementById('login-error');
-                const successDiv = document.getElementById('login-success');
 
-                errorDiv.style.display = 'none';
-                successDiv.style.display = 'none';
-                btn.disabled = true;
-                btn.innerHTML = '<span class="spinner"></span><span>Signing in...</span>';
+                this._setLoginAlertVisible('login-error', false);
+                this._setLoginAlertVisible('login-success', false);
+                if (errorDiv) errorDiv.classList.remove('login-shake');
+                this.setLoginSubmitLoading(true);
 
                 try {
                     await this.signIn(email, password);
                 } catch (errMsg) {
-                    errorDiv.textContent = errMsg;
-                    errorDiv.style.display = 'flex';
-                    btn.disabled = false;
-                    btn.innerHTML = '<span>Sign In</span><i class="fas fa-arrow-right"></i>';
+                    const msgEl = document.getElementById('login-error-text');
+                    const text = typeof errMsg === 'string' ? errMsg : 'Sign in failed. Please try again.';
+                    if (msgEl) msgEl.textContent = text;
+                    if (errorDiv) {
+                        errorDiv.classList.remove('login-shake');
+                        void errorDiv.offsetWidth;
+                        errorDiv.classList.add('login-shake');
+                    }
+                    this._setLoginAlertVisible('login-error', true);
+                    this.setLoginSubmitLoading(false);
                 }
             });
         },
@@ -396,36 +443,36 @@
                 loginForm.classList.add('login-hidden');
                 forgotForm.classList.remove('login-hidden');
                 forgotForm.style.display = '';
-                document.getElementById('login-error').style.display = 'none';
-                document.getElementById('login-success').style.display = 'none';
+                this._setLoginAlertVisible('login-error', false);
+                this._setLoginAlertVisible('login-success', false);
             });
 
             backBtn.addEventListener('click', () => {
                 forgotForm.classList.add('login-hidden');
                 forgotForm.style.display = 'none';
                 loginForm.classList.remove('login-hidden');
-                document.getElementById('login-error').style.display = 'none';
-                document.getElementById('login-success').style.display = 'none';
+                this._setLoginAlertVisible('login-error', false);
+                this._setLoginAlertVisible('login-success', false);
             });
 
             forgotForm.addEventListener('submit', async (e) => {
                 e.preventDefault();
                 const email = document.getElementById('reset-email').value.trim();
-                const errorDiv = document.getElementById('login-error');
                 const successDiv = document.getElementById('login-success');
                 const btn = document.getElementById('reset-btn');
 
-                errorDiv.style.display = 'none';
-                successDiv.style.display = 'none';
+                this._setLoginAlertVisible('login-error', false);
+                this._setLoginAlertVisible('login-success', false);
                 btn.disabled = true;
 
                 try {
                     await this.resetPassword(email);
                     successDiv.textContent = 'Password reset email sent. Check your inbox.';
-                    successDiv.style.display = 'flex';
+                    this._setLoginAlertVisible('login-success', true);
                 } catch (errMsg) {
-                    errorDiv.textContent = errMsg;
-                    errorDiv.style.display = 'flex';
+                    const msgEl = document.getElementById('login-error-text');
+                    if (msgEl) msgEl.textContent = errMsg;
+                    this._setLoginAlertVisible('login-error', true);
                 }
 
                 btn.disabled = false;

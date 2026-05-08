@@ -537,13 +537,15 @@
                 invSnap.forEach(doc => {
                     const d = doc.data();
                     const name = (d.name || '').toLowerCase();
+                    const generic = (d.genericName || '').toLowerCase();
                     const sku = (d.sku || '').toLowerCase();
                     const category = (d.category || '').toLowerCase();
-                    if (name.includes(q) || sku.includes(q) || category.includes(q)) {
+                    if (name.includes(q) || generic.includes(q) || sku.includes(q) || category.includes(q)) {
+                        const subExtra = d.genericName ? ` | Generic: ${d.genericName}` : '';
                         results.push({
                             type: 'inventory', icon: 'fas fa-pills', color: 'green',
                             title: d.name || 'Unknown Product',
-                            subtitle: `SKU: ${d.sku || 'N/A'} | Qty: ${d.quantity || 0} | ${this.formatCurrency(d.sellingPrice || 0)}`,
+                            subtitle: `SKU: ${d.sku || 'N/A'} | Qty: ${d.quantity || 0} | ${this.formatCurrency(d.sellingPrice || 0)}${subExtra}`,
                             navigate: { module: 'inventory', sub: 'view-inventory' }
                         });
                     }

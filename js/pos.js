@@ -30,6 +30,27 @@
             }).format(amount || 0);
         },
 
+        /** Money amounts: 2 decimal places, consistent with KES / receipts / Firestore. */
+        roundMoney: function (n) {
+            const x = Number(n);
+            if (!isFinite(x)) return 0;
+            return Math.round(x * 100) / 100;
+        },
+
+        /** Quantity on cart lines (qty) or stored sale lines (quantity). */
+        getLineQuantity: function (item) {
+            const q = item.qty != null ? item.qty : item.quantity;
+            const n = Number(q);
+            return isFinite(n) && n > 0 ? n : 0;
+        },
+
+        /** Unit selling price on cart (price) or sale item (unitPrice). */
+        getLineUnitPrice: function (item) {
+            const p = item.price != null ? item.price : item.unitPrice;
+            const n = parseFloat(p);
+            return isFinite(n) ? n : 0;
+        },
+
         escapeHtml: function (str) {
             const div = document.createElement('div');
             div.textContent = str || '';
@@ -127,7 +148,15 @@
 
                             <div class="pos-cart-summary" id="pos-cart-summary">
                                 <div class="pos-summary-row">
-                                    <span>Subtotal</span>
+                                    <span>Subtotal (ex. VAT)</span>
+                                    <span id="pos-base-subtotal">KSH 0.00</span>
+                                </div>
+                                <div class="pos-summary-row" id="pos-product-vat-summary-row" style="display:none;">
+                                    <span>Product VAT</span>
+                                    <span id="pos-product-vat-total">KSH 0.00</span>
+                                </div>
+                                <div class="pos-summary-row" style="font-weight:600;">
+                                    <span>Subtotal (incl. VAT)</span>
                                     <span id="pos-subtotal">KSH 0.00</span>
                                 </div>
                                 <div class="pos-summary-row">
@@ -512,9 +541,10 @@
                 // Text search
                 if (q) {
                     const matchName = (p.name || '').toLowerCase().includes(q);
+                    const matchGeneric = (p.genericName || '').toLowerCase().includes(q);
                     const matchSku = (p.sku || '').toLowerCase().includes(q);
                     const matchCat = (p.category || '').toLowerCase().includes(q);
-                    if (!matchName && !matchSku && !matchCat) return false;
+                    if (!matchName && !matchGeneric && !matchSku && !matchCat) return false;
                 }
                 // Filter pills
                 if (filter === 'in-stock') return (p.quantity || 0) > 0;
@@ -553,7 +583,10 @@
                     <div class="pos-product-card ${outOfStock ? 'pos-product--oos' : ''} ${inCart ? 'pos-product--in-cart' : ''}" 
                          data-id="${p.id}" ${outOfStock ? '' : 'tabindex="0"'}>
                         <div class="pos-product-top">
-                            <span class="pos-product-name">${this.escapeHtml(p.name)}</span>
+                            <span class="pos-product-name-wrap">
+                                <span class="pos-product-name">${this.escapeHtml(p.name)}</span>
+                                ${p.genericName ? '<span class="pos-product-generic">' + this.escapeHtml(p.genericName) + '</span>' : ''}
+                            </span>
                             ${drugBadge}
                         </div>
                         <div class="pos-product-meta">
@@ -589,6 +622,88 @@
             return '<span class="pos-drug-badge pos-drug--' + info.cls + '">' + info.label + '</span>';
         },
 
+        /**
+         * Product VAT from inventory (same rules as add/edit product):
+         * - percent: % of (unit selling price × qty), rate capped 0–100; VAT is exclusive of that line subtotal.
+         * - amount: fixed KSH VAT per unit × qty (matches inventory “KSH” VAT type).
+         * Rounded per line so receipts and stored productVatAmount stay consistent.
+         */
+        getPosLineProductVat: function (item) {
+            if (!item || !item.vatEnabled) return 0;
+            const raw = parseFloat(item.vatValue);
+            if (!isFinite(raw) || raw <= 0) return 0;
+            const qty = this.getLineQuantity(item);
+            if (qty <= 0) return 0;
+            const unitPrice = this.getLineUnitPrice(item);
+            const lineSubtotal = this.roundMoney(unitPrice * qty);
+            const vatType = (item.vatType || 'percent') === 'amount' ? 'amount' : 'percent';
+
+            if (vatType === 'amount') {
+                return this.roundMoney(raw * qty);
+            }
+            const pct = Math.min(Math.max(raw, 0), 100);
+            return this.roundMoney(lineSubtotal * (pct / 100));
+        },
+
+        /** Resolve per-line product VAT on a stored sale item (for receipt / reprint). */
+        getProductVatForReceiptItem: function (item) {
+            if (item && item.productVatAmount != null && item.productVatAmount !== '') {
+                return this.roundMoney(parseFloat(item.productVatAmount));
+            }
+            return this.getPosLineProductVat({
+                price: item.unitPrice,
+                qty: item.quantity,
+                quantity: item.quantity,
+                vatEnabled: item.vatEnabled,
+                vatType: item.vatType,
+                vatValue: item.vatValue
+            });
+        },
+
+        /** Line merchandise total (unit × qty), excl. product VAT. */
+        getLineBaseTotal: function (item) {
+            return this.roundMoney(this.getLineUnitPrice(item) * this.getLineQuantity(item));
+        },
+
+        /** Line amount incl. inventory product VAT (what the customer pays for that line before cart discount). */
+        getLineGrossTotal: function (item) {
+            return this.roundMoney(this.getLineBaseTotal(item) + this.getPosLineProductVat(item));
+        },
+
+        /**
+         * Gross line amount for receipt (stored new sales use lineGrossTotal; legacy: lineTotal + product VAT).
+         */
+        getReceiptLineGross: function (item) {
+            if (item && item.lineGrossTotal != null && item.lineGrossTotal !== '') {
+                return this.roundMoney(parseFloat(item.lineGrossTotal));
+            }
+            const pv = this.getProductVatForReceiptItem(item);
+            const legacyBase = this.roundMoney(parseFloat(item.lineTotal) || 0);
+            if (pv > 0) {
+                return this.roundMoney(legacyBase + pv);
+            }
+            return legacyBase;
+        },
+
+        /**
+         * Receipt VAT cell text: inventory % → "16%"; inventory KSH (amount) → "KSH x.xx" for that line's VAT.
+         */
+        formatReceiptLineVatDisplay: function (item) {
+            const lineVat = this.getProductVatForReceiptItem(item);
+            if (lineVat <= 0) return '—';
+            const vatType = (item.vatType || 'percent') === 'amount' ? 'amount' : 'percent';
+            if (vatType === 'amount') {
+                return this.formatCurrency(lineVat);
+            }
+            const vr = parseFloat(item.vatValue);
+            if (vr > 0 || item.vatEnabled) {
+                const v = Math.min(Math.max(0, vr || 0), 100);
+                const pctStr = Number.isInteger(v) ? String(v) : String(parseFloat(v.toFixed(2)));
+                return pctStr + '%';
+            }
+            return this.formatCurrency(lineVat);
+        },
+
         // ─── CART ────────────────────────────────────────────
 
         addToCart: function (productId) {
@@ -616,7 +731,10 @@
                     qty: 1,
                     maxQty: product.quantity || 0,
                     drugType: product.drugType || '',
-                    category: product.category || ''
+                    category: product.category || '',
+                    vatEnabled: !!product.vatEnabled,
+                    vatType: product.vatType || 'percent',
+                    vatValue: parseFloat(product.vatValue) || 0
                 });
             }
 
@@ -690,7 +808,7 @@
                         </button>
                     </div>
                     <div class="pos-cart-item-price">
-                        ${this.formatCurrency(item.price * item.qty)}
+                        ${this.formatCurrency(this.getLineGrossTotal(item))}
                     </div>
                     <button class="pos-cart-remove" data-id="${item.id}" title="Remove">
                         <i class="fas fa-times"></i>
@@ -725,7 +843,16 @@
         // ─── TOTALS ─────────────────────────────────────────
 
         getCurrentTotals: function () {
-            const subtotal = cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
+            const baseSubtotal = this.roundMoney(
+                cart.reduce((sum, item) => sum + this.getLineBaseTotal(item), 0)
+            );
+            const productVatTotal = this.roundMoney(
+                cart.reduce((sum, item) => sum + this.getPosLineProductVat(item), 0)
+            );
+            const grossSubtotal = this.roundMoney(
+                cart.reduce((sum, item) => sum + this.getLineGrossTotal(item), 0)
+            );
+
             const discountInput = document.getElementById('pos-discount');
             const discountType = document.getElementById('pos-discount-type');
             const vatInput = document.getElementById('pos-vat');
@@ -736,35 +863,38 @@
             const discountValue = parseFloat(discountInput?.value) || 0;
             if (discountValue > 0) {
                 if (discountType?.value === 'percent') {
-                    discount = subtotal * (Math.min(discountValue, 100) / 100);
+                    discount = this.roundMoney(grossSubtotal * (Math.min(discountValue, 100) / 100));
                 } else {
-                    discount = Math.min(discountValue, subtotal);
+                    discount = this.roundMoney(Math.min(discountValue, grossSubtotal));
                 }
             }
 
-            const netTotal = Math.max(subtotal - discount, 0);
+            const netTotal = this.roundMoney(Math.max(grossSubtotal - discount, 0));
 
             let vatAmount = 0;
-            const vatValue = parseFloat(vatInput?.value) || 0;
+            const posVatValue = parseFloat(vatInput?.value) || 0;
             const vatEnabled = !!applyVat?.checked;
-            if (vatEnabled && vatValue > 0) {
+            if (vatEnabled && posVatValue > 0) {
                 if (vatType?.value === 'percent') {
-                    vatAmount = netTotal * (Math.min(vatValue, 100) / 100);
+                    vatAmount = this.roundMoney(netTotal * (Math.min(posVatValue, 100) / 100));
                 } else {
-                    vatAmount = Math.min(vatValue, netTotal);
+                    vatAmount = this.roundMoney(Math.min(posVatValue, netTotal));
                 }
             }
 
-            const total = netTotal + vatAmount;
+            const total = this.roundMoney(netTotal + vatAmount);
 
             return {
-                subtotal,
+                baseSubtotal,
+                productVatTotal,
+                grossSubtotal,
+                subtotal: baseSubtotal,
                 discountValue,
                 discountType: discountType?.value || 'amount',
                 discountAmount: discount,
                 netTotal,
                 vatEnabled,
-                vatValue,
+                vatValue: posVatValue,
                 vatType: vatType?.value || 'percent',
                 vatAmount,
                 total
@@ -774,11 +904,23 @@
         updateTotals: function () {
             const totals = this.getCurrentTotals();
 
+            const baseSubEl = document.getElementById('pos-base-subtotal');
+            const prodVatRow = document.getElementById('pos-product-vat-summary-row');
+            const prodVatEl = document.getElementById('pos-product-vat-total');
             const subtotalEl = document.getElementById('pos-subtotal');
             const netTotalEl = document.getElementById('pos-net-total');
             const vatAmountEl = document.getElementById('pos-vat-amount');
             const totalEl = document.getElementById('pos-total');
-            if (subtotalEl) subtotalEl.textContent = this.formatCurrency(totals.subtotal);
+            if (baseSubEl) baseSubEl.textContent = this.formatCurrency(totals.baseSubtotal);
+            if (prodVatRow && prodVatEl) {
+                if (totals.productVatTotal > 0) {
+                    prodVatRow.style.display = '';
+                    prodVatEl.textContent = this.formatCurrency(totals.productVatTotal);
+                } else {
+                    prodVatRow.style.display = 'none';
+                }
+            }
+            if (subtotalEl) subtotalEl.textContent = this.formatCurrency(totals.grossSubtotal);
             if (netTotalEl) netTotalEl.textContent = this.formatCurrency(totals.netTotal);
             if (vatAmountEl) vatAmountEl.textContent = this.formatCurrency(totals.vatAmount);
             if (totalEl) totalEl.textContent = this.formatCurrency(totals.total);
@@ -788,13 +930,13 @@
 
         computeChange: function () {
             const total = this.getCurrentTotals().total;
-            const paid = parseFloat(document.getElementById('pos-amount-paid')?.value) || 0;
+            const paid = this.roundMoney(parseFloat(document.getElementById('pos-amount-paid')?.value) || 0);
             const changeEl = document.getElementById('pos-change-due');
             const changeAmt = document.getElementById('pos-change-amount');
 
             if (paid > 0 && changeEl && changeAmt) {
                 changeEl.style.display = 'block';
-                const change = paid - total;
+                const change = this.roundMoney(paid - total);
                 changeAmt.textContent = this.formatCurrency(Math.max(change, 0));
                 changeAmt.style.color = change >= 0 ? 'var(--success)' : 'var(--danger)';
             } else if (changeEl) {
@@ -818,11 +960,14 @@
 
             try {
                 const totals = this.getCurrentTotals();
-                const totalProfit = cart.reduce((sum, item) => sum + ((item.price - item.buyingPrice) * item.qty), 0) - totals.discountAmount;
+                const totalProfit = this.roundMoney(
+                    cart.reduce((sum, item) => sum + this.roundMoney((this.getLineUnitPrice(item) - (parseFloat(item.buyingPrice) || 0)) * this.getLineQuantity(item)), 0) - totals.discountAmount
+                );
 
                 const paymentMethod = document.querySelector('.pos-pay-method.active')?.dataset.method || 'cash';
-                const amountPaid = paymentMethod === 'cash' ? (parseFloat(document.getElementById('pos-amount-paid')?.value) || totals.total) : totals.total;
-                const changeDue = Math.max(amountPaid - totals.total, 0);
+                const amountPaidRaw = paymentMethod === 'cash' ? (parseFloat(document.getElementById('pos-amount-paid')?.value) || totals.total) : totals.total;
+                const amountPaid = this.roundMoney(amountPaidRaw);
+                const changeDue = this.roundMoney(Math.max(amountPaid - totals.total, 0));
 
                 const saleId = this.generateSaleId();
                 const now = new Date();
@@ -834,19 +979,34 @@
                         name: (document.getElementById('pos-customer-name')?.value || '').trim(),
                         phone: (document.getElementById('pos-customer-phone')?.value || '').trim()
                     },
-                    items: cart.map(item => ({
-                        productId: item.id,
-                        name: item.name,
-                        sku: item.sku,
-                        category: item.category,
-                        drugType: item.drugType,
-                        unitPrice: item.price,
-                        buyingPrice: item.buyingPrice,
-                        quantity: item.qty,
-                        lineTotal: item.price * item.qty,
-                        profit: (item.price - item.buyingPrice) * item.qty
-                    })),
-                    subtotal: totals.subtotal,
+                    items: cart.map(item => {
+                        const qty = this.getLineQuantity(item);
+                        const unitPrice = this.getLineUnitPrice(item);
+                        const lineBaseTotal = this.getLineBaseTotal(item);
+                        const productVatAmount = this.getPosLineProductVat(item);
+                        const lineGrossTotal = this.getLineGrossTotal(item);
+                        return {
+                            productId: item.id,
+                            name: item.name,
+                            sku: item.sku,
+                            category: item.category,
+                            drugType: item.drugType,
+                            unitPrice: unitPrice,
+                            buyingPrice: parseFloat(item.buyingPrice) || 0,
+                            quantity: qty,
+                            lineBaseTotal: lineBaseTotal,
+                            productVatAmount: productVatAmount,
+                            lineGrossTotal: lineGrossTotal,
+                            lineTotal: lineGrossTotal,
+                            profit: this.roundMoney((unitPrice - (parseFloat(item.buyingPrice) || 0)) * qty),
+                            vatEnabled: !!item.vatEnabled,
+                            vatType: item.vatType || 'percent',
+                            vatValue: parseFloat(item.vatValue) || 0
+                        };
+                    }),
+                    subtotal: totals.baseSubtotal,
+                    productVatTotal: totals.productVatTotal,
+                    grossSubtotal: totals.grossSubtotal,
                     discountValue: totals.discountValue,
                     discountType: totals.discountType,
                     discountAmount: totals.discountAmount,
@@ -946,15 +1106,7 @@
             const dateStr = now.toLocaleDateString('en-KE', { year: 'numeric', month: 'short', day: 'numeric' });
             const timeStr = now.toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
 
-            const itemsHtml = sale.items.map((item, i) => `
-                <tr>
-                    <td>${i + 1}</td>
-                    <td>${this.escapeHtml(item.name)}</td>
-                    <td style="text-align:center">${item.quantity}</td>
-                    <td style="text-align:right">${this.formatCurrency(item.unitPrice)}</td>
-                    <td style="text-align:right">${this.formatCurrency(item.lineTotal)}</td>
-                </tr>
-            `).join('');
+            const hasLineProductVat = sale.items.some(it => this.getProductVatForReceiptItem(it) > 0);
 
             const modal = document.createElement('div');
             modal.className = 'pos-modal-overlay';
@@ -985,19 +1137,47 @@
                                     <th>Item</th>
                                     <th style="text-align:center">Qty</th>
                                     <th style="text-align:right">Price</th>
+                                    ${hasLineProductVat ? '<th style="text-align:right">VAT</th>' : ''}
                                     <th style="text-align:right">Total</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                ${itemsHtml}
+                                ${sale.items.map((item, i) => {
+                                    const vatCell = this.formatReceiptLineVatDisplay(item);
+                                    const vatCol = hasLineProductVat
+                                        ? `<td style="text-align:right">${vatCell}</td>`
+                                        : '';
+                                    return `
+                <tr>
+                    <td>${i + 1}</td>
+                    <td>${this.escapeHtml(item.name)}</td>
+                    <td style="text-align:center">${item.quantity}</td>
+                    <td style="text-align:right">${this.formatCurrency(item.unitPrice)}</td>
+                    ${vatCol}
+                    <td style="text-align:right">${this.formatCurrency(this.getReceiptLineGross(item))}</td>
+                </tr>`;
+                                }).join('')}
                             </tbody>
                         </table>
 
                         <div class="pos-receipt-totals">
+                            ${(sale.productVatTotal || 0) > 0 ? `
+                            <div class="pos-receipt-row">
+                                <span>Subtotal (ex. VAT)</span>
+                                <span>${this.formatCurrency(sale.subtotal)}</span>
+                            </div>
+                            <div class="pos-receipt-row">
+                                <span>Product VAT</span>
+                                <span>${this.formatCurrency(sale.productVatTotal)}</span>
+                            </div>
+                            <div class="pos-receipt-row">
+                                <span>Subtotal (incl. VAT)</span>
+                                <span>${this.formatCurrency(sale.grossSubtotal != null ? sale.grossSubtotal : this.roundMoney((sale.subtotal || 0) + (sale.productVatTotal || 0)))}</span>
+                            </div>` : `
                             <div class="pos-receipt-row">
                                 <span>Subtotal</span>
                                 <span>${this.formatCurrency(sale.subtotal)}</span>
-                            </div>
+                            </div>`}
                             ${sale.discountAmount > 0 ? `
                             <div class="pos-receipt-row">
                                 <span>Discount ${sale.discountType === 'percent' ? '(' + sale.discountValue + '%)' : ''}</span>
@@ -1005,7 +1185,7 @@
                             </div>` : ''}
                             <div class="pos-receipt-row">
                                 <span>Net Total</span>
-                                <span>${this.formatCurrency(sale.netTotal != null ? sale.netTotal : (sale.subtotal - (sale.discountAmount || 0)))}</span>
+                                <span>${this.formatCurrency(sale.netTotal != null ? sale.netTotal : (this.roundMoney((sale.subtotal || 0) + (sale.productVatTotal || 0)) - (sale.discountAmount || 0)))}</span>
                             </div>
                             ${(sale.vatAmount || 0) > 0 ? `
                             <div class="pos-receipt-row">

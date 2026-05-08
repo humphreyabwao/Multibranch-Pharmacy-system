@@ -18,8 +18,11 @@
                 <p>Pharmacy Management System</p>
             </div>
 
-            <div id="login-error" class="alert alert-error login-hidden"></div>
-            <div id="login-success" class="alert alert-success login-hidden"></div>
+            <div id="login-error" class="alert alert-error login-hidden" role="alert" aria-live="assertive">
+                <i class="fas fa-circle-exclamation" aria-hidden="true"></i>
+                <span id="login-error-text"></span>
+            </div>
+            <div id="login-success" class="alert alert-success login-hidden" role="status" aria-live="polite"></div>
 
             <!-- Login Form -->
             <form id="login-form" class="login-form">
@@ -47,9 +50,15 @@
                     </label>
                     <a href="#" id="forgot-password-link" class="forgot-link">Forgot Password?</a>
                 </div>
-                <button type="submit" class="btn btn-primary btn-full" id="login-btn">
-                    <span>Sign In</span>
-                    <i class="fas fa-arrow-right"></i>
+                <button type="submit" class="btn btn-primary btn-full" id="login-btn" aria-busy="false">
+                    <span id="login-btn-default" class="login-btn-default">
+                        <span>Sign In</span>
+                        <i class="fas fa-arrow-right"></i>
+                    </span>
+                    <span id="login-btn-loading" class="login-btn-loading login-hidden" aria-hidden="true">
+                        <span class="login-btn-spinner"></span>
+                        <span>Signing in...</span>
+                    </span>
                 </button>
             </form>
 
