@@ -14,8 +14,14 @@
     let unsubPosInventory = null;
     let unsubPosCustomers = null;
     let customerDirectory = [];
+    /** Full list after search + filter pills (sorted), before pagination slice. */
+    let filteredProductsList = [];
+    let posProductsPage = 1;
 
     const POS = {
+
+        /** Product cards per page (grid paginates this set). */
+        PRODUCTS_PAGE_SIZE: 12,
 
         // ─── HELPERS ─────────────────────────────────────────
 
@@ -89,6 +95,8 @@
 
         render: function (container) {
             cart = [];
+            posProductsPage = 1;
+            filteredProductsList = [];
             const businessId = this.getBusinessId();
 
             container.innerHTML = `
@@ -105,7 +113,7 @@
                     </div>
 
                     <div class="pos-layout">
-                        <!-- LEFT: Product Search & Results -->
+                        <!-- LEFT: Product search / grid (~2 rows) + cart underneath -->
                         <div class="pos-products">
                             <div class="pos-search-bar">
                                 <i class="fas fa-search"></i>
@@ -127,25 +135,29 @@
                                     <span>Loading inventory...</span>
                                 </div>
                             </div>
-                        </div>
 
-                        <!-- RIGHT: Cart & Checkout -->
-                        <div class="pos-cart-panel">
-                            <div class="pos-cart-header">
-                                <h3><i class="fas fa-shopping-cart"></i> Cart</h3>
-                                <button class="pos-clear-cart" id="pos-clear-cart" title="Clear cart">
-                                    <i class="fas fa-trash-alt"></i> Clear
-                                </button>
-                            </div>
+                            <nav class="pos-pagination is-hidden" id="pos-product-pagination" aria-label="Product pages"></nav>
 
-                            <div class="pos-cart-items" id="pos-cart-items">
-                                <div class="pos-cart-empty">
-                                    <i class="fas fa-shopping-basket"></i>
-                                    <p>Cart is empty</p>
-                                    <small>Search and add products to begin</small>
+                            <div class="pos-inline-cart">
+                                <div class="pos-cart-header">
+                                    <h3><i class="fas fa-shopping-cart"></i> Cart</h3>
+                                    <button class="pos-clear-cart" id="pos-clear-cart" title="Clear cart">
+                                        <i class="fas fa-trash-alt"></i> Clear
+                                    </button>
+                                </div>
+
+                                <div class="pos-cart-items" id="pos-cart-items">
+                                    <div class="pos-cart-empty">
+                                        <i class="fas fa-shopping-basket"></i>
+                                        <p>Cart is empty</p>
+                                        <small>Search and add products to begin</small>
+                                    </div>
                                 </div>
                             </div>
+                        </div>
 
+                        <!-- RIGHT: Totals & checkout (unchanged order) -->
+                        <div class="pos-cart-panel">
                             <div class="pos-cart-summary" id="pos-cart-summary">
                                 <div class="pos-summary-row">
                                     <span>Subtotal (ex. VAT)</span>
@@ -336,6 +348,33 @@
                 });
             }
 
+            // Product grid pagination (delegated)
+            container.addEventListener('click', function posPaginationClick(e) {
+                const actionBtn = e.target.closest('[data-pos-page-action]');
+                if (actionBtn && !actionBtn.disabled) {
+                    const act = actionBtn.getAttribute('data-pos-page-action');
+                    const pageSize = self.PRODUCTS_PAGE_SIZE;
+                    const total = filteredProductsList.length;
+                    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+                    if (act === 'first') posProductsPage = 1;
+                    else if (act === 'prev') posProductsPage = Math.max(1, posProductsPage - 1);
+                    else if (act === 'next') posProductsPage = Math.min(totalPages, posProductsPage + 1);
+                    else if (act === 'last') posProductsPage = totalPages;
+                    self.renderProductsPage();
+                    return;
+                }
+                const numBtn = e.target.closest('[data-pos-page-num]');
+                if (numBtn && !numBtn.disabled) {
+                    const p = parseInt(numBtn.getAttribute('data-pos-page-num'), 10);
+                    if (isFinite(p) && p >= 1) {
+                        const pageSize = self.PRODUCTS_PAGE_SIZE;
+                        const totalPages = Math.max(1, Math.ceil(filteredProductsList.length / pageSize));
+                        posProductsPage = Math.min(Math.max(1, p), totalPages);
+                        self.renderProductsPage();
+                    }
+                }
+            });
+
             // Show cash tender if Cash is active by default
             const cashTender = document.getElementById('pos-cash-tender');
             if (cashTender) cashTender.style.display = 'block';
@@ -477,7 +516,7 @@
                 snapshot.forEach(doc => {
                     inventoryCache.push({ id: doc.id, ...doc.data() });
                 });
-                this.filterProducts(document.getElementById('pos-search')?.value || '');
+                this.filterProducts(document.getElementById('pos-search')?.value || '', { resetPage: false });
             }, err => {
                 console.error('POS inventory subscription error:', err);
             });
@@ -532,13 +571,12 @@
 
         // ─── FILTER & RENDER PRODUCTS ────────────────────────
 
-        filterProducts: function (query) {
+        computeFilteredProducts: function (query) {
             const activePill = document.querySelector('.pos-pill.active');
             const filter = activePill ? activePill.dataset.filter : 'all';
             const q = (query || '').toLowerCase().trim();
 
-            let results = inventoryCache.filter(p => {
-                // Text search
+            const results = inventoryCache.filter(p => {
                 if (q) {
                     const matchName = (p.name || '').toLowerCase().includes(q);
                     const matchGeneric = (p.genericName || '').toLowerCase().includes(q);
@@ -546,24 +584,115 @@
                     const matchCat = (p.category || '').toLowerCase().includes(q);
                     if (!matchName && !matchGeneric && !matchSku && !matchCat) return false;
                 }
-                // Filter pills
                 if (filter === 'in-stock') return (p.quantity || 0) > 0;
                 if (filter === 'otc') return p.drugType === 'OTC';
                 if (filter === 'pom') return p.drugType === 'POM';
                 return true;
             });
 
-            this.renderProducts(results);
+            results.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' }));
+            return results;
         },
 
-        renderProducts: function (products) {
+        /**
+         * @param {string} query - search text
+         * @param {{ resetPage?: boolean }} [opts] - default resetPage true; set false when refreshing badges (cart) only
+         */
+        filterProducts: function (query, opts) {
+            const resetPage = !opts || opts.resetPage !== false;
+            filteredProductsList = this.computeFilteredProducts(query);
+            const pageSize = this.PRODUCTS_PAGE_SIZE;
+            const totalPages = Math.max(1, Math.ceil(filteredProductsList.length / pageSize));
+
+            if (resetPage) posProductsPage = 1;
+            else posProductsPage = Math.min(Math.max(1, posProductsPage), totalPages);
+
+            this.renderProductsPage();
+        },
+
+        /** Page number strip with ellipses for many pages. */
+        buildPaginationSlots: function (totalPages, currentPage) {
+            if (totalPages <= 7) {
+                const a = [];
+                for (let i = 1; i <= totalPages; i++) a.push(i);
+                return a;
+            }
+            const edge = new Set([1, totalPages, currentPage, currentPage - 1, currentPage + 1]);
+            const sorted = [...edge].filter(n => n >= 1 && n <= totalPages).sort((a, b) => a - b);
+            const out = [];
+            for (let i = 0; i < sorted.length; i++) {
+                if (i > 0 && sorted[i] - sorted[i - 1] > 1) out.push('…');
+                out.push(sorted[i]);
+            }
+            return out;
+        },
+
+        renderPaginationBar: function (total, pageSize, currentPage, totalPages) {
+            const nav = document.getElementById('pos-product-pagination');
+            if (!nav) return;
+
+            if (total === 0 || totalPages <= 1) {
+                nav.classList.add('is-hidden');
+                nav.innerHTML = '';
+                return;
+            }
+
+            nav.classList.remove('is-hidden');
+            const startIdx = (currentPage - 1) * pageSize + 1;
+            const endIdx = Math.min(currentPage * pageSize, total);
+            const slots = this.buildPaginationSlots(totalPages, currentPage);
+
+            let pagesHtml = '';
+            slots.forEach(s => {
+                if (s === '…') {
+                    pagesHtml += '<span class="pos-page-ellipsis" aria-hidden="true">…</span>';
+                    return;
+                }
+                const active = s === currentPage ? ' pos-page-num--active' : '';
+                pagesHtml += '<button type="button" class="pos-page-num' + active + '" data-pos-page-num="' + s + '" aria-label="Page ' + s + '"' + (s === currentPage ? ' aria-current="page"' : '') + '>' + s + '</button>';
+            });
+
+            const disFirst = currentPage <= 1;
+            const disLast = currentPage >= totalPages;
+
+            nav.innerHTML = ''
+                + '<div class="pos-pagination-meta"><span class="pos-pagination-range">' + startIdx + '–' + endIdx + '</span>'
+                + '<span class="pos-pagination-of"> of </span><span>' + total + '</span>'
+                + '<span class="pos-pagination-page"> · Page ' + currentPage + ' / ' + totalPages + '</span></div>'
+                + '<div class="pos-pagination-controls" role="group">'
+                + '<button type="button" class="pos-page-btn" data-pos-page-action="first" aria-label="First page"' + (disFirst ? ' disabled' : '') + '><i class="fas fa-angles-left"></i></button>'
+                + '<button type="button" class="pos-page-btn" data-pos-page-action="prev" aria-label="Previous page"' + (disFirst ? ' disabled' : '') + '><i class="fas fa-angle-left"></i></button>'
+                + '<div class="pos-page-nums">' + pagesHtml + '</div>'
+                + '<button type="button" class="pos-page-btn" data-pos-page-action="next" aria-label="Next page"' + (disLast ? ' disabled' : '') + '><i class="fas fa-angle-right"></i></button>'
+                + '<button type="button" class="pos-page-btn" data-pos-page-action="last" aria-label="Last page"' + (disLast ? ' disabled' : '') + '><i class="fas fa-angles-right"></i></button>'
+                + '</div>';
+        },
+
+        renderProductsPage: function () {
             const grid = document.getElementById('pos-product-grid');
             const countEl = document.getElementById('pos-results-count');
             if (!grid) return;
 
-            if (countEl) countEl.textContent = products.length + ' product' + (products.length !== 1 ? 's' : '');
+            const pageSize = this.PRODUCTS_PAGE_SIZE;
+            const total = filteredProductsList.length;
+            const totalPages = Math.max(1, Math.ceil(total / pageSize));
+            posProductsPage = Math.min(Math.max(1, posProductsPage), totalPages);
 
-            if (products.length === 0) {
+            if (countEl) {
+                if (total === 0) {
+                    countEl.textContent = 'No matches';
+                } else if (totalPages <= 1) {
+                    countEl.textContent = total + ' product' + (total !== 1 ? 's' : '');
+                } else {
+                    const startIdx = (posProductsPage - 1) * pageSize + 1;
+                    const endIdx = Math.min(posProductsPage * pageSize, total);
+                    countEl.textContent = startIdx + '–' + endIdx + ' of ' + total + ' products';
+                }
+            }
+
+            this.renderPaginationBar(total, pageSize, posProductsPage, totalPages);
+
+            if (total === 0) {
                 grid.innerHTML = `
                     <div class="pos-no-results">
                         <i class="fas fa-search"></i>
@@ -571,6 +700,9 @@
                     </div>`;
                 return;
             }
+
+            const start = (posProductsPage - 1) * pageSize;
+            const products = filteredProductsList.slice(start, start + pageSize);
 
             grid.innerHTML = products.map(p => {
                 const inCart = cart.find(c => c.id === p.id);
@@ -739,13 +871,13 @@
             }
 
             this.renderCart();
-            this.filterProducts(document.getElementById('pos-search')?.value || '');
+            this.filterProducts(document.getElementById('pos-search')?.value || '', { resetPage: false });
         },
 
         removeFromCart: function (productId) {
             cart = cart.filter(c => c.id !== productId);
             this.renderCart();
-            this.filterProducts(document.getElementById('pos-search')?.value || '');
+            this.filterProducts(document.getElementById('pos-search')?.value || '', { resetPage: false });
         },
 
         updateCartQty: function (productId, newQty) {
@@ -767,7 +899,7 @@
             }
 
             this.renderCart();
-            this.filterProducts(document.getElementById('pos-search')?.value || '');
+            this.filterProducts(document.getElementById('pos-search')?.value || '', { resetPage: false });
         },
 
         renderCart: function () {
@@ -1073,7 +1205,7 @@
                 // Clear cart
                 cart = [];
                 this.renderCart();
-                this.filterProducts(document.getElementById('pos-search')?.value || '');
+                this.filterProducts(document.getElementById('pos-search')?.value || '', { resetPage: false });
 
                 // Reset discount & payment
                 const di = document.getElementById('pos-discount');
@@ -1276,6 +1408,8 @@
             cart = [];
             inventoryCache = [];
             customerDirectory = [];
+            filteredProductsList = [];
+            posProductsPage = 1;
         }
     };
 
