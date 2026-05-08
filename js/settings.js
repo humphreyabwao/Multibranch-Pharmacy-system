@@ -100,6 +100,12 @@
             if (this._initialized) return;
             this._initialized = true;
             this.listenBusinessSettings();
+            if (!this._businessChangeBound) {
+                this._businessChangeBound = true;
+                window.addEventListener('business-changed', function () {
+                    Settings.listenBusinessSettings();
+                });
+            }
         },
 
         listenBusinessSettings: function () {
@@ -154,15 +160,21 @@
             var logoIcon = document.querySelector('.sidebar-logo > i');
             if (logoIcon) logoIcon.className = this.business.logoIcon;
 
+            if (PharmaFlow.BrandingSync) {
+                PharmaFlow.BrandingSync.applySidebar(this.business.companyLogoUrl, this.business.logoIcon);
+            }
+
             var topbarTitle = document.querySelector('.topbar-title');
             if (topbarTitle) topbarTitle.textContent = this.business.name;
         },
 
         persistBrandToLocal: function () {
             try {
-                localStorage.setItem('pf_brand_name', this.business.name);
-                localStorage.setItem('pf_brand_tagline', this.business.tagline);
-                localStorage.setItem('pf_brand_icon', this.business.logoIcon);
+                var bid = PharmaFlow.Auth && PharmaFlow.Auth.getBusinessId ? PharmaFlow.Auth.getBusinessId() : null;
+                if (!bid) return;
+                if (PharmaFlow.BrandingSync && PharmaFlow.BrandingSync.persistBranchSnapshot) {
+                    PharmaFlow.BrandingSync.persistBranchSnapshot(bid, this.business);
+                }
             } catch (e) { /* ignore */ }
         },
 
@@ -487,10 +499,17 @@
                     if (statusEl) statusEl.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading...';
 
                     try {
-                        var ext = file.name.split('.').pop().toLowerCase();
-                        var ref = window.storage.ref('users/' + uid + '/profile_photo/avatar.' + ext);
-                        var snapshot = await ref.put(file);
-                        var downloadURL = await snapshot.ref.getDownloadURL();
+                        var downloadURL;
+                        if (PharmaFlow.CloudinaryUpload && PharmaFlow.CloudinaryUpload.isActive()) {
+                            downloadURL = await PharmaFlow.CloudinaryUpload.uploadFile(file, {
+                                publicId: 'users/' + uid + '/avatar'
+                            });
+                        } else {
+                            var ext = file.name.split('.').pop().toLowerCase();
+                            var ref = window.storage.ref('users/' + uid + '/profile_photo/avatar.' + ext);
+                            var snapshot = await ref.put(file);
+                            downloadURL = await snapshot.ref.getDownloadURL();
+                        }
 
                         // Save URL to Firestore user doc
                         await window.db.collection('users').doc(uid).update({
@@ -547,21 +566,25 @@
             if (!uid) return;
 
             try {
+                var prevUrl = PharmaFlow.Auth.userProfile && PharmaFlow.Auth.userProfile.photoURL;
+
                 // Remove from Firestore
                 await window.db.collection('users').doc(uid).update({
                     photoURL: firebase.firestore.FieldValue.delete(),
                     updatedAt: new Date().toISOString()
                 });
 
-                // Try to delete from storage (ignore errors if file doesn't exist)
-                try {
-                    var extensions = ['png', 'jpeg', 'jpg', 'webp'];
-                    for (var i = 0; i < extensions.length; i++) {
-                        try {
-                            await window.storage.ref('users/' + uid + '/profile_photo/avatar.' + extensions[i]).delete();
-                        } catch (e) { /* file may not exist with this extension */ }
-                    }
-                } catch (e) { /* ignore storage errors */ }
+                // Delete from Firebase Storage only if the photo was stored there
+                if (prevUrl && PharmaFlow.CloudinaryUpload && PharmaFlow.CloudinaryUpload.isFirebaseStorageUrl(prevUrl)) {
+                    try {
+                        var extensions = ['png', 'jpeg', 'jpg', 'webp'];
+                        for (var i = 0; i < extensions.length; i++) {
+                            try {
+                                await window.storage.ref('users/' + uid + '/profile_photo/avatar.' + extensions[i]).delete();
+                            } catch (e) { /* file may not exist with this extension */ }
+                        }
+                    } catch (e) { /* ignore storage errors */ }
+                }
 
                 // Update local profile
                 delete PharmaFlow.Auth.userProfile.photoURL;
@@ -799,10 +822,17 @@
                     if (statusEl) statusEl.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading...';
 
                     try {
-                        var ext = file.name.split('.').pop().toLowerCase();
-                        var ref = window.storage.ref('businesses/' + businessId + '/company_logo/logo.' + ext);
-                        var snapshot = await ref.put(file);
-                        var downloadURL = await snapshot.ref.getDownloadURL();
+                        var downloadURL;
+                        if (PharmaFlow.CloudinaryUpload && PharmaFlow.CloudinaryUpload.isActive()) {
+                            downloadURL = await PharmaFlow.CloudinaryUpload.uploadFile(file, {
+                                publicId: 'businesses/' + businessId + '/logo'
+                            });
+                        } else {
+                            var ext = file.name.split('.').pop().toLowerCase();
+                            var ref = window.storage.ref('businesses/' + businessId + '/company_logo/logo.' + ext);
+                            var snapshot = await ref.put(file);
+                            downloadURL = await snapshot.ref.getDownloadURL();
+                        }
 
                         await window.db.collection('businesses').doc(businessId).update({
                             companyLogoUrl: downloadURL,
@@ -810,6 +840,11 @@
                         });
 
                         Settings.business.companyLogoUrl = downloadURL;
+
+                        if (PharmaFlow.BrandingSync) {
+                            PharmaFlow.BrandingSync.applySidebar(downloadURL, Settings.business.logoIcon || 'fas fa-capsules');
+                        }
+                        if (Settings.persistBrandToLocal) Settings.persistBrandToLocal();
 
                         var displayEl = document.getElementById('st-company-logo-display');
                         if (displayEl) displayEl.innerHTML = '<img src="' + self._escapeHtml(downloadURL) + '" alt="Company Logo" style="width:100%;height:100%;object-fit:contain;">';
@@ -832,7 +867,9 @@
                         if (PharmaFlow.ActivityLog) {
                             PharmaFlow.ActivityLog.log({
                                 title: 'Company Logo Updated',
-                                description: 'Company logo uploaded to Storage',
+                                description: PharmaFlow.CloudinaryUpload && PharmaFlow.CloudinaryUpload.isActive()
+                                    ? 'Company logo uploaded'
+                                    : 'Company logo uploaded to Storage',
                                 category: 'System',
                                 status: 'COMPLETED'
                             });
@@ -860,21 +897,30 @@
             if (!businessId) return;
 
             try {
+                var logoUrl = Settings.business && Settings.business.companyLogoUrl;
+
                 await window.db.collection('businesses').doc(businessId).update({
                     companyLogoUrl: firebase.firestore.FieldValue.delete(),
                     updatedAt: new Date().toISOString()
                 });
 
-                try {
-                    var extensions = ['png', 'jpeg', 'jpg', 'webp'];
-                    for (var i = 0; i < extensions.length; i++) {
-                        try {
-                            await window.storage.ref('businesses/' + businessId + '/company_logo/logo.' + extensions[i]).delete();
-                        } catch (e) { /* file may not exist with this extension */ }
-                    }
-                } catch (e) { /* ignore storage errors */ }
+                if (logoUrl && PharmaFlow.CloudinaryUpload && PharmaFlow.CloudinaryUpload.isFirebaseStorageUrl(logoUrl)) {
+                    try {
+                        var extensions = ['png', 'jpeg', 'jpg', 'webp'];
+                        for (var i = 0; i < extensions.length; i++) {
+                            try {
+                                await window.storage.ref('businesses/' + businessId + '/company_logo/logo.' + extensions[i]).delete();
+                            } catch (e) { /* file may not exist with this extension */ }
+                        }
+                    } catch (e) { /* ignore storage errors */ }
+                }
 
                 Settings.business.companyLogoUrl = '';
+
+                if (PharmaFlow.BrandingSync) {
+                    PharmaFlow.BrandingSync.applySidebar('', Settings.business.logoIcon || 'fas fa-capsules');
+                }
+                if (Settings.persistBrandToLocal) Settings.persistBrandToLocal();
 
                 var displayEl = document.getElementById('st-company-logo-display');
                 if (displayEl) displayEl.innerHTML = '<i class="' + self._escapeHtml(Settings.business.logoIcon) + '" style="font-size:48px;color:var(--text-secondary,#94a3b8);"></i>';
@@ -1458,6 +1504,10 @@
 
     (function applyCachedBrand() {
         try {
+            if (PharmaFlow.BrandingSync && PharmaFlow.BrandingSync.applyChromeFromLocalStorage) {
+                PharmaFlow.BrandingSync.applyChromeFromLocalStorage();
+                return;
+            }
             var cached = localStorage.getItem('pf_brand_name');
             var cachedIcon = localStorage.getItem('pf_brand_icon');
             var cachedTagline = localStorage.getItem('pf_brand_tagline');

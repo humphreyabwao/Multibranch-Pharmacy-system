@@ -6,10 +6,16 @@
     <title>PharmaFlow - Pharmacy Management System</title>
     <link rel="stylesheet" href="css/styles.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <script src="js/branding-sync.js"></script>
     <script>
-        // Restore branding from localStorage instantly to avoid flash
+        // Restore document title from per-branch snapshot (localStorage) before paint
         (function () {
             try {
+                var snap = window.PharmaFlow && PharmaFlow.BrandingSync && PharmaFlow.BrandingSync.getResolvedSnapshot();
+                if (snap && snap.name) {
+                    document.title = snap.name + ' - ' + (snap.tagline || 'Pharmacy Management System');
+                    return;
+                }
                 var n = localStorage.getItem('pf_brand_name');
                 var t = localStorage.getItem('pf_brand_tagline');
                 if (n) document.title = n + ' - ' + (t || 'Pharmacy Management System');
@@ -27,7 +33,6 @@
                     <span class="logo-text">PharmaFlow</span>
                 </div>
             </div>
-
             <div class="sidebar-body">
                 <nav class="sidebar-nav" id="sidebar-nav">
                     <!-- Navigation items rendered by sidebar.js -->
@@ -110,6 +115,12 @@
                 </div>
             </header>
 
+            <script>
+                try {
+                    if (window.PharmaFlow && PharmaFlow.BrandingSync) PharmaFlow.BrandingSync.applyChromeFromLocalStorage();
+                } catch (e) { /* ignore */ }
+            </script>
+
             <!-- ===== CONTENT AREA ===== -->
             <main class="content-area" id="content-area">
                 <!-- Sub-module tabs (shown when a module has sub-modules) -->
@@ -160,32 +171,14 @@
     <!-- Overlay for panels --> 
     <div class="overlay" id="overlay"></div>
 
-    <!-- Instant branding from localStorage (before modules load) -->
-    <script>
-        (function () {
-            try {
-                var n = localStorage.getItem('pf_brand_name');
-                var icon = localStorage.getItem('pf_brand_icon');
-                if (n) {
-                    var lt = document.querySelector('.logo-text');
-                    if (lt) lt.textContent = n;
-                    var tt = document.querySelector('.topbar-title');
-                    if (tt) tt.textContent = n;
-                }
-                if (icon) {
-                    var li = document.querySelector('.sidebar-logo > i');
-                    if (li) li.className = icon;
-                }
-            } catch (e) { /* ignore */ }
-        })();
-    </script>
-
     <!-- Export Libraries -->
     <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.1/jspdf.plugin.autotable.min.js"></script>
 
     <script src="js/firebase-config.js"></script>
+    <script src="js/cloudinary-config.js"></script>
+    <script src="js/cloudinary-upload.js"></script>
     <script src="js/auth.js"></script>
     <script src="js/sidebar.js"></script>
     <script src="js/dashboard.js"></script>

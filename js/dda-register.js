@@ -1079,9 +1079,16 @@
                     const file = fileInput.files[0];
                     fileName = file.name;
                     const safeName = Date.now() + '_' + fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
-                    const storageRef = window.storage.ref('businesses/' + businessId + '/dda_prescriptions/' + safeName);
-                    const snap = await storageRef.put(file);
-                    fileUrl = await snap.ref.getDownloadURL();
+                    if (PharmaFlow.CloudinaryUpload && PharmaFlow.CloudinaryUpload.isActive()) {
+                        const baseId = safeName.replace(/\.[^/.]+$/, '');
+                        fileUrl = await PharmaFlow.CloudinaryUpload.uploadFile(file, {
+                            publicId: 'dda_prescriptions/' + businessId + '/' + baseId
+                        });
+                    } else {
+                        const storageRef = window.storage.ref('businesses/' + businessId + '/dda_prescriptions/' + safeName);
+                        const snap = await storageRef.put(file);
+                        fileUrl = await snap.ref.getDownloadURL();
+                    }
                 }
 
                 const prescData = {

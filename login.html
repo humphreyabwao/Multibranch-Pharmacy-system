@@ -6,6 +6,20 @@
     <title>PharmaFlow - Login</title>
     <link rel="stylesheet" href="css/styles.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <script src="js/branding-sync.js"></script>
+    <script>
+        (function () {
+            try {
+                var snap = window.PharmaFlow && PharmaFlow.BrandingSync && PharmaFlow.BrandingSync.getResolvedSnapshot();
+                if (snap && snap.name) {
+                    document.title = snap.name + ' - Login';
+                    return;
+                }
+                var n = localStorage.getItem('pf_brand_name');
+                if (n) document.title = n + ' - Login';
+            } catch (e) { /* ignore */ }
+        })();
+    </script>
 </head>
 <body class="login-body">
     <div class="login-container">
@@ -93,12 +107,12 @@
         // Set dynamic year
         document.getElementById('footer-year').textContent = new Date().getFullYear();
 
-        // Dynamic branding from settings (cached in localStorage)
+        // Per-branch cached branding (pf_brand_snapshot_<businessId> + pf_last_active_business_id)
         (function () {
             try {
-                var brand = localStorage.getItem('pf_brand_name');
-                var tagline = localStorage.getItem('pf_brand_tagline');
-                var icon = localStorage.getItem('pf_brand_icon');
+                var meta = window.PharmaFlow && PharmaFlow.BrandingSync && PharmaFlow.BrandingSync.applyLoginPageFromLocalStorage();
+                var brand = meta && meta.name ? meta.name : localStorage.getItem('pf_brand_name');
+                var tagline = meta && meta.tagline ? meta.tagline : localStorage.getItem('pf_brand_tagline');
                 if (brand) {
                     var h1 = document.querySelector('.login-header h1');
                     if (h1) h1.textContent = brand;
@@ -109,10 +123,6 @@
                 if (tagline) {
                     var p = document.querySelector('.login-header p');
                     if (p) p.textContent = tagline;
-                }
-                if (icon) {
-                    var iconEl = document.querySelector('.login-logo i');
-                    if (iconEl) iconEl.className = icon;
                 }
             } catch (e) { /* ignore */ }
         })();

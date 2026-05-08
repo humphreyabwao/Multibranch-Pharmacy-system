@@ -102,9 +102,13 @@
                 const keysToRemove = [];
                 for (let i = 0; i < localStorage.length; i++) {
                     const key = localStorage.key(i);
-                    if (key && key.startsWith('pf_') && key !== 'pf_brand_name' && key !== 'pf_brand_tagline' && key !== 'pf_brand_icon') {
-                        keysToRemove.push(key);
+                    if (!key || !key.startsWith('pf_')) continue;
+                    if (key === 'pf_last_active_business_id') continue;
+                    if (key.indexOf('pf_brand_snapshot_') === 0) continue;
+                    if (key === 'pf_brand_name' || key === 'pf_brand_tagline' || key === 'pf_brand_icon' || key === 'pf_brand_company_logo') {
+                        continue;
                     }
+                    keysToRemove.push(key);
                 }
                 keysToRemove.forEach(key => localStorage.removeItem(key));
 
