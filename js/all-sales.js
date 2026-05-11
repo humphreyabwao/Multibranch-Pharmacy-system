@@ -53,6 +53,14 @@
             return d.toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
         },
 
+        formatSalePaymentLabel: function (sale) {
+            if (sale.paymentMethod === 'split' && Array.isArray(sale.paymentSplits) && sale.paymentSplits.length) {
+                return 'SPLIT ' + sale.paymentSplits.filter(p => (p.amount || 0) > 0)
+                    .map(p => String(p.method || '').toUpperCase() + ':' + (p.amount || 0)).join(', ');
+            }
+            return (sale.paymentMethod || '').toUpperCase();
+        },
+
         // ─── RENDER ──────────────────────────────────────────
 
         render: function (container) {
@@ -142,6 +150,7 @@
                                 <option value="cash">Cash</option>
                                 <option value="mpesa">M-Pesa</option>
                                 <option value="card">Card</option>
+                                <option value="split">Split</option>
                             </select>
                             <select id="as-page-size">
                                 <option value="25">25 per page</option>
@@ -341,7 +350,7 @@
 
             filteredSales = allSalesData.filter(sale => {
                 // Payment filter
-                if (payFilter && sale.paymentMethod !== payFilter) return false;
+                if (payFilter && !PharmaFlow.saleMatchesPaymentFilter(sale, payFilter)) return false;
 
                 // Status filter
                 if (statusFilter && (sale.status || 'completed') !== statusFilter) return false;
@@ -404,7 +413,7 @@
             }
 
             tbody.innerHTML = pageData.map((sale, i) => {
-                const payBadge = this.getPaymentBadge(sale.paymentMethod);
+                const payBadge = this.getPaymentBadge(sale);
                 const status = sale.status || 'completed';
                 const statusBadge = this.getStatusBadge(status);
                 const isCompleted = status === 'completed';
@@ -564,7 +573,11 @@
             }
         },
 
-        getPaymentBadge: function (method) {
+        getPaymentBadge: function (sale) {
+            const method = sale && sale.paymentMethod ? sale.paymentMethod : 'cash';
+            if (method === 'split') {
+                return '<span class="sales-pay-badge pay--split"><i class="fas fa-columns"></i> Split</span>';
+            }
             const map = {
                 'cash': { icon: 'fa-money-bill-wave', label: 'Cash', cls: 'pay--cash' },
                 'mpesa': { icon: 'fa-mobile-alt', label: 'M-Pesa', cls: 'pay--mpesa' },
@@ -598,7 +611,7 @@
                 'VAT': sale.vatAmount || 0,
                 'Total': sale.total || 0,
                 'Profit': sale.totalProfit || 0,
-                'Payment': (sale.paymentMethod || '').toUpperCase(),
+                'Payment': this.formatSalePaymentLabel(sale),
                 'Cashier': sale.soldBy || ''
             }));
 
@@ -628,7 +641,7 @@
                 this.formatCurrency(sale.vatAmount || 0),
                 this.formatCurrency(sale.total),
                 this.formatCurrency(sale.totalProfit),
-                (sale.paymentMethod || '').toUpperCase(),
+                this.formatSalePaymentLabel(sale),
                 sale.soldBy || ''
             ]);
 

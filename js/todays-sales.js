@@ -103,6 +103,7 @@
                                 <option value="cash">Cash</option>
                                 <option value="mpesa">M-Pesa</option>
                                 <option value="card">Card</option>
+                                <option value="split">Split</option>
                             </select>
                         </div>
                     </div>
@@ -226,7 +227,7 @@
             const statusFilter = document.getElementById('ts-status-filter')?.value || '';
 
             let filtered = todaySalesData.filter(sale => {
-                if (payFilter && sale.paymentMethod !== payFilter) return false;
+                if (payFilter && !PharmaFlow.saleMatchesPaymentFilter(sale, payFilter)) return false;
                 if (statusFilter && (sale.status || 'completed') !== statusFilter) return false;
                 if (query) {
                     const customerName = (sale.customer?.name || '').toLowerCase();
@@ -248,7 +249,7 @@
 
             tbody.innerHTML = filtered.map((sale, i) => {
                 const time = sale.saleDate?.toDate ? sale.saleDate.toDate().toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' }) : '—';
-                const payBadge = this.getPaymentBadge(sale.paymentMethod);
+                const payBadge = this.getPaymentBadge(sale);
                 const status = sale.status || 'completed';
                 const statusBadge = this.getStatusBadge(status);
                 const isCompleted = status === 'completed';
@@ -317,7 +318,11 @@
             }
         },
 
-        getPaymentBadge: function (method) {
+        getPaymentBadge: function (sale) {
+            const method = sale && sale.paymentMethod ? sale.paymentMethod : 'cash';
+            if (method === 'split') {
+                return '<span class="sales-pay-badge pay--split"><i class="fas fa-columns"></i> Split</span>';
+            }
             const map = {
                 'cash': { icon: 'fa-money-bill-wave', label: 'Cash', cls: 'pay--cash' },
                 'mpesa': { icon: 'fa-mobile-alt', label: 'M-Pesa', cls: 'pay--mpesa' },

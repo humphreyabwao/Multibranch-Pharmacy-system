@@ -188,10 +188,25 @@
             const pendingExp = accExpenses.filter(e => e.status === 'pending');
             const totalPending = pendingExp.reduce((s, e) => s + (e.amount || 0), 0);
 
-            // Cash vs digital
-            const cashIncome = sales.filter(s => s.paymentMethod === 'cash').reduce((s, d) => s + (d.total || 0), 0);
-            const mpesaIncome = sales.filter(s => s.paymentMethod === 'mpesa').reduce((s, d) => s + (d.total || 0), 0);
-            const cardIncome = sales.filter(s => s.paymentMethod === 'card').reduce((s, d) => s + (d.total || 0), 0);
+            // Cash vs digital (split payments allocate by leg)
+            let cashIncome = 0;
+            let mpesaIncome = 0;
+            let cardIncome = 0;
+            sales.forEach(s => {
+                if (typeof PharmaFlow.forEachSalePaymentPart === 'function') {
+                    PharmaFlow.forEachSalePaymentPart(s, (m, amt) => {
+                        if (m === 'cash') cashIncome += amt;
+                        else if (m === 'mpesa') mpesaIncome += amt;
+                        else if (m === 'card' || m === 'bank') cardIncome += amt;
+                    });
+                } else {
+                    const pm = (s.paymentMethod || 'cash').toLowerCase();
+                    const t = s.total || 0;
+                    if (pm === 'cash') cashIncome += t;
+                    else if (pm === 'mpesa') mpesaIncome += t;
+                    else if (pm === 'card') cardIncome += t;
+                }
+            });
             const otherIncome = totalIncome - cashIncome - mpesaIncome - cardIncome;
 
             // Daily cash flow
@@ -323,7 +338,12 @@
             const txns = [];
             sales.forEach(s => {
                 const d = this._dateObj(s.createdAt || s.saleDate);
-                txns.push({ date: d ? d.toLocaleDateString('en-KE') : '-', type: 'income', desc: `Sale ${s.saleId || ''} (${s.itemCount || 0} items)`, amount: s.total || 0, method: (s.paymentMethod || '').toUpperCase(), ts: d ? d.getTime() : 0 });
+                let methodStr = (s.paymentMethod || '').toUpperCase();
+                if (s.paymentMethod === 'split' && Array.isArray(s.paymentSplits) && s.paymentSplits.length) {
+                    methodStr = 'SPLIT: ' + s.paymentSplits.filter(p => (p.amount || 0) > 0)
+                        .map(p => String(p.method || '').toUpperCase() + ' ' + (p.amount || 0)).join(', ');
+                }
+                txns.push({ date: d ? d.toLocaleDateString('en-KE') : '-', type: 'income', desc: `Sale ${s.saleId || ''} (${s.itemCount || 0} items)`, amount: s.total || 0, method: methodStr, ts: d ? d.getTime() : 0 });
             });
             expenses.forEach(e => {
                 const d = this._dateObj(e.createdAt || e.expenseTimestamp);
@@ -367,7 +387,17 @@
 
             // Payment method
             const pmMap = {};
-            sales.forEach(s => { const m = (s.paymentMethod || 'other').toUpperCase(); pmMap[m] = (pmMap[m] || 0) + (s.total || 0); });
+            sales.forEach(s => {
+                if (typeof PharmaFlow.forEachSalePaymentPart === 'function') {
+                    PharmaFlow.forEachSalePaymentPart(s, (m, amt) => {
+                        const key = String(m || 'other').toUpperCase();
+                        pmMap[key] = (pmMap[key] || 0) + amt;
+                    });
+                } else {
+                    const m = (s.paymentMethod || 'other').toUpperCase();
+                    pmMap[m] = (pmMap[m] || 0) + (s.total || 0);
+                }
+            });
             const pmArr = Object.entries(pmMap).sort((a, b) => b[1] - a[1]);
             const maxPM = pmArr.length ? pmArr[0][1] : 1;
 
@@ -559,17 +589,32 @@
             // Payment method reconciliation
             const methods = ['cash', 'mpesa', 'card'];
             const methodNames = { cash: 'Cash', mpesa: 'M-Pesa', card: 'Card/Bank' };
+            const incomeForSalesMethod = (sale, m) => {
+                let sub = 0;
+                if (typeof PharmaFlow.forEachSalePaymentPart === 'function') {
+                    PharmaFlow.forEachSalePaymentPart(sale, (method, amt) => {
+                        if (amt <= 0) return;
+                        if (m === 'cash' && method === 'cash') sub += amt;
+                        else if (m === 'mpesa' && method === 'mpesa') sub += amt;
+                        else if (m === 'card' && (method === 'card' || method === 'bank')) sub += amt;
+                    });
+                } else if ((sale.paymentMethod || '').toLowerCase() === m) {
+                    sub = sale.total || 0;
+                }
+                return sub;
+            };
+            const saleUsesMethod = (sale, m) => incomeForSalesMethod(sale, m) > 0;
             const recon = {};
             methods.forEach(m => {
                 recon[m] = {
-                    income: sales.filter(s => s.paymentMethod === m).reduce((s, d) => s + (d.total || 0), 0),
+                    income: sales.reduce((sum, s) => sum + incomeForSalesMethod(s, m), 0),
                     expenses: expenses.filter(e => {
                         const pm = (e.paymentMethod || '').toLowerCase();
                         if (m === 'cash') return pm === 'cash';
                         if (m === 'mpesa') return pm === 'm-pesa' || pm === 'mpesa';
                         return pm === 'card' || pm === 'credit card' || pm === 'bank transfer';
                     }).reduce((s, d) => s + (d.amount || 0), 0),
-                    salesCount: sales.filter(s => s.paymentMethod === m).length,
+                    salesCount: sales.filter(s => saleUsesMethod(s, m)).length,
                     expCount: expenses.filter(e => {
                         const pm = (e.paymentMethod || '').toLowerCase();
                         if (m === 'cash') return pm === 'cash';

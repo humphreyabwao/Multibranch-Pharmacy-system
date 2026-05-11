@@ -800,7 +800,7 @@
             this._listenExpenses(businessId, todayISO);
 
             // 3. Inventory listener (total products, out of stock, expiring soon, inventory value)
-            this._listenInventory(businessId, today);
+            this._listenInventory(businessId);
 
             // 4. Patients listener (total customers)
             this._listenPatients(businessId);
@@ -976,37 +976,24 @@
         },
 
         /**
-         * Inventory real-time listener
+         * Inventory real-time listener — KPIs from PharmaFlow.computeInventoryStats (same as Inventory module).
          */
-        _listenInventory: function (businessId, today) {
+        _listenInventory: function (businessId) {
             const invRef = getBusinessCollection(businessId, 'inventory');
             if (!invRef) return;
 
-            const thirtyDaysFromNow = new Date();
-            thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
-
             const unsub = invRef.onSnapshot(snap => {
                 if (!this._isActive) return;
-                let outOfStock = 0;
-                let expiringSoon = 0;
-                let inventoryValue = 0;
+                const products = [];
+                snap.forEach(doc => products.push({ id: doc.id, ...doc.data() }));
+                const s = PharmaFlow.computeInventoryStats
+                    ? PharmaFlow.computeInventoryStats(products)
+                    : { totalProducts: 0, totalValue: 0, outOfStock: 0, lowStock: 0, expiringSoon: 0 };
 
-                snap.forEach(doc => {
-                    const data = doc.data();
-                    const qty = parseFloat(data.quantity || 0);
-                    const price = parseFloat(data.buyingPrice || data.sellingPrice || 0);
-                    inventoryValue += qty * price;
-                    if (qty <= 0) outOfStock++;
-                    if (data.expiryDate) {
-                        const exp = new Date(data.expiryDate);
-                        if (exp <= thirtyDaysFromNow && exp >= today) expiringSoon++;
-                    }
-                });
-
-                this.setStat('stat-total-products', snap.size);
-                this.setStat('stat-out-of-stock', outOfStock);
-                this.setStat('stat-expiring-soon', expiringSoon);
-                this.setStat('stat-inventory-value', this.formatCurrency(inventoryValue));
+                this.setStat('stat-total-products', s.totalProducts);
+                this.setStat('stat-out-of-stock', s.outOfStock);
+                this.setStat('stat-expiring-soon', s.expiringSoon);
+                this.setStat('stat-inventory-value', this.formatCurrency(s.totalValue));
             }, err => console.error('Inventory listener error:', err));
             this._listeners.push(unsub);
         },

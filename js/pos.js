@@ -82,6 +82,125 @@
             setTimeout(() => { toast.classList.remove('show'); setTimeout(() => toast.remove(), 300); }, 3000);
         },
 
+        /**
+         * Minimum allowed unit revenue for discount checks (inventory minimumSellPrice, else buying price).
+         */
+        getLineFloorUnit: function (item) {
+            const custom = parseFloat(item.minimumSellPrice);
+            if (isFinite(custom) && custom > 0) return custom;
+            const bp = parseFloat(item.buyingPrice);
+            return isFinite(bp) && bp > 0 ? bp : 0;
+        },
+
+        /** Minimum revenue for this line (floor unit × qty). */
+        getLineFloorTotal: function (item) {
+            return this.roundMoney(this.getLineFloorUnit(item) * this.getLineQuantity(item));
+        },
+
+        /** Minimum total revenue this cart must collect (sum of line cost floors). */
+        getCartTotalFloor: function () {
+            return this.roundMoney(cart.reduce((s, item) => s + this.getLineFloorTotal(item), 0));
+        },
+
+        /**
+         * Cart discount is split across lines by share of line gross; ensure no line nets below floor.
+         */
+        analyzeCartDiscountFloor: function () {
+            const EPS = 0.005;
+            const grossSubtotal = this.roundMoney(
+                cart.reduce((sum, item) => sum + this.getLineGrossTotal(item), 0)
+            );
+            const listViolations = [];
+
+            if (grossSubtotal <= EPS) {
+                return { grossSubtotal: 0, maxDiscount: 0, listViolations: [] };
+            }
+
+            let maxD = grossSubtotal;
+
+            cart.forEach(item => {
+                const R = this.getLineGrossTotal(item);
+                const C = this.getLineFloorTotal(item);
+                if (C <= EPS) return;
+                if (R + EPS < C) {
+                    listViolations.push({ name: item.name });
+                    return;
+                }
+                if (R <= EPS) return;
+                const cap = this.roundMoney(grossSubtotal * (R - C) / R);
+                maxD = Math.min(maxD, cap);
+            });
+
+            if (listViolations.length) {
+                return { grossSubtotal, maxDiscount: 0, listViolations };
+            }
+
+            maxD = Math.max(0, Math.min(maxD, grossSubtotal));
+            return { grossSubtotal, maxDiscount: this.roundMoney(maxD), listViolations: [] };
+        },
+
+        /** Discount amount implied by current discount inputs (amount or % of gross). */
+        getRequestedCartDiscountAmount: function (grossSubtotal) {
+            const discountInput = document.getElementById('pos-discount');
+            const discountType = document.getElementById('pos-discount-type');
+            const discountValue = parseFloat(discountInput?.value) || 0;
+            if (discountValue <= 0 || grossSubtotal <= 0) return 0;
+            if (discountType?.value === 'percent') {
+                return this.roundMoney(grossSubtotal * (Math.min(discountValue, 100) / 100));
+            }
+            return this.roundMoney(Math.min(discountValue, grossSubtotal));
+        },
+
+        /**
+         * Clamp discount fields to cost floor. Returns true if input was clamped.
+         * @param {{ notify?: boolean }} opts — play sound + modal when clamped or list violation
+         */
+        clampDiscountInputToCostFloor: function (opts) {
+            opts = opts || {};
+            const notify = !!opts.notify;
+            const analysis = this.analyzeCartDiscountFloor();
+
+            if (analysis.listViolations.length) {
+                if (notify && PharmaFlow.alert) {
+                    PharmaFlow.alert(this.formatCurrency(this.getCartTotalFloor()), {
+                        title: 'Can\'t sell below',
+                        variant: 'danger'
+                    });
+                }
+                return false;
+            }
+
+            const grossSubtotal = analysis.grossSubtotal;
+            const maxDiscount = analysis.maxDiscount;
+            const requested = this.getRequestedCartDiscountAmount(grossSubtotal);
+
+            if (requested <= maxDiscount + 0.005) return false;
+
+            const discountInput = document.getElementById('pos-discount');
+            const discountType = document.getElementById('pos-discount-type');
+
+            if (discountType?.value === 'percent') {
+                const pct = grossSubtotal > 0 ? (maxDiscount / grossSubtotal * 100) : 0;
+                const rounded = Math.round(pct * 100) / 100;
+                if (discountInput) discountInput.value = rounded > 0 ? String(rounded) : '0';
+            } else if (discountInput) {
+                discountInput.value = maxDiscount > 0 ? maxDiscount.toFixed(2) : '0';
+            }
+
+            if (notify && PharmaFlow.alert) {
+                PharmaFlow.alert(this.formatCurrency(this.getCartTotalFloor()), {
+                    title: 'Can\'t sell below',
+                    variant: 'danger'
+                });
+            }
+            return true;
+        },
+
+        onDiscountInputCommitted: function () {
+            this.clampDiscountInputToCostFloor({ notify: true });
+            this.updateTotals();
+        },
+
         generateSaleId: function () {
             const now = new Date();
             const y = now.getFullYear().toString().slice(-2);
@@ -218,25 +337,49 @@
                                 <datalist id="pos-customer-phone-list"></datalist>
                                 <div class="pos-customer-match" id="pos-customer-match" style="display:none;"></div>
 
-                                <label>Payment Method</label>
+                                <label class="checkbox-wrapper pos-split-toggle">
+                                    <input type="checkbox" id="pos-split-payment">
+                                    <span>Split payment</span>
+                                </label>
+
+                                <div id="pos-payment-single">
+                                <label>Payment method</label>
                                 <div class="pos-payment-methods">
-                                    <button class="pos-pay-method active" data-method="cash">
+                                    <button type="button" class="pos-pay-method active" data-method="cash">
                                         <i class="fas fa-money-bill-wave"></i> Cash
                                     </button>
-                                    <button class="pos-pay-method" data-method="mpesa">
+                                    <button type="button" class="pos-pay-method" data-method="mpesa">
                                         <i class="fas fa-mobile-alt"></i> M-Pesa
                                     </button>
-                                    <button class="pos-pay-method" data-method="card">
+                                    <button type="button" class="pos-pay-method" data-method="card">
                                         <i class="fas fa-credit-card"></i> Card
                                     </button>
                                 </div>
 
                                 <div class="pos-cash-tender" id="pos-cash-tender" style="display:none;">
-                                    <label for="pos-amount-paid">Amount Paid</label>
-                                    <input type="number" id="pos-amount-paid" min="0" placeholder="0.00">
+                                    <label for="pos-amount-paid">Amount paid</label>
+                                    <input type="number" id="pos-amount-paid" min="0" placeholder="0.00" step="0.01">
                                     <div class="pos-change-due" id="pos-change-due" style="display:none;">
                                         Change: <strong id="pos-change-amount">KSH 0.00</strong>
                                     </div>
+                                </div>
+                                </div>
+
+                                <div id="pos-payment-split" class="pos-payment-split" style="display:none;">
+                                    <label class="pos-split-heading">Split amounts</label>
+                                    <div class="pos-split-row">
+                                        <span>Cash</span>
+                                        <input type="number" id="pos-split-cash" min="0" step="0.01" placeholder="0">
+                                    </div>
+                                    <div class="pos-split-row">
+                                        <span>M-Pesa</span>
+                                        <input type="number" id="pos-split-mpesa" min="0" step="0.01" placeholder="0">
+                                    </div>
+                                    <div class="pos-split-row">
+                                        <span>Bank / card</span>
+                                        <input type="number" id="pos-split-bank" min="0" step="0.01" placeholder="0">
+                                    </div>
+                                    <div class="pos-split-summary" id="pos-split-summary"></div>
                                 </div>
                             </div>
 
@@ -300,16 +443,42 @@
                 this.showToast('Cart cleared');
             });
 
-            // Payment method
+            // Payment method (single mode only)
             container.querySelectorAll('.pos-pay-method').forEach(btn => {
                 btn.addEventListener('click', function () {
+                    if (document.getElementById('pos-split-payment')?.checked) return;
                     container.querySelectorAll('.pos-pay-method').forEach(b => b.classList.remove('active'));
                     this.classList.add('active');
                     const cashTender = document.getElementById('pos-cash-tender');
                     if (cashTender) {
                         cashTender.style.display = this.dataset.method === 'cash' ? 'block' : 'none';
                     }
+                    self.computeChange();
                 });
+            });
+
+            const splitCb = document.getElementById('pos-split-payment');
+            const syncPaymentPanels = () => {
+                const split = !!splitCb?.checked;
+                const single = document.getElementById('pos-payment-single');
+                const splitPanel = document.getElementById('pos-payment-split');
+                if (single) single.style.display = split ? 'none' : '';
+                if (splitPanel) splitPanel.style.display = split ? 'block' : 'none';
+                const cashTender = document.getElementById('pos-cash-tender');
+                if (cashTender) {
+                    if (split) cashTender.style.display = 'none';
+                    else {
+                        const active = container.querySelector('.pos-pay-method.active');
+                        cashTender.style.display = active?.dataset.method === 'cash' ? 'block' : 'none';
+                    }
+                }
+                self.refreshSplitPaymentSummary();
+                self.computeChange();
+            };
+            if (splitCb) splitCb.addEventListener('change', syncPaymentPanels);
+
+            ['pos-split-cash', 'pos-split-mpesa', 'pos-split-bank'].forEach(id => {
+                document.getElementById(id)?.addEventListener('input', () => self.refreshSplitPaymentSummary());
             });
 
             // Cash amount paid → compute change
@@ -318,11 +487,22 @@
                 amountPaid.addEventListener('input', () => this.computeChange());
             }
 
-            // Discount input
+            // Discount input — cost floor enforced on blur / type change / Enter
             const discountInput = document.getElementById('pos-discount');
             const discountType = document.getElementById('pos-discount-type');
-            if (discountInput) discountInput.addEventListener('input', () => this.updateTotals());
-            if (discountType) discountType.addEventListener('change', () => this.updateTotals());
+            if (discountInput) {
+                discountInput.addEventListener('input', () => this.updateTotals());
+                discountInput.addEventListener('blur', () => this.onDiscountInputCommitted());
+                discountInput.addEventListener('keydown', function (e) {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        self.onDiscountInputCommitted();
+                    }
+                });
+            }
+            if (discountType) {
+                discountType.addEventListener('change', () => this.onDiscountInputCommitted());
+            }
 
             // VAT input
             const vatInput = document.getElementById('pos-vat');
@@ -375,9 +555,8 @@
                 }
             });
 
-            // Show cash tender if Cash is active by default
-            const cashTender = document.getElementById('pos-cash-tender');
-            if (cashTender) cashTender.style.display = 'block';
+            // Show cash tender if Cash is active by default (single mode)
+            syncPaymentPanels();
 
             this.applyCustomerPrefill();
             this.updateTotals();
@@ -849,6 +1028,9 @@
                     return;
                 }
                 existing.qty++;
+                existing.buyingPrice = product.buyingPrice || 0;
+                const mnu = parseFloat(product.minimumSellPrice);
+                existing.minimumSellPrice = Number.isFinite(mnu) && mnu > 0 ? mnu : null;
             } else {
                 if ((product.quantity || 0) <= 0) {
                     this.showToast(product.name + ' is out of stock', 'error');
@@ -860,6 +1042,10 @@
                     sku: product.sku || '',
                     price: product.sellingPrice || 0,
                     buyingPrice: product.buyingPrice || 0,
+                    minimumSellPrice: (function () {
+                        const m = parseFloat(product.minimumSellPrice);
+                        return Number.isFinite(m) && m > 0 ? m : null;
+                    })(),
                     qty: 1,
                     maxQty: product.quantity || 0,
                     drugType: product.drugType || '',
@@ -918,6 +1104,8 @@
                 this.updateTotals();
                 return;
             }
+
+            this.clampDiscountInputToCostFloor({ notify: false });
 
             if (checkoutBtn) checkoutBtn.disabled = false;
 
@@ -1057,10 +1245,36 @@
             if (vatAmountEl) vatAmountEl.textContent = this.formatCurrency(totals.vatAmount);
             if (totalEl) totalEl.textContent = this.formatCurrency(totals.total);
 
+            this.refreshSplitPaymentSummary();
             this.computeChange();
         },
 
+        refreshSplitPaymentSummary: function () {
+            const splitCb = document.getElementById('pos-split-payment');
+            const el = document.getElementById('pos-split-summary');
+            if (!splitCb || !el || !splitCb.checked) return;
+            const totals = this.getCurrentTotals();
+            const total = totals.total;
+            const c = this.roundMoney(parseFloat(document.getElementById('pos-split-cash')?.value) || 0);
+            const m = this.roundMoney(parseFloat(document.getElementById('pos-split-mpesa')?.value) || 0);
+            const b = this.roundMoney(parseFloat(document.getElementById('pos-split-bank')?.value) || 0);
+            const sum = this.roundMoney(c + m + b);
+            const diff = this.roundMoney(sum - total);
+            if (Math.abs(diff) < 0.02) {
+                el.innerHTML = '<span class="pos-split-ok"><i class="fas fa-check-circle"></i> Matches total</span>';
+            } else {
+                el.innerHTML = '<span class="pos-split-warn"><i class="fas fa-exclamation-circle"></i> '
+                    + this.formatCurrency(sum) + ' / ' + this.formatCurrency(total)
+                    + '</span>';
+            }
+        },
+
         computeChange: function () {
+            if (document.getElementById('pos-split-payment')?.checked) {
+                const changeEl = document.getElementById('pos-change-due');
+                if (changeEl) changeEl.style.display = 'none';
+                return;
+            }
             const total = this.getCurrentTotals().total;
             const paid = this.roundMoney(parseFloat(document.getElementById('pos-amount-paid')?.value) || 0);
             const changeEl = document.getElementById('pos-change-due');
@@ -1087,6 +1301,28 @@
                 return;
             }
 
+            const floorAnalysis = this.analyzeCartDiscountFloor();
+            if (floorAnalysis.listViolations.length) {
+                if (PharmaFlow.alert) {
+                    await PharmaFlow.alert(this.formatCurrency(this.getCartTotalFloor()), {
+                        title: 'Can\'t sell below',
+                        variant: 'danger'
+                    });
+                }
+                return;
+            }
+
+            const requestedDisc = this.getRequestedCartDiscountAmount(floorAnalysis.grossSubtotal);
+            if (requestedDisc > floorAnalysis.maxDiscount + 0.005) {
+                if (PharmaFlow.alert) {
+                    await PharmaFlow.alert(this.formatCurrency(this.getCartTotalFloor()), {
+                        title: 'Can\'t sell below',
+                        variant: 'danger'
+                    });
+                }
+                return;
+            }
+
             const btn = document.getElementById('pos-checkout-btn');
             if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...'; }
 
@@ -1096,10 +1332,39 @@
                     cart.reduce((sum, item) => sum + this.roundMoney((this.getLineUnitPrice(item) - (parseFloat(item.buyingPrice) || 0)) * this.getLineQuantity(item)), 0) - totals.discountAmount
                 );
 
-                const paymentMethod = document.querySelector('.pos-pay-method.active')?.dataset.method || 'cash';
-                const amountPaidRaw = paymentMethod === 'cash' ? (parseFloat(document.getElementById('pos-amount-paid')?.value) || totals.total) : totals.total;
-                const amountPaid = this.roundMoney(amountPaidRaw);
-                const changeDue = this.roundMoney(Math.max(amountPaid - totals.total, 0));
+                const splitCb = document.getElementById('pos-split-payment');
+                let paymentMethod;
+                let amountPaid;
+                let changeDue;
+                let paymentSplits = null;
+
+                if (splitCb && splitCb.checked) {
+                    const c = this.roundMoney(parseFloat(document.getElementById('pos-split-cash')?.value) || 0);
+                    const mp = this.roundMoney(parseFloat(document.getElementById('pos-split-mpesa')?.value) || 0);
+                    const bk = this.roundMoney(parseFloat(document.getElementById('pos-split-bank')?.value) || 0);
+                    const sum = this.roundMoney(c + mp + bk);
+                    const nz = [c, mp, bk].filter(x => x > 0.005).length;
+                    if (nz < 2) {
+                        this.showToast('Split payment: use at least two methods with amounts.', 'error');
+                        return;
+                    }
+                    if (Math.abs(sum - totals.total) > 0.02) {
+                        this.showToast('Split amounts must equal the sale total (' + this.formatCurrency(totals.total) + ').', 'error');
+                        return;
+                    }
+                    paymentSplits = [];
+                    if (c > 0.005) paymentSplits.push({ method: 'cash', amount: c });
+                    if (mp > 0.005) paymentSplits.push({ method: 'mpesa', amount: mp });
+                    if (bk > 0.005) paymentSplits.push({ method: 'bank', amount: bk });
+                    paymentMethod = 'split';
+                    amountPaid = totals.total;
+                    changeDue = 0;
+                } else {
+                    paymentMethod = document.querySelector('.pos-pay-method.active')?.dataset.method || 'cash';
+                    const amountPaidRaw = paymentMethod === 'cash' ? (parseFloat(document.getElementById('pos-amount-paid')?.value) || totals.total) : totals.total;
+                    amountPaid = this.roundMoney(amountPaidRaw);
+                    changeDue = this.roundMoney(Math.max(amountPaid - totals.total, 0));
+                }
 
                 const saleId = this.generateSaleId();
                 const now = new Date();
@@ -1152,6 +1417,7 @@
                     paymentMethod: paymentMethod,
                     amountPaid: amountPaid,
                     changeDue: changeDue,
+                    ...(paymentSplits ? { paymentSplits: paymentSplits } : {}),
                     itemCount: cart.reduce((sum, item) => sum + item.qty, 0),
                     soldBy: profile ? (profile.displayName || profile.email) : 'Unknown',
                     soldByUid: firebase.auth().currentUser ? firebase.auth().currentUser.uid : null,
@@ -1189,13 +1455,14 @@
 
                 // Log activity
                 if (PharmaFlow.ActivityLog) {
+                    const payLabel = paymentMethod === 'split' ? 'split payment' : paymentMethod;
                     PharmaFlow.ActivityLog.log({
                         title: 'Sale Completed',
-                        description: 'Sale ' + saleId + ' — ' + cart.length + ' item(s) totaling ' + this.formatCurrency(totals.total) + ' via ' + paymentMethod,
+                        description: 'Sale ' + saleId + ' — ' + cart.length + ' item(s) totaling ' + this.formatCurrency(totals.total) + ' via ' + payLabel,
                         category: 'Sale',
                         status: 'COMPLETED',
                         amount: totals.total,
-                        metadata: { saleId: saleId, itemCount: saleData.itemCount, paymentMethod: paymentMethod, profit: totalProfit }
+                        metadata: { saleId: saleId, itemCount: saleData.itemCount, paymentMethod: paymentMethod, profit: totalProfit, paymentSplits: paymentSplits || undefined }
                     });
                 }
 
@@ -1212,6 +1479,25 @@
                 if (di) di.value = '0';
                 const ap = document.getElementById('pos-amount-paid');
                 if (ap) ap.value = '';
+                const spl = document.getElementById('pos-split-payment');
+                if (spl) spl.checked = false;
+                ['pos-split-cash', 'pos-split-mpesa', 'pos-split-bank'].forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) el.value = '';
+                });
+                const splitPanel = document.getElementById('pos-payment-split');
+                if (splitPanel) {
+                    splitPanel.style.display = 'none';
+                    const summ = document.getElementById('pos-split-summary');
+                    if (summ) summ.innerHTML = '';
+                }
+                const paySingle = document.getElementById('pos-payment-single');
+                if (paySingle) paySingle.style.display = '';
+                const cashTenderReset = document.getElementById('pos-cash-tender');
+                const activePay = document.querySelector('.pos-pay-method.active');
+                if (cashTenderReset && activePay) {
+                    cashTenderReset.style.display = activePay.dataset.method === 'cash' ? 'block' : 'none';
+                }
                 const cn = document.getElementById('pos-customer-name');
                 const cp = document.getElementById('pos-customer-phone');
                 if (cn) cn.value = '';
@@ -1239,6 +1525,18 @@
             const timeStr = now.toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
 
             const hasLineProductVat = sale.items.some(it => this.getProductVatForReceiptItem(it) > 0);
+
+            const splitPayLabels = { cash: 'Cash', mpesa: 'M-Pesa', bank: 'Bank / card', card: 'Card' };
+            let paymentRowsHtml = '';
+            if (sale.paymentMethod === 'split' && Array.isArray(sale.paymentSplits) && sale.paymentSplits.length) {
+                paymentRowsHtml = sale.paymentSplits.filter(p => (p.amount || 0) > 0).map(p => {
+                    const lab = splitPayLabels[p.method] || String(p.method || '').toUpperCase();
+                    return '<div class="pos-receipt-row"><span>' + this.escapeHtml(lab) + '</span><span>' + this.formatCurrency(p.amount) + '</span></div>';
+                }).join('');
+                paymentRowsHtml += '<div class="pos-receipt-row"><span>Total paid</span><span>' + this.formatCurrency(sale.total) + '</span></div>';
+            } else {
+                paymentRowsHtml = '<div class="pos-receipt-row"><span>Payment (' + String(sale.paymentMethod || '').toUpperCase() + ')</span><span>' + this.formatCurrency(sale.amountPaid) + '</span></div>';
+            }
 
             const modal = document.createElement('div');
             modal.className = 'pos-modal-overlay';
@@ -1328,11 +1626,8 @@
                                 <span>TOTAL</span>
                                 <span>${this.formatCurrency(sale.total)}</span>
                             </div>
-                            <div class="pos-receipt-row">
-                                <span>Payment (${sale.paymentMethod.toUpperCase()})</span>
-                                <span>${this.formatCurrency(sale.amountPaid)}</span>
-                            </div>
-                            ${changeDue > 0 ? `
+                            ${paymentRowsHtml}
+                            ${sale.paymentMethod !== 'split' && changeDue > 0 ? `
                             <div class="pos-receipt-row">
                                 <span>Change</span>
                                 <span>${this.formatCurrency(changeDue)}</span>
@@ -1341,7 +1636,7 @@
 
                         <div class="pos-receipt-footer">
                             <p>${PharmaFlow.Settings ? PharmaFlow.Settings.getReceiptFooter() : 'Thank you for your purchase!'}</p>
-                            <p><small>Items: ${sale.itemCount} | ${sale.paymentMethod.toUpperCase()}</small></p>
+                            <p><small>Items: ${sale.itemCount} | ${sale.paymentMethod === 'split' ? 'SPLIT' : sale.paymentMethod.toUpperCase()}</small></p>
                         </div>
                     </div>
 

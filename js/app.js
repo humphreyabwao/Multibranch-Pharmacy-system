@@ -1016,9 +1016,34 @@
         });
     };
 
+    /** Warning buzzer for danger alerts (Web Audio). */
+    function playPfDangerAlertSound() {
+        try {
+            var AC = window.AudioContext || window.webkitAudioContext;
+            if (!AC) return;
+            var ctx = new AC();
+            var o = ctx.createOscillator();
+            var g = ctx.createGain();
+            o.connect(g);
+            g.connect(ctx.destination);
+            o.type = 'sawtooth';
+            o.frequency.setValueAtTime(320, ctx.currentTime);
+            o.frequency.setValueAtTime(280, ctx.currentTime + 0.08);
+            g.gain.setValueAtTime(0.0001, ctx.currentTime);
+            g.gain.exponentialRampToValueAtTime(0.14, ctx.currentTime + 0.02);
+            g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.35);
+            o.start(ctx.currentTime);
+            o.stop(ctx.currentTime + 0.36);
+            setTimeout(function () { ctx.close(); }, 450);
+        } catch (e) { /* ignore */ }
+    }
+
     /**
      * PharmaFlow.alert(message, options?) → Promise<void>
      * Usage:  await PharmaFlow.alert('Done!');
+     *
+     *  options.variant  — 'info' (default) | 'danger' (red modal + warning sound)
+     *  options.sound    — set false to skip sound when variant is danger
      */
     window.PharmaFlow.alert = function (message, options) {
         options = options || {};
@@ -1027,21 +1052,30 @@
             if (existing) existing.remove();
 
             var title = options.title || 'Notice';
+            var danger = options.variant === 'danger';
+            if (danger && options.sound !== false) {
+                playPfDangerAlertSound();
+            }
+
+            var boxClass = 'pf-confirm-box' + (danger ? ' pf-confirm-box--danger' : '');
+            var iconClass = 'pf-confirm-icon' + (danger ? ' pf-confirm-icon--danger' : ' pf-confirm-icon--info');
+            var iconName = danger ? 'exclamation-triangle' : 'info-circle';
+            var btnClass = danger ? 'pf-confirm-btn pf-confirm-btn--danger pf-confirm-btn--danger-alert-ok' : 'pf-confirm-btn pf-confirm-btn--primary';
 
             var overlay = document.createElement('div');
             overlay.id = 'pf-confirm-overlay';
             overlay.className = 'pf-confirm-overlay';
             overlay.innerHTML =
-                '<div class="pf-confirm-box">' +
+                '<div class="' + boxClass + '">' +
                     '<div class="pf-confirm-header">' +
-                        '<div class="pf-confirm-icon pf-confirm-icon--info">' +
-                            '<i class="fas fa-info-circle"></i>' +
+                        '<div class="' + iconClass + '">' +
+                            '<i class="fas fa-' + iconName + '"></i>' +
                         '</div>' +
-                        '<h3>' + title + '</h3>' +
+                        '<h3 class="' + (danger ? 'pf-confirm-title--danger' : '') + '">' + title + '</h3>' +
                     '</div>' +
-                    '<div class="pf-confirm-body"><p>' + message + '</p></div>' +
-                    '<div class="pf-confirm-actions">' +
-                        '<button class="pf-confirm-btn pf-confirm-btn--primary" id="pf-confirm-ok">OK</button>' +
+                    '<div class="pf-confirm-body"><p class="' + (danger ? 'pf-confirm-text--danger' : '') + '">' + message + '</p></div>' +
+                    '<div class="pf-confirm-actions' + (danger ? ' pf-confirm-actions--danger' : '') + '">' +
+                        '<button class="' + btnClass + '" id="pf-confirm-ok">OK</button>' +
                     '</div>' +
                 '</div>';
 
@@ -1057,5 +1091,36 @@
             overlay.querySelector('#pf-confirm-ok').addEventListener('click', close);
             overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
         });
+    };
+
+    /**
+     * Iterate each payment slice on a sale (split legs or single method).
+     * @param {{ paymentMethod?: string, paymentSplits?: Array<{method:string,amount:number}>, total?: number }} sale
+     * @param {(method: string, amount: number) => void} fn
+     */
+    window.PharmaFlow.forEachSalePaymentPart = function (sale, fn) {
+        if (!sale || typeof fn !== 'function') return;
+        if (sale.paymentMethod === 'split' && Array.isArray(sale.paymentSplits) && sale.paymentSplits.length) {
+            sale.paymentSplits.forEach(function (p) {
+                fn(String(p.method || 'other').toLowerCase(), Number(p.amount) || 0);
+            });
+        } else {
+            fn(String(sale.paymentMethod || 'other').toLowerCase(), Number(sale.total) || 0);
+        }
+    };
+
+    /**
+     * POS / sales list filter: cash | mpesa | card | split (card filter includes bank splits).
+     */
+    window.PharmaFlow.saleMatchesPaymentFilter = function (sale, payFilter) {
+        if (!payFilter) return true;
+        if (payFilter === 'split') return sale.paymentMethod === 'split';
+        var ok = false;
+        PharmaFlow.forEachSalePaymentPart(sale, function (m, amt) {
+            if (amt <= 0) return;
+            if (payFilter === 'card' && (m === 'card' || m === 'bank')) ok = true;
+            else if (m === payFilter) ok = true;
+        });
+        return ok;
     };
 })();

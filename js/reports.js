@@ -35,6 +35,13 @@
             if (typeof d === 'string') return new Date(d);
             return d instanceof Date ? d : null;
         },
+        _salePaymentLabel(s) {
+            if (s.paymentMethod === 'split' && Array.isArray(s.paymentSplits) && s.paymentSplits.length) {
+                return 'SPLIT ' + s.paymentSplits.filter(p => (p.amount || 0) > 0)
+                    .map(p => String(p.method || '').toUpperCase() + ':' + (p.amount || 0)).join(', ');
+            }
+            return (s.paymentMethod || '').toUpperCase();
+        },
 
         /* ─── Date Range Filter ─── */
         _getRange() {
@@ -218,7 +225,16 @@
 
             // Payment method breakdown
             const pmBreak = {};
-            sales.forEach(s => { const m = s.paymentMethod || 'other'; pmBreak[m] = (pmBreak[m] || 0) + (s.total || 0); });
+            sales.forEach(s => {
+                if (typeof PharmaFlow.forEachSalePaymentPart === 'function') {
+                    PharmaFlow.forEachSalePaymentPart(s, (m, amt) => {
+                        pmBreak[m] = (pmBreak[m] || 0) + amt;
+                    });
+                } else {
+                    const m = s.paymentMethod || 'other';
+                    pmBreak[m] = (pmBreak[m] || 0) + (s.total || 0);
+                }
+            });
 
             // Top categories
             const catBreak = {};
@@ -577,7 +593,16 @@
 
             // Payment method income
             const pmIncome = {};
-            sales.forEach(s => { const m = s.paymentMethod || 'other'; pmIncome[m] = (pmIncome[m] || 0) + (s.total || 0); });
+            sales.forEach(s => {
+                if (typeof PharmaFlow.forEachSalePaymentPart === 'function') {
+                    PharmaFlow.forEachSalePaymentPart(s, (m, amt) => {
+                        pmIncome[m] = (pmIncome[m] || 0) + amt;
+                    });
+                } else {
+                    const m = s.paymentMethod || 'other';
+                    pmIncome[m] = (pmIncome[m] || 0) + (s.total || 0);
+                }
+            });
 
             body.innerHTML = `
             <div class="card">
@@ -718,7 +743,7 @@
                     headers = ['Sale ID', 'Date', 'Items', 'Total', 'Profit', 'Payment', 'Sold By'];
                     rows = data.map(s => {
                         const d = this._dateObj(s.createdAt || s.saleDate);
-                        return [s.saleId || s.id, d ? d.toLocaleDateString('en-KE') : '-', s.itemCount || 0, s.total || 0, s.totalProfit || 0, (s.paymentMethod || '').toUpperCase(), s.soldBy || '-'];
+                        return [s.saleId || s.id, d ? d.toLocaleDateString('en-KE') : '-', s.itemCount || 0, s.total || 0, s.totalProfit || 0, this._salePaymentLabel(s), s.soldBy || '-'];
                     });
                     break;
                 }
@@ -839,7 +864,7 @@
             const headers = ['Sale ID', 'Date', 'Items', 'Total', 'Profit', 'Payment', 'Sold By'];
             const rows = sales.map(s => {
                 const d = this._dateObj(s.createdAt || s.saleDate);
-                return [s.saleId || s.id, d ? d.toLocaleDateString('en-KE') : '-', s.itemCount || 0, s.total || 0, s.totalProfit || 0, (s.paymentMethod || '').toUpperCase(), s.soldBy || '-'];
+                return [s.saleId || s.id, d ? d.toLocaleDateString('en-KE') : '-', s.itemCount || 0, s.total || 0, s.totalProfit || 0, this._salePaymentLabel(s), s.soldBy || '-'];
             });
             this._exportPDF('Sales Report', headers, rows, from, to);
         },

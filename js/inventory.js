@@ -556,36 +556,23 @@
             );
         },
 
+        /**
+         * Delegates to PharmaFlow.computeInventoryStats (inventory-stats-shared.js) — single source for Dashboard + Inventory.
+         */
+        computeStatsFromProducts: function (products) {
+            if (PharmaFlow.computeInventoryStats) {
+                return PharmaFlow.computeInventoryStats(products);
+            }
+            return { totalProducts: 0, totalValue: 0, outOfStock: 0, lowStock: 0, expiringSoon: 0 };
+        },
+
         updateStats: function () {
-            const now = new Date();
-            const thirtyDays = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-
-            let totalValue = 0;
-            let outOfStock = 0;
-            let lowStock = 0;
-            let expiringSoon = 0;
-
-            allProducts.forEach(p => {
-                const qty = p.quantity || 0;
-                const price = p.sellingPrice || 0;
-                const reorderLevel = p.reorderLevel || 10;
-
-                totalValue += qty * price;
-
-                if (qty <= 0) outOfStock++;
-                else if (qty <= reorderLevel) lowStock++;
-
-                if (p.expiryDate) {
-                    const exp = p.expiryDate.toDate ? p.expiryDate.toDate() : new Date(p.expiryDate);
-                    if (exp <= thirtyDays && exp > now) expiringSoon++;
-                }
-            });
-
-            this.setStat('inv-stat-total', allProducts.length);
-            this.setStat('inv-stat-value', this.formatCurrency(totalValue));
-            this.setStat('inv-stat-outofstock', outOfStock);
-            this.setStat('inv-stat-lowstock', lowStock);
-            this.setStat('inv-stat-expiring', expiringSoon);
+            const s = this.computeStatsFromProducts(allProducts);
+            this.setStat('inv-stat-total', s.totalProducts);
+            this.setStat('inv-stat-value', this.formatCurrency(s.totalValue));
+            this.setStat('inv-stat-outofstock', s.outOfStock);
+            this.setStat('inv-stat-lowstock', s.lowStock);
+            this.setStat('inv-stat-expiring', s.expiringSoon);
         },
 
         setStat: function (id, value) {
@@ -1672,6 +1659,13 @@
                                         </div>
                                     </div>
                                     <div class="inv-form-row">
+                                        <div class="inv-form-group full-width">
+                                            <label for="inv-min-sell-price">Minimum sell price — discount floor (KSH)</label>
+                                            <input type="number" id="inv-min-sell-price" min="0" step="0.01" placeholder="Leave blank to use buying price">
+                                            <small>Optional. POS blocks discounts that net below this per unit (cart discount is split by line). Blank = buying price.</small>
+                                        </div>
+                                    </div>
+                                    <div class="inv-form-row">
                                         <div class="inv-form-group">
                                             <label for="inv-vat-enabled">VAT Applies</label>
                                             <select id="inv-vat-enabled">
@@ -1842,6 +1836,19 @@
                 return;
             }
 
+            const minSellRaw = parseFloat(document.getElementById('inv-min-sell-price')?.value);
+            let minimumSellPrice = Number.isFinite(minSellRaw) && minSellRaw > 0 ? minSellRaw : null;
+            if (minimumSellPrice != null) {
+                if (minimumSellPrice - sellingPrice > 0.001) {
+                    this.showToast('Minimum sell price cannot be greater than selling price.', 'error');
+                    return;
+                }
+                if (buyingPrice > 0 && minimumSellPrice + 0.001 < buyingPrice) {
+                    this.showToast('Minimum sell price cannot be below buying price (cost).', 'error');
+                    return;
+                }
+            }
+
             if (vatEnabled && vatValueRaw < 0) {
                 this.showToast('VAT value cannot be negative.', 'error');
                 return;
@@ -1889,6 +1896,10 @@
                 updatedAt: new Date().toISOString(),
                 createdBy: PharmaFlow.Auth?.currentUser?.uid || ''
             };
+
+            if (minimumSellPrice != null) {
+                product.minimumSellPrice = minimumSellPrice;
+            }
 
             try {
                 const colRef = getBusinessCollection(businessId, 'inventory');
@@ -2139,6 +2150,13 @@
                                 </div>
                             </div>
                             <div class="inv-form-row">
+                                <div class="inv-form-group full-width">
+                                    <label for="edit-min-sell-price">Minimum sell price — discount floor (KSH)</label>
+                                    <input type="number" id="edit-min-sell-price" min="0" step="0.01" value="${product.minimumSellPrice != null && product.minimumSellPrice !== '' ? product.minimumSellPrice : ''}" placeholder="Blank = buying price">
+                                    <small>Optional. POS cannot discount below this per unit. Blank uses buying price.</small>
+                                </div>
+                            </div>
+                            <div class="inv-form-row">
                                 <div class="inv-form-group">
                                     <label>VAT Applies</label>
                                     <select id="edit-vat-enabled">
@@ -2245,6 +2263,23 @@
             const vatValue = vatEnabled ? (vatType === 'percent' ? Math.min(vatRaw, 100) : vatRaw) : 0;
 
             const expiryStr = document.getElementById('edit-expiry')?.value;
+            const sellPrice = parseFloat(document.getElementById('edit-selling-price')?.value) || 0;
+            const buyPrice = parseFloat(document.getElementById('edit-buying-price')?.value) || 0;
+            const minSellRaw = parseFloat(document.getElementById('edit-min-sell-price')?.value);
+            let minSellPersist = Number.isFinite(minSellRaw) && minSellRaw > 0 ? minSellRaw : null;
+            if (minSellPersist != null) {
+                if (minSellPersist - sellPrice > 0.001) {
+                    this.showToast('Minimum sell price cannot be greater than selling price.', 'error');
+                    if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = '<i class="fas fa-save"></i> Save Changes'; }
+                    return;
+                }
+                if (buyPrice > 0 && minSellPersist + 0.001 < buyPrice) {
+                    this.showToast('Minimum sell price cannot be below buying price (cost).', 'error');
+                    if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = '<i class="fas fa-save"></i> Save Changes'; }
+                    return;
+                }
+            }
+
             const updates = {
                 name: document.getElementById('edit-name')?.value?.trim() || '',
                 genericName: document.getElementById('edit-generic-name')?.value?.trim() || '',
@@ -2260,7 +2295,8 @@
                 drugType: document.getElementById('edit-drug-type')?.value || '',
                 manufacturer: document.getElementById('edit-manufacturer')?.value?.trim() || '',
                 supplier: document.getElementById('edit-supplier')?.value?.trim() || '',
-                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                minimumSellPrice: minSellPersist != null ? minSellPersist : firebase.firestore.FieldValue.delete()
             };
 
             if (expiryStr) {

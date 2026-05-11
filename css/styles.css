@@ -4058,6 +4058,64 @@ input, select, textarea {
     color: var(--text-secondary);
 }
 
+.pos-split-toggle {
+    margin-bottom: 10px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.pos-payment-split {
+    margin-top: 8px;
+    padding: 10px;
+    border-radius: var(--radius-md);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+}
+.pos-split-heading {
+    display: block;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+}
+.pos-split-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 8px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+.pos-split-row input {
+    flex: 1;
+    max-width: 140px;
+    padding: 6px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    font-size: 0.85rem;
+    text-align: right;
+    background: var(--bg-input);
+    color: var(--text-primary);
+}
+.pos-split-summary {
+    font-size: 0.78rem;
+    margin-top: 4px;
+    min-height: 1.25em;
+}
+.pos-split-ok {
+    color: var(--success);
+    font-weight: 600;
+}
+.pos-split-warn {
+    color: var(--danger);
+    font-weight: 600;
+}
+
 /* ─── Checkout ─── */
 
 .pos-checkout-actions {
@@ -4477,6 +4535,7 @@ input, select, textarea {
     gap: 4px;
 }
 .pay--cash  { background: #d1fae5; color: #065f46; }
+.pay--split { background: #ede9fe; color: #5b21b6; }
 .pay--mpesa { background: #dbeafe; color: #1d4ed8; }
 .pay--card  { background: #fef3c7; color: #92400e; }
 
@@ -12909,6 +12968,33 @@ input, select, textarea {
     overflow: hidden;
 }
 .pf-confirm-overlay.open .pf-confirm-box { transform: scale(1); }
+
+.pf-confirm-box--danger {
+    border: 2px solid #fecaca;
+    box-shadow: 0 16px 48px rgba(185, 28, 28, 0.22), 0 0 0 1px rgba(248, 113, 113, 0.35);
+}
+.pf-confirm-box--danger .pf-confirm-header {
+    padding-top: 22px;
+    background: linear-gradient(180deg, rgba(254, 242, 242, 0.98) 0%, rgba(254, 242, 242, 0.35) 55%, transparent 100%);
+}
+.pf-confirm-title--danger {
+    color: #b91c1c !important;
+}
+.pf-confirm-text--danger {
+    color: #991b1b !important;
+}
+.pf-confirm-actions--danger {
+    border-top-color: #fecaca !important;
+}
+.pf-confirm-btn--danger-alert-ok {
+    flex: 1;
+    color: #fff !important;
+    font-weight: 700 !important;
+    background: #dc2626 !important;
+}
+.pf-confirm-btn--danger-alert-ok:hover {
+    background: #b91c1c !important;
+}
 
 .pf-confirm-header {
     display: flex; flex-direction: column; align-items: center;
