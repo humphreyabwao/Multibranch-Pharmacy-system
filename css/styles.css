@@ -4247,6 +4247,14 @@ input, select, textarea {
     color: var(--text-tertiary);
 }
 
+.pf-receipt-payment-extra {
+    margin: 4px 0;
+    font-size: 0.8rem;
+    font-weight: 700;
+    line-height: 1.35;
+    color: var(--text-primary);
+}
+
 .pos-receipt-actions {
     display: flex;
     gap: 8px;
@@ -9595,6 +9603,13 @@ input, select, textarea {
 }
 
 /* Footer */
+.rcpt-payment-extra {
+    font-size: 0.82rem;
+    font-weight: 700;
+    margin: 3px 0;
+    line-height: 1.35;
+    color: #0f172a;
+}
 .rcpt-footer {
     text-align: center;
     padding: 10px 0 4px;
@@ -10723,6 +10738,14 @@ input, select, textarea {
     margin-top: 4px;
 }
 
+.st-receipt-paybill-heading {
+    display: block;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 10px;
+}
+
 .st-divider {
     border: none;
     border-top: 1px solid var(--border);
@@ -10944,6 +10967,19 @@ input, select, textarea {
     margin-top: 6px;
     font-size: 0.72rem;
     color: #666;
+}
+
+.st-rp-extras {
+    text-align: center;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #111;
+    margin-top: 4px;
+}
+
+.st-rp-extra-line {
+    margin: 2px 0;
+    font-weight: 700;
 }
 
 /* Invoice Preview */
@@ -11318,6 +11354,13 @@ input, select, textarea {
     border-top: 1px solid #e2e8f0;
     font-size: 0.84rem;
     color: #64748b;
+}
+.pt-inv-receipt-extra {
+    margin: 4px 0;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: #1e293b;
+    line-height: 1.4;
 }
 .pt-inv-footer small { display: block; margin-top: 4px; font-size: 0.72rem; }
 

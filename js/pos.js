@@ -1635,6 +1635,7 @@
                         </div>
 
                         <div class="pos-receipt-footer">
+                            ${PharmaFlow.Settings && PharmaFlow.Settings.getReceiptPaymentExtrasHtml ? PharmaFlow.Settings.getReceiptPaymentExtrasHtml('pf-receipt-payment-extra') : ''}
                             <p>${PharmaFlow.Settings ? PharmaFlow.Settings.getReceiptFooter() : 'Thank you for your purchase!'}</p>
                             <p><small>Items: ${sale.itemCount} | ${sale.paymentMethod === 'split' ? 'SPLIT' : sale.paymentMethod.toUpperCase()}</small></p>
                         </div>
@@ -1679,6 +1680,7 @@
                         .pos-receipt-totals { border-top: 1px dashed #000; padding-top: 8px; font-size: 0.82rem; }
                         .pos-receipt-row { display: flex; justify-content: space-between; padding: 3px 0; }
                         .pos-receipt-grand-total { font-weight: bold; font-size: 1rem; border-top: 1px solid #000; border-bottom: 1px solid #000; padding: 6px 0; margin: 4px 0; }
+                        .pf-receipt-payment-extra { margin: 4px 0; font-size: 0.82rem; font-weight: bold; text-align: center; line-height: 1.35; color: #000; }
                         .pos-receipt-footer { text-align: center; margin-top: 15px; padding-top: 10px; border-top: 1px dashed #000; font-size: 0.75rem; }
                         .pos-receipt-logo i { display: none; }
                         @media print { body { padding: 0; } }
