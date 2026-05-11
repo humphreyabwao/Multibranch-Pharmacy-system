@@ -1015,7 +1015,7 @@
                 '      <div class="form-group">' +
                 '        <label for="st-receipt-support">Business support number</label>' +
                 '        <input type="tel" id="st-receipt-support" value="' + self._escapeHtml(b.receiptSupportPhone || '') + '" placeholder="e.g. +254 712 345 678">' +
-                '        <small class="st-help-text">Support or enquiries line on receipts</small>' +
+                '        <small class="st-help-text">Support or enquiries line on receipts and invoices</small>' +
                 '      </div>' +
                 '      <div class="form-group">' +
                 '        <label for="st-receipt-footer">Receipt Footer Message</label>' +
@@ -1050,6 +1050,23 @@
                 '    <p class="st-section-desc">Customize wholesale invoice appearance</p>' +
                 '    <form id="st-invoice-form" class="st-form">' +
                 '      <div class="form-group">' +
+                '        <label for="st-invoice-till">Till number</label>' +
+                '        <input type="text" id="st-invoice-till" value="' + self._escapeHtml(b.receiptTillNumber || '') + '" placeholder="e.g. Buy Goods till">' +
+                '        <small class="st-help-text">Printed on wholesale invoices when set</small>' +
+                '      </div>' +
+                '      <div class="form-group">' +
+                '        <span class="st-receipt-paybill-heading">Paybill (M-Pesa)</span>' +
+                '        <label for="st-invoice-paybill">Paybill number</label>' +
+                '        <input type="text" id="st-invoice-paybill" value="' + self._escapeHtml(b.receiptPaybillNumber || '') + '" placeholder="e.g. 123456" autocomplete="off">' +
+                '        <label for="st-invoice-paybill-account">Account number</label>' +
+                '        <input type="text" id="st-invoice-paybill-account" value="' + self._escapeHtml(b.receiptPaybillAccountNumber || '') + '" placeholder="e.g. invoice ref or phone" autocomplete="off">' +
+                '        <small class="st-help-text">Same values as receipt settings; editing either card keeps both in sync.</small>' +
+                '      </div>' +
+                '      <div class="form-group">' +
+                '        <label for="st-invoice-support">Business support number</label>' +
+                '        <input type="tel" id="st-invoice-support" value="' + self._escapeHtml(b.receiptSupportPhone || '') + '" placeholder="e.g. +254 712 345 678">' +
+                '      </div>' +
+                '      <div class="form-group">' +
                 '        <label for="st-invoice-footer">Invoice Thank You Message</label>' +
                 '        <input type="text" id="st-invoice-footer" value="' + self._escapeHtml(b.invoiceFooter) + '" placeholder="Thank you for your business!">' +
                 '      </div>' +
@@ -1059,7 +1076,7 @@
                 '        <small class="st-help-text">Use {name} for business name and {tagline} for tagline</small>' +
                 '      </div>' +
                 '      <div class="st-preview-box">' +
-                '        <h4><i class="fas fa-eye"></i> Invoice Header Preview</h4>' +
+                '        <h4><i class="fas fa-eye"></i> Invoice Preview</h4>' +
                 '        <div class="st-invoice-preview">' +
                 '          <div class="st-ip-header">' +
                 '            <div class="st-ip-brand">' +
@@ -1069,6 +1086,15 @@
                 '            <small id="st-ip-tagline">' + self._escapeHtml(b.tagline) + '</small>' +
                 '          </div>' +
                 '          <div class="st-ip-title">INVOICE</div>' +
+                '          <div class="st-ip-divider"></div>' +
+                '          <div class="st-ip-sample-line"><span>Sample line item</span><span>KSH 1,000</span></div>' +
+                '          <div class="st-ip-sample-total"><span>TOTAL DUE</span><span>KSH 1,000</span></div>' +
+                '          <div class="st-ip-divider"></div>' +
+                '          <div class="st-ip-extras st-rp-extras" id="st-ip-extras"></div>' +
+                '          <div class="st-ip-footer-preview">' +
+                '            <div id="st-ip-footer-msg-preview"></div>' +
+                '            <small id="st-ip-footer-gen-preview"></small>' +
+                '          </div>' +
                 '        </div>' +
                 '      </div>' +
                 '      <div class="st-form-actions">' +
@@ -1084,6 +1110,7 @@
             self._bindInvoiceForm(container);
 
             self._syncReceiptSettingsPreview();
+            self._syncInvoiceSettingsPreview();
 
             var footerInput = document.getElementById('st-receipt-footer');
             if (footerInput) footerInput.addEventListener('input', function () {
@@ -1093,33 +1120,78 @@
 
             ['st-receipt-till', 'st-receipt-paybill', 'st-receipt-paybill-account', 'st-receipt-support'].forEach(function (id) {
                 var inp = document.getElementById(id);
-                if (inp) inp.addEventListener('input', function () { self._syncReceiptSettingsPreview(); });
+                if (inp) inp.addEventListener('input', function () {
+                    self._syncReceiptSettingsPreview();
+                    self._mirrorPaymentFieldsBetweenForms('st-receipt-', 'st-invoice-');
+                    self._syncInvoiceSettingsPreview();
+                });
             });
+
+            ['st-invoice-till', 'st-invoice-paybill', 'st-invoice-paybill-account', 'st-invoice-support'].forEach(function (id) {
+                var inp = document.getElementById(id);
+                if (inp) inp.addEventListener('input', function () {
+                    self._mirrorPaymentFieldsBetweenForms('st-invoice-', 'st-receipt-');
+                    self._syncReceiptSettingsPreview();
+                    self._syncInvoiceSettingsPreview();
+                });
+            });
+
+            var invFooterIn = document.getElementById('st-invoice-footer');
+            var invGenIn = document.getElementById('st-invoice-generated');
+            if (invFooterIn) invFooterIn.addEventListener('input', function () { self._syncInvoiceSettingsPreview(); });
+            if (invGenIn) invGenIn.addEventListener('input', function () { self._syncInvoiceSettingsPreview(); });
         },
 
-        _syncReceiptSettingsPreview: function () {
-            var box = document.getElementById('st-rp-extras');
+        _syncPaymentExtrasBox: function (boxId, prefix) {
+            var box = document.getElementById(boxId);
             if (!box) return;
-            var tillEl = document.getElementById('st-receipt-till');
-            var payEl = document.getElementById('st-receipt-paybill');
-            var payAccEl = document.getElementById('st-receipt-paybill-account');
-            var supEl = document.getElementById('st-receipt-support');
+            var tillEl = document.getElementById(prefix + 'till');
+            var payEl = document.getElementById(prefix + 'paybill');
+            var payAccEl = document.getElementById(prefix + 'paybill-account');
+            var supEl = document.getElementById(prefix + 'support');
             var till = tillEl ? tillEl.value.trim() : '';
             var paybill = payEl ? payEl.value.trim() : '';
             var paybillAccount = payAccEl ? payAccEl.value.trim() : '';
             var support = supEl ? supEl.value.trim() : '';
             box.innerHTML = '';
-            function addLine(prefix, val) {
+            function addLine(label, val) {
                 if (!val) return;
                 var p = document.createElement('p');
                 p.className = 'st-rp-extra-line';
-                p.textContent = prefix + ' ' + val;
+                p.textContent = label + ' ' + val;
                 box.appendChild(p);
             }
             addLine('Till:', till);
             addLine('Paybill no.:', paybill);
             addLine('Account no.:', paybillAccount);
             addLine('Support:', support);
+        },
+
+        _mirrorPaymentFieldsBetweenForms: function (fromPrefix, toPrefix) {
+            ['till', 'paybill', 'paybill-account', 'support'].forEach(function (suffix) {
+                var from = document.getElementById(fromPrefix + suffix);
+                var to = document.getElementById(toPrefix + suffix);
+                if (from && to) to.value = from.value;
+            });
+        },
+
+        _syncReceiptSettingsPreview: function () {
+            this._syncPaymentExtrasBox('st-rp-extras', 'st-receipt-');
+        },
+
+        _syncInvoiceSettingsPreview: function () {
+            this._syncPaymentExtrasBox('st-ip-extras', 'st-invoice-');
+            var footerEl = document.getElementById('st-ip-footer-msg-preview');
+            var genEl = document.getElementById('st-ip-footer-gen-preview');
+            var footerIn = document.getElementById('st-invoice-footer');
+            var genIn = document.getElementById('st-invoice-generated');
+            var b = this.business;
+            if (footerEl && footerIn) footerEl.textContent = footerIn.value;
+            if (genEl && genIn) {
+                genEl.textContent = genIn.value
+                    .replace(/\{name\}/g, b.name || '')
+                    .replace(/\{tagline\}/g, b.tagline || '');
+            }
         },
 
         _bindReceiptForm: function (container) {
@@ -1145,6 +1217,9 @@
                         receiptFooter: document.getElementById('st-receipt-footer').value.trim(),
                         updatedAt: new Date().toISOString()
                     });
+
+                    self._mirrorPaymentFieldsBetweenForms('st-receipt-', 'st-invoice-');
+                    self._syncInvoiceSettingsPreview();
 
                     self._showToast('Receipt settings saved', 'success');
                 } catch (err) {
@@ -1172,10 +1247,17 @@
                     if (!businessId) throw new Error('No business ID');
 
                     await window.db.collection('businesses').doc(businessId).update({
+                        receiptTillNumber: document.getElementById('st-invoice-till').value.trim(),
+                        receiptPaybillNumber: document.getElementById('st-invoice-paybill').value.trim(),
+                        receiptPaybillAccountNumber: document.getElementById('st-invoice-paybill-account').value.trim(),
+                        receiptSupportPhone: document.getElementById('st-invoice-support').value.trim(),
                         invoiceFooter: document.getElementById('st-invoice-footer').value.trim(),
                         invoiceGenerated: document.getElementById('st-invoice-generated').value.trim(),
                         updatedAt: new Date().toISOString()
                     });
+
+                    self._mirrorPaymentFieldsBetweenForms('st-invoice-', 'st-receipt-');
+                    self._syncReceiptSettingsPreview();
 
                     self._showToast('Invoice settings saved', 'success');
                 } catch (err) {

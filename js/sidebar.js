@@ -138,6 +138,7 @@
             roles: [],
             children: [
                 { id: 'reports-overview', label: 'Overview', icon: 'fas fa-chart-pie' },
+                { id: 'reports-statistics', label: 'Statistics', icon: 'fas fa-wave-square' },
                 { id: 'sales-reports', label: 'Sales Reports', icon: 'fas fa-cash-register' },
                 { id: 'inventory-reports', label: 'Inventory Reports', icon: 'fas fa-boxes-stacked' },
                 { id: 'financial-reports', label: 'Financial Reports', icon: 'fas fa-file-invoice-dollar' },

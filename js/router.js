@@ -319,6 +319,7 @@
                 PharmaFlow.Reports.cleanup();
 
                 if (subId === 'reports-overview') { PharmaFlow.Reports.renderOverview(contentBody); return; }
+                if (subId === 'reports-statistics') { PharmaFlow.Reports.renderStatistics(contentBody); return; }
                 if (subId === 'sales-reports') { PharmaFlow.Reports.renderSales(contentBody); return; }
                 if (subId === 'inventory-reports') { PharmaFlow.Reports.renderInventory(contentBody); return; }
                 if (subId === 'financial-reports') { PharmaFlow.Reports.renderFinancial(contentBody); return; }

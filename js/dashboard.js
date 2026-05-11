@@ -19,6 +19,8 @@
         _listeners: [],
         _searchDebounce: null,
         _isActive: false,
+        /** Coalesce rapid Firestore inventory writes into one DOM update */
+        _invStatsRaf: null,
 
         /**
          * Render the full dashboard into the content body
@@ -203,7 +205,7 @@
             }
 
             // Bind refresh button
-            this.bindRefreshButton(businessId);
+            this.bindRefreshButton();
 
             // Bind search with overlay panel
             this.bindSearch(businessId);
@@ -216,6 +218,10 @@
          * Clean up all real-time listeners
          */
         cleanup: function () {
+            if (this._invStatsRaf != null) {
+                cancelAnimationFrame(this._invStatsRaf);
+                this._invStatsRaf = null;
+            }
             this._isActive = false;
             this._listeners.forEach(unsub => {
                 try { unsub(); } catch (e) { /* ignore */ }
@@ -261,7 +267,7 @@
         /**
          * Bind refresh button — tears down and re-establishes all listeners
          */
-        bindRefreshButton: function (businessId) {
+        bindRefreshButton: function () {
             const refreshBtn = document.getElementById('dashboard-refresh-btn');
             if (!refreshBtn) return;
 
@@ -284,9 +290,10 @@
                     listEl.innerHTML = '<tr><td colspan="5" class="activities-loading-cell"><div class="spinner"></div> Refreshing...</td></tr>';
                 }
 
-                // Re-establish listeners
+                // Re-establish listeners (always use current franchise / branch)
                 setTimeout(() => {
-                    this.startRealtimeListeners(businessId);
+                    const bid = this.getBusinessId();
+                    if (bid) this.startRealtimeListeners(bid);
                     if (icon) icon.classList.remove('fa-spin');
                     refreshBtn.disabled = false;
                 }, 100);
@@ -976,24 +983,45 @@
         },
 
         /**
+         * Apply inventory KPIs to dashboard stat cards (same math as Inventory module).
+         */
+        _applyInventoryStatsFromProducts: function (products, listenerBusinessId) {
+            if (!this._isActive) return;
+            if (listenerBusinessId && this.getBusinessId() !== listenerBusinessId) return;
+
+            const s = PharmaFlow.computeInventoryStats
+                ? PharmaFlow.computeInventoryStats(products)
+                : { totalProducts: 0, totalValue: 0, outOfStock: 0, lowStock: 0, expiringSoon: 0 };
+
+            this.setStat('stat-total-products', s.totalProducts);
+            this.setStat('stat-out-of-stock', s.outOfStock);
+            this.setStat('stat-expiring-soon', s.expiringSoon);
+            this.setStat('stat-inventory-value', this.formatCurrency(s.totalValue));
+        },
+
+        /** Batch multiple inventory snapshot events in the same frame */
+        _scheduleInventoryStatsApply: function (products, listenerBusinessId) {
+            const self = this;
+            if (self._invStatsRaf != null) cancelAnimationFrame(self._invStatsRaf);
+            self._invStatsRaf = requestAnimationFrame(function () {
+                self._invStatsRaf = null;
+                self._applyInventoryStatsFromProducts(products, listenerBusinessId);
+            });
+        },
+
+        /**
          * Inventory real-time listener — KPIs from PharmaFlow.computeInventoryStats (same as Inventory module).
          */
         _listenInventory: function (businessId) {
             const invRef = getBusinessCollection(businessId, 'inventory');
             if (!invRef) return;
 
+            const listenerBiz = businessId;
             const unsub = invRef.onSnapshot(snap => {
                 if (!this._isActive) return;
                 const products = [];
                 snap.forEach(doc => products.push({ id: doc.id, ...doc.data() }));
-                const s = PharmaFlow.computeInventoryStats
-                    ? PharmaFlow.computeInventoryStats(products)
-                    : { totalProducts: 0, totalValue: 0, outOfStock: 0, lowStock: 0, expiringSoon: 0 };
-
-                this.setStat('stat-total-products', s.totalProducts);
-                this.setStat('stat-out-of-stock', s.outOfStock);
-                this.setStat('stat-expiring-soon', s.expiringSoon);
-                this.setStat('stat-inventory-value', this.formatCurrency(s.totalValue));
+                this._scheduleInventoryStatsApply(products, listenerBiz);
             }, err => console.error('Inventory listener error:', err));
             this._listeners.push(unsub);
         },

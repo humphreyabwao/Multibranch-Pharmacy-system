@@ -17,6 +17,10 @@
     let rptDateRange = 'month'; // today | week | month | year | custom
     let rptCustomFrom = '', rptCustomTo = '';
     let rptContainer = null;
+    /** Matches listeners to Auth franchise / branch */
+    let rptListenerBusinessId = null;
+    let rptRefreshRaf = null;
+    let rptStatCharts = [];
 
     const Reports = {
         /* ─── Helpers ─── */
@@ -72,8 +76,14 @@
 
         /* ─── Cleanup ─── */
         cleanup() {
+            if (rptRefreshRaf != null) {
+                cancelAnimationFrame(rptRefreshRaf);
+                rptRefreshRaf = null;
+            }
+            this._destroyStatisticsCharts();
             rptUnsubs.forEach(fn => fn());
             rptUnsubs = [];
+            rptListenerBusinessId = null;
             rptSales = []; rptExpenses = []; rptInventory = []; rptPatients = [];
             rptBills = []; rptWholesale = []; rptOrders = [];
             rptDataReady = { sales: false, expenses: false, inventory: false, patients: false, bills: false, wholesale: false, orders: false };
@@ -108,21 +118,131 @@
                     snap.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
                     refs[c.arr](data);
                     rptDataReady[c.key] = true;
-                    this._onDataUpdate();
+                    this._scheduleTabRefresh();
                 }, err => console.error('Reports listener error:', c.name, err));
                 rptUnsubs.push(unsub);
             });
         },
 
-        _onDataUpdate() {
+        /** One paint per tick when multiple collections update together (inventory + sales, etc.) */
+        _scheduleTabRefresh() {
             if (!rptContainer) return;
-            const body = rptContainer.querySelector('.rpt-tab-body');
-            if (!body) return;
-            this._renderCurrentTab(body);
+            if (rptRefreshRaf != null) return;
+            rptRefreshRaf = requestAnimationFrame(() => {
+                rptRefreshRaf = null;
+                if (!rptContainer) return;
+                const body = rptContainer.querySelector('.rpt-tab-body');
+                if (!body) return;
+                this._renderCurrentTab(body);
+            });
         },
 
-        /* ─── Router Entry Points ─── */
+        _ensureListeners(businessId) {
+            if (!businessId) return;
+            const mismatch = rptListenerBusinessId !== businessId && rptUnsubs.length > 0;
+            const needStart = rptUnsubs.length === 0 || mismatch;
+            if (!needStart) return;
+            if (rptUnsubs.length) {
+                rptUnsubs.forEach(fn => fn());
+                rptUnsubs = [];
+            }
+            rptListenerBusinessId = businessId;
+            this._startListeners(businessId);
+        },
+
+        _destroyStatisticsCharts() {
+            rptStatCharts.forEach(ch => { try { ch.destroy(); } catch (e) { /* noop */ } });
+            rptStatCharts = [];
+        },
+
+        _statisticsTheme() {
+            const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+            return {
+                text: dark ? '#cbd5e1' : '#475569',
+                grid: dark ? 'rgba(148,163,184,0.14)' : 'rgba(100,116,139,0.22)',
+                border: dark ? 'rgba(51,65,85,0.6)' : '#e2e8f0'
+            };
+        },
+
+        _statColors() {
+            return ['#2563eb', '#16a34a', '#ea580c', '#9333ea', '#dc2626', '#0891b2', '#ca8a04', '#db2777', '#4f46e5', '#059669'];
+        },
+
+        _dailySalesSeries(sales) {
+            const map = {};
+            sales.forEach(s => {
+                const d = this._dateObj(s.createdAt || s.saleDate);
+                if (!d || isNaN(d.getTime())) return;
+                const key = d.toISOString().slice(0, 10);
+                map[key] = (map[key] || 0) + (s.total || 0);
+            });
+            const { from, to } = this._getRange();
+            const labels = [];
+            const data = [];
+            const cursor = new Date(from + 'T12:00:00');
+            const end = new Date(to + 'T12:00:00');
+            if (isNaN(cursor.getTime()) || isNaN(end.getTime())) return { labels, data };
+            let guard = 0;
+            while (cursor <= end && guard++ < 400) {
+                const key = cursor.toISOString().slice(0, 10);
+                labels.push(cursor.toLocaleDateString('en-KE', { month: 'short', day: 'numeric' }));
+                data.push(map[key] || 0);
+                cursor.setDate(cursor.getDate() + 1);
+            }
+            return { labels, data };
+        },
+
+        _summarizeForPie(entries, maxSlices) {
+            const top = entries.slice(0, maxSlices);
+            const rest = entries.slice(maxSlices).reduce((s, x) => s + x[1], 0);
+            const labels = top.map(x => x[0]);
+            const data = top.map(x => x[1]);
+            if (rest > 0.01) {
+                labels.push('Other');
+                data.push(rest);
+            }
+            return { labels, data };
+        },
+
+        /** Readable label for stats charts (keys from forEachSalePaymentPart are lowercased). */
+        _formatPaymentStatLabel(methodKey) {
+            const k = String(methodKey || '').toLowerCase().trim();
+            const map = {
+                mpesa: 'M-Pesa',
+                cash: 'Cash',
+                card: 'Card',
+                bank: 'Bank',
+                split: 'Split',
+                cheque: 'Cheque',
+                check: 'Cheque',
+                credit: 'Credit',
+                other: 'Other'
+            };
+            if (map[k]) return map[k];
+            if (!k) return 'Other';
+            return k.charAt(0).toUpperCase() + k.slice(1);
+        },
+
+        /** Per sale: count once per distinct payment method used (split sales count toward each leg). */
+        _paymentSaleTouchesByMethod(sales) {
+            const counts = {};
+            sales.forEach(s => {
+                const touched = new Set();
+                if (typeof PharmaFlow.forEachSalePaymentPart === 'function') {
+                    PharmaFlow.forEachSalePaymentPart(s, (m, amt) => {
+                        if ((amt || 0) <= 0) return;
+                        touched.add(String(m || 'other').toLowerCase());
+                    });
+                } else {
+                    touched.add(String(s.paymentMethod || 'other').toLowerCase());
+                }
+                touched.forEach(key => { counts[key] = (counts[key] || 0) + 1; });
+            });
+            return counts;
+        },
+
         renderOverview(container) { rptCurrentTab = 'reports-overview'; this._init(container); },
+        renderStatistics(container) { rptCurrentTab = 'reports-statistics'; this._init(container); },
         renderSales(container) { rptCurrentTab = 'sales-reports'; this._init(container); },
         renderInventory(container) { rptCurrentTab = 'inventory-reports'; this._init(container); },
         renderFinancial(container) { rptCurrentTab = 'financial-reports'; this._init(container); },
@@ -136,8 +256,10 @@
             this._bindDateFilter();
             const body = container.querySelector('.rpt-tab-body');
             if (body) body.innerHTML = '<div class="rpt-loading"><i class="fas fa-spinner fa-spin"></i> Loading data...</div>';
-            if (rptUnsubs.length === 0) this._startListeners(businessId);
-            else this._renderCurrentTab(body);
+            this._ensureListeners(businessId);
+            if (rptUnsubs.length === 0) {
+                if (body) body.innerHTML = '<div class="card"><p class="rpt-empty">Could not attach data listeners.</p></div>';
+            }
         },
 
         /* ─── Shell ─── */
@@ -173,13 +295,13 @@
                 rptDateRange = sel.value;
                 const custom = rptContainer.querySelector('#rpt-custom-range');
                 if (custom) custom.style.display = rptDateRange === 'custom' ? 'flex' : 'none';
-                if (rptDateRange !== 'custom') this._onDataUpdate();
+                if (rptDateRange !== 'custom') this._scheduleTabRefresh();
             });
             const apply = rptContainer.querySelector('#rpt-apply-range');
             if (apply) apply.addEventListener('click', () => {
                 rptCustomFrom = rptContainer.querySelector('#rpt-from').value;
                 rptCustomTo = rptContainer.querySelector('#rpt-to').value;
-                this._onDataUpdate();
+                this._scheduleTabRefresh();
             });
             const navLink = rptContainer.querySelector('[data-nav="dashboard"]');
             if (navLink) navLink.addEventListener('click', e => { e.preventDefault(); PharmaFlow.Sidebar.setActive('dashboard', null); });
@@ -190,6 +312,7 @@
             if (!body) return;
             switch (rptCurrentTab) {
                 case 'reports-overview': this._renderOverviewTab(body); break;
+                case 'reports-statistics': this._renderStatisticsTab(body); break;
                 case 'sales-reports': this._renderSalesTab(body); break;
                 case 'inventory-reports': this._renderInventoryTab(body); break;
                 case 'financial-reports': this._renderFinancialTab(body); break;
@@ -202,6 +325,56 @@
         _fExpenses() { return rptExpenses.filter(e => this._inRange(e)); },
         _fBills() { return rptBills.filter(b => this._inRange(b)); },
         _fWholesale() { return rptWholesale.filter(w => this._inRange(w)); },
+        _fOrders() {
+            return rptOrders.filter(o => {
+                const d = this._dateObj(o.createdAt || o.orderTimestamp || o.orderDate || o.updatedAt);
+                if (!d) return false;
+                const ds = d.toISOString().slice(0, 10);
+                const { from, to } = this._getRange();
+                return ds >= from && ds <= to;
+            });
+        },
+
+        /** Matches Inventory + Dashboard: totalValue = Σ(qty × sellingPrice); stock/expiry counts same rules as inventory-stats-shared.js */
+        _inventoryStatsSnapshot(products) {
+            const inv = products || [];
+            if (PharmaFlow.computeInventoryStats) return PharmaFlow.computeInventoryStats(inv);
+            const now = new Date();
+            const thirtyDays = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+            let totalValue = 0;
+            let outOfStock = 0;
+            let lowStock = 0;
+            let expiringSoon = 0;
+            inv.forEach(p => {
+                const qty = p.quantity || 0;
+                const price = p.sellingPrice || 0;
+                const reorderLevel = p.reorderLevel || 10;
+                totalValue += qty * price;
+                if (qty <= 0) outOfStock++;
+                else if (qty <= reorderLevel) lowStock++;
+                if (p.expiryDate) {
+                    const exp = this._dateObj(p.expiryDate);
+                    if (exp && !isNaN(exp.getTime()) && exp <= thirtyDays && exp > now) expiringSoon++;
+                }
+            });
+            return { totalProducts: inv.length, totalValue, outOfStock, lowStock, expiringSoon };
+        },
+
+        _invIsExpiringSoon(i) {
+            if (!i.expiryDate) return false;
+            const exp = this._dateObj(i.expiryDate);
+            if (!exp || isNaN(exp.getTime())) return false;
+            const now = new Date();
+            const thirtyDays = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+            return exp <= thirtyDays && exp > now;
+        },
+
+        _invIsExpired(i) {
+            if (!i.expiryDate) return false;
+            const exp = this._dateObj(i.expiryDate);
+            if (!exp || isNaN(exp.getTime())) return false;
+            return exp <= new Date();
+        },
 
         /* ================================
          * TAB 1: OVERVIEW
@@ -252,6 +425,8 @@
             expenses.forEach(e => { const c = e.category || 'Other'; expCat[c] = (expCat[c] || 0) + (e.amount || 0); });
             const topExpCats = Object.entries(expCat).sort((a, b) => b[1] - a[1]).slice(0, 6);
             const maxExpCat = topExpCats.length ? topExpCats[0][1] : 1;
+
+            const invStats = this._inventoryStatsSnapshot(rptInventory);
 
             body.innerHTML = `
             <div class="rpt-kpi-grid">
@@ -319,16 +494,16 @@
                 <div class="rpt-section-header"><h3><i class="fas fa-boxes-stacked"></i> Inventory Snapshot</h3></div>
                 <div class="rpt-kpi-grid rpt-kpi-grid-4">
                     <div class="rpt-kpi-card rpt-kpi-blue-light">
-                        <div class="rpt-kpi-info"><span class="rpt-kpi-value">${rptInventory.length}</span><span class="rpt-kpi-label">Total Products</span></div>
+                        <div class="rpt-kpi-info"><span class="rpt-kpi-value">${invStats.totalProducts}</span><span class="rpt-kpi-label">Total Products</span></div>
                     </div>
                     <div class="rpt-kpi-card rpt-kpi-red-light">
-                        <div class="rpt-kpi-info"><span class="rpt-kpi-value">${rptInventory.filter(i => (i.quantity || 0) <= 0).length}</span><span class="rpt-kpi-label">Out of Stock</span></div>
+                        <div class="rpt-kpi-info"><span class="rpt-kpi-value">${invStats.outOfStock}</span><span class="rpt-kpi-label">Out of Stock</span></div>
                     </div>
                     <div class="rpt-kpi-card rpt-kpi-orange-light">
-                        <div class="rpt-kpi-info"><span class="rpt-kpi-value">${rptInventory.filter(i => (i.quantity || 0) > 0 && (i.quantity || 0) <= (i.reorderLevel || 10)).length}</span><span class="rpt-kpi-label">Low Stock</span></div>
+                        <div class="rpt-kpi-info"><span class="rpt-kpi-value">${invStats.lowStock}</span><span class="rpt-kpi-label">Low Stock</span></div>
                     </div>
                     <div class="rpt-kpi-card rpt-kpi-green-light">
-                        <div class="rpt-kpi-info"><span class="rpt-kpi-value">${this._fc(rptInventory.reduce((s, i) => s + ((i.quantity || 0) * (i.buyingPrice || 0)), 0))}</span><span class="rpt-kpi-label">Inventory Value</span></div>
+                        <div class="rpt-kpi-info"><span class="rpt-kpi-value">${this._fc(invStats.totalValue)}</span><span class="rpt-kpi-label">Total Value</span></div>
                     </div>
                 </div>
             </div>`;
@@ -452,30 +627,21 @@
          * ================================ */
         _renderInventoryTab(body) {
             const inv = rptInventory;
-            const totalProducts = inv.length;
-            const totalValue = inv.reduce((s, i) => s + ((i.quantity || 0) * (i.buyingPrice || 0)), 0);
-            const totalRetailValue = inv.reduce((s, i) => s + ((i.quantity || 0) * (i.sellingPrice || 0)), 0);
-            const outOfStock = inv.filter(i => (i.quantity || 0) <= 0);
-            const lowStock = inv.filter(i => (i.quantity || 0) > 0 && (i.quantity || 0) <= (i.reorderLevel || 10));
-            const now = new Date();
-            const thirtyDays = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-            const expiring = inv.filter(i => {
-                if (!i.expiryDate) return false;
-                const exp = new Date(i.expiryDate);
-                return exp <= thirtyDays && exp > now;
-            });
-            const expired = inv.filter(i => {
-                if (!i.expiryDate) return false;
-                return new Date(i.expiryDate) <= now;
-            });
+            const stats = this._inventoryStatsSnapshot(inv);
+            const totalCostValue = inv.reduce((s, i) => s + ((i.quantity || 0) * (i.buyingPrice || 0)), 0);
+            const totalRetailValue = stats.totalValue;
 
-            // Category breakdown
+            const outOfStock = inv.filter(i => (i.quantity || 0) <= 0);
+            const expiring = inv.filter(i => this._invIsExpiringSoon(i));
+            const expired = inv.filter(i => this._invIsExpired(i));
+
+            // Category breakdown (retail stock value — aligns with Inventory “Total Value”)
             const catMap = {};
             inv.forEach(i => {
                 const cat = i.category || 'Uncategorized';
                 if (!catMap[cat]) catMap[cat] = { count: 0, value: 0, qty: 0 };
                 catMap[cat].count++;
-                catMap[cat].value += (i.quantity || 0) * (i.buyingPrice || 0);
+                catMap[cat].value += (i.quantity || 0) * (i.sellingPrice || 0);
                 catMap[cat].qty += (i.quantity || 0);
             });
             const catArr = Object.entries(catMap).sort((a, b) => b[1].value - a[1].value);
@@ -488,18 +654,18 @@
             body.innerHTML = `
             <div class="rpt-kpi-grid rpt-kpi-grid-4">
                 <div class="rpt-kpi-card rpt-kpi-blue"><div class="rpt-kpi-icon"><i class="fas fa-boxes-stacked"></i></div>
-                    <div class="rpt-kpi-info"><span class="rpt-kpi-value">${totalProducts}</span><span class="rpt-kpi-label">Total Products</span></div></div>
+                    <div class="rpt-kpi-info"><span class="rpt-kpi-value">${stats.totalProducts}</span><span class="rpt-kpi-label">Total Products</span></div></div>
                 <div class="rpt-kpi-card rpt-kpi-green"><div class="rpt-kpi-icon"><i class="fas fa-coins"></i></div>
-                    <div class="rpt-kpi-info"><span class="rpt-kpi-value">${this._fc(totalValue)}</span><span class="rpt-kpi-label">Cost Value</span></div></div>
-                <div class="rpt-kpi-card rpt-kpi-purple"><div class="rpt-kpi-icon"><i class="fas fa-tag"></i></div>
-                    <div class="rpt-kpi-info"><span class="rpt-kpi-value">${this._fc(totalRetailValue)}</span><span class="rpt-kpi-label">Retail Value</span></div></div>
+                    <div class="rpt-kpi-info"><span class="rpt-kpi-value">${this._fc(totalRetailValue)}</span><span class="rpt-kpi-label">Total Value</span></div></div>
+                <div class="rpt-kpi-card rpt-kpi-purple"><div class="rpt-kpi-icon"><i class="fas fa-file-invoice-dollar"></i></div>
+                    <div class="rpt-kpi-info"><span class="rpt-kpi-value">${this._fc(totalCostValue)}</span><span class="rpt-kpi-label">Cost Value</span></div></div>
                 <div class="rpt-kpi-card rpt-kpi-orange"><div class="rpt-kpi-icon"><i class="fas fa-chart-pie"></i></div>
-                    <div class="rpt-kpi-info"><span class="rpt-kpi-value">${this._fc(totalRetailValue - totalValue)}</span><span class="rpt-kpi-label">Potential Profit</span></div></div>
+                    <div class="rpt-kpi-info"><span class="rpt-kpi-value">${this._fc(totalRetailValue - totalCostValue)}</span><span class="rpt-kpi-label">Potential Profit</span></div></div>
             </div>
 
             <div class="rpt-grid-2">
                 <div class="card">
-                    <div class="rpt-section-header"><h3><i class="fas fa-layer-group"></i> Stock by Category</h3></div>
+                    <div class="rpt-section-header"><h3><i class="fas fa-layer-group"></i> Stock by Category</h3><span class="rpt-section-hint">Retail value (qty × sell price)</span></div>
                     <div class="rpt-bar-chart">
                         ${catArr.map(([cat, v]) => {
                             const pct = Math.round(v.value / maxCatVal * 100);
@@ -516,9 +682,9 @@
                     </div>
                     <div class="rpt-section-header" style="margin-top:15px"><h3><i class="fas fa-exclamation-triangle"></i> Stock Alerts</h3></div>
                     <div class="rpt-alert-grid">
-                        <div class="rpt-alert-card rpt-alert-danger"><i class="fas fa-ban"></i><span>${outOfStock.length}</span><small>Out of Stock</small></div>
-                        <div class="rpt-alert-card rpt-alert-warning"><i class="fas fa-arrow-down"></i><span>${lowStock.length}</span><small>Low Stock</small></div>
-                        <div class="rpt-alert-card rpt-alert-warning"><i class="fas fa-clock"></i><span>${expiring.length}</span><small>Expiring Soon</small></div>
+                        <div class="rpt-alert-card rpt-alert-danger"><i class="fas fa-ban"></i><span>${stats.outOfStock}</span><small>Out of Stock</small></div>
+                        <div class="rpt-alert-card rpt-alert-warning"><i class="fas fa-arrow-down"></i><span>${stats.lowStock}</span><small>Low Stock</small></div>
+                        <div class="rpt-alert-card rpt-alert-warning"><i class="fas fa-clock"></i><span>${stats.expiringSoon}</span><small>Expiring Soon</small></div>
                         <div class="rpt-alert-card rpt-alert-danger"><i class="fas fa-skull-crossbones"></i><span>${expired.length}</span><small>Expired</small></div>
                     </div>
                 </div>
@@ -539,7 +705,11 @@
                 <div class="rpt-section-header"><h3><i class="fas fa-clock"></i> Expiring Within 30 Days (${expiring.length})</h3></div>
                 <div class="table-responsive"><table class="data-table">
                     <thead><tr><th>Name</th><th>SKU</th><th>Batch</th><th>Qty</th><th>Expiry Date</th><th>Value</th></tr></thead>
-                    <tbody>${expiring.map(i => `<tr><td>${this._esc(i.name)}</td><td>${this._esc(i.sku || '-')}</td><td>${this._esc(i.batchNumber || '-')}</td><td>${i.quantity || 0}</td><td><span class="rpt-badge-warn">${i.expiryDate || '-'}</span></td><td>${this._fc((i.quantity || 0) * (i.buyingPrice || 0))}</td></tr>`).join('')}</tbody>
+                    <tbody>${expiring.map(i => {
+                        const expD = this._dateObj(i.expiryDate);
+                        const expLabel = expD && !isNaN(expD.getTime()) ? expD.toLocaleDateString('en-KE') : String(i.expiryDate || '-');
+                        return `<tr><td>${this._esc(i.name)}</td><td>${this._esc(i.sku || '-')}</td><td>${this._esc(i.batchNumber || '-')}</td><td>${i.quantity || 0}</td><td><span class="rpt-badge-warn">${this._esc(expLabel)}</span></td><td>${this._fc((i.quantity || 0) * (i.sellingPrice || 0))}</td></tr>`;
+                    }).join('')}</tbody>
                 </table></div>
             </div>` : ''}`;
 
@@ -749,8 +919,16 @@
                 }
                 case 'inventory': {
                     title = 'Inventory Report';
-                    headers = ['Name', 'SKU', 'Category', 'Drug Type', 'Qty', 'Buy Price', 'Sell Price', 'Value', 'Expiry'];
-                    rows = rptInventory.map(i => [i.name || '-', i.sku || '-', i.category || '-', i.drugType || '-', i.quantity || 0, i.buyingPrice || 0, i.sellingPrice || 0, (i.quantity || 0) * (i.buyingPrice || 0), i.expiryDate || '-']);
+                    headers = ['Name', 'SKU', 'Category', 'Drug Type', 'Qty', 'Buy Price', 'Sell Price', 'Cost Value', 'Retail Value', 'Expiry'];
+                    rows = rptInventory.map(i => {
+                        const qty = i.quantity || 0;
+                        const buy = i.buyingPrice || 0;
+                        const sell = i.sellingPrice || 0;
+                        const expRaw = i.expiryDate;
+                        const expD = this._dateObj(expRaw);
+                        const expCell = expD && !isNaN(expD.getTime()) ? expD.toLocaleDateString('en-KE') : (expRaw ? String(expRaw) : '-');
+                        return [i.name || '-', i.sku || '-', i.category || '-', i.drugType || '-', qty, buy, sell, qty * buy, qty * sell, expCell];
+                    });
                     break;
                 }
                 case 'expenses': {
@@ -812,6 +990,463 @@
             if (format === 'pdf') this._exportPDF(title, headers, rows, from, to);
             else if (format === 'excel') this._exportExcel(title, headers, rows, from, to);
             else if (format === 'print') this._printReport(title, headers, rows, from, to);
+        },
+
+        /* ================================
+         * TAB: LIVE STATISTICS (charts)
+         * ================================ */
+        _renderStatisticsTab(body) {
+            this._destroyStatisticsCharts();
+
+            const sales = this._fSales();
+            const expenses = this._fExpenses();
+            const bills = this._fBills();
+            const orders = this._fOrders();
+            const wholesale = this._fWholesale();
+            const invStats = this._inventoryStatsSnapshot(rptInventory);
+            const { from, to } = this._getRange();
+
+            const retailSales = sales.filter(s => s.type !== 'wholesale' && s.type !== 'bulk');
+            const wholesaleSales = sales.filter(s => s.type === 'wholesale' || s.type === 'bulk');
+            const retailRev = retailSales.reduce((s, d) => s + (d.total || 0), 0);
+            const wholesaleRev = wholesaleSales.reduce((s, d) => s + (d.total || 0), 0);
+            const totalBilling = bills.reduce((s, d) => s + (d.totalAmount || d.grandTotal || 0), 0);
+            const totalRev = sales.reduce((s, d) => s + (d.total || 0), 0);
+            const totalExp = expenses.reduce((s, d) => s + (d.amount || 0), 0);
+            const profit = sales.reduce((s, d) => s + (d.totalProfit || 0), 0);
+
+            const pmBreak = {};
+            sales.forEach(s => {
+                if (typeof PharmaFlow.forEachSalePaymentPart === 'function') {
+                    PharmaFlow.forEachSalePaymentPart(s, (m, amt) => {
+                        pmBreak[m] = (pmBreak[m] || 0) + amt;
+                    });
+                } else {
+                    const pm = s.paymentMethod || 'other';
+                    pmBreak[pm] = (pmBreak[pm] || 0) + (s.total || 0);
+                }
+            });
+            const pmEntries = Object.entries(pmBreak).sort((a, b) => b[1] - a[1]).slice(0, 12);
+            const pmSaleTouches = this._paymentSaleTouchesByMethod(sales);
+            let payLabels = pmEntries.length ? pmEntries.map(([m]) => this._formatPaymentStatLabel(m)) : ['None'];
+            let payAmounts = pmEntries.length ? pmEntries.map(([, v]) => v) : [0];
+            let paySaleCounts = pmEntries.length ? pmEntries.map(([m]) => pmSaleTouches[String(m).toLowerCase()] || 0) : [0];
+
+            const expCat = {};
+            expenses.forEach(e => {
+                const c = e.category || 'Other';
+                expCat[c] = (expCat[c] || 0) + (e.amount || 0);
+            });
+            const expPie = this._summarizeForPie(Object.entries(expCat).sort((a, b) => b[1] - a[1]), 8);
+            if (!expPie.labels.length) {
+                expPie.labels = ['No expenses'];
+                expPie.data = [0];
+            }
+
+            const invCat = {};
+            rptInventory.forEach(i => {
+                const cat = i.category || 'Uncategorized';
+                invCat[cat] = (invCat[cat] || 0) + (i.quantity || 0) * (i.sellingPrice || 0);
+            });
+            const invPie = this._summarizeForPie(Object.entries(invCat).sort((a, b) => b[1] - a[1]), 8);
+            if (!invPie.labels.length) {
+                invPie.labels = ['No stock'];
+                invPie.data = [0];
+            }
+
+            const ordStatus = {};
+            orders.forEach(o => {
+                const st = String(o.status || 'pending');
+                ordStatus[st] = (ordStatus[st] || 0) + 1;
+            });
+            let ordLabels = Object.keys(ordStatus);
+            let ordCounts = ordLabels.map(k => ordStatus[k]);
+            if (!ordLabels.length) {
+                ordLabels = ['No orders'];
+                ordCounts = [0];
+            }
+
+            const wsStatus = {};
+            wholesale.forEach(w => {
+                const st = String(w.status || 'unknown');
+                wsStatus[st] = (wsStatus[st] || 0) + 1;
+            });
+            let wsLabels = Object.keys(wsStatus);
+            let wsCounts = wsLabels.map(k => wsStatus[k]);
+            if (!wsLabels.length) {
+                wsLabels = ['No wholesale'];
+                wsCounts = [0];
+            }
+
+            const patActive = rptPatients.filter(p => p.status === 'active').length;
+            const patOther = Math.max(0, rptPatients.length - patActive);
+
+            const lineSeries = this._dailySalesSeries(sales);
+            const self = this;
+
+            const chartUnavailable = typeof Chart === 'undefined';
+
+            body.innerHTML = `
+            <div class="rpt-stat-banner">
+                <span class="rpt-stat-pulse" aria-hidden="true"></span>
+                <div class="rpt-stat-banner-text">
+                    <strong>Live statistics</strong>
+                    <span class="rpt-stat-sub">Updates when Firestore data changes · Range: <code>${this._esc(from)}</code> → <code>${this._esc(to)}</code></span>
+                </div>
+            </div>
+
+            <div class="rpt-stat-kpis">
+                <div class="rpt-stat-kpi"><span class="rpt-stat-kpi-val">${this._fc(totalRev)}</span><span class="rpt-stat-kpi-lbl">Sales revenue</span></div>
+                <div class="rpt-stat-kpi"><span class="rpt-stat-kpi-val">${this._fc(totalBilling)}</span><span class="rpt-stat-kpi-lbl">Patient billing</span></div>
+                <div class="rpt-stat-kpi"><span class="rpt-stat-kpi-val">${this._fc(totalExp)}</span><span class="rpt-stat-kpi-lbl">Expenses</span></div>
+                <div class="rpt-stat-kpi"><span class="rpt-stat-kpi-val">${this._fc(profit)}</span><span class="rpt-stat-kpi-lbl">Sale gross profit</span></div>
+                <div class="rpt-stat-kpi"><span class="rpt-stat-kpi-val">${this._fc(invStats.totalValue)}</span><span class="rpt-stat-kpi-lbl">Inventory value</span></div>
+                <div class="rpt-stat-kpi"><span class="rpt-stat-kpi-val">${rptPatients.length}</span><span class="rpt-stat-kpi-lbl">Patients</span></div>
+                <div class="rpt-stat-kpi"><span class="rpt-stat-kpi-val">${orders.length}</span><span class="rpt-stat-kpi-lbl">Supplier orders</span></div>
+                <div class="rpt-stat-kpi"><span class="rpt-stat-kpi-val">${wholesale.length}</span><span class="rpt-stat-kpi-lbl">Wholesale orders</span></div>
+            </div>
+
+            ${chartUnavailable ? `
+            <div class="card"><p class="rpt-empty"><i class="fas fa-plug-circle-xmark"></i> Chart library could not be loaded. Check your connection and reload.</p></div>` : `
+            <div class="rpt-stat-grid">
+                <div class="card rpt-stat-card">
+                    <div class="rpt-section-header"><h3><i class="fas fa-chart-pie"></i> Revenue mix</h3><span class="rpt-section-hint">Retail · Wholesale · Billing</span></div>
+                    <div class="rpt-stat-canvas-wrap"><canvas id="rpt-stat-chart-revenue"></canvas></div>
+                </div>
+                <div class="card rpt-stat-card">
+                    <div class="rpt-section-header"><h3><i class="fas fa-money-bill-wave"></i> Expenses by category</h3></div>
+                    <div class="rpt-stat-canvas-wrap"><canvas id="rpt-stat-chart-expenses"></canvas></div>
+                </div>
+                <div class="card rpt-stat-card rpt-stat-card--wide">
+                    <div class="rpt-section-header"><h3><i class="fas fa-chart-line"></i> Daily sales revenue</h3><span class="rpt-section-hint">Recorded sales in range</span></div>
+                    <div class="rpt-stat-canvas-wrap rpt-stat-canvas-wrap--line"><canvas id="rpt-stat-chart-sales-line"></canvas></div>
+                </div>
+                <div class="card rpt-stat-card">
+                    <div class="rpt-section-header"><h3><i class="fas fa-mobile-screen"></i> Payment revenue (M-Pesa, cash, split…)</h3><span class="rpt-section-hint">Split sales allocate amounts per leg</span></div>
+                    <div class="rpt-stat-canvas-wrap rpt-stat-canvas-wrap--pay-bar"><canvas id="rpt-stat-chart-payments-bar"></canvas></div>
+                </div>
+                <div class="card rpt-stat-card">
+                    <div class="rpt-section-header"><h3><i class="fas fa-receipt"></i> Sales using each payment method</h3><span class="rpt-section-hint">How many sales touched each method</span></div>
+                    <div class="rpt-stat-canvas-wrap rpt-stat-canvas-wrap--pay-h"><canvas id="rpt-stat-chart-payments-count"></canvas></div>
+                </div>
+                <div class="card rpt-stat-card">
+                    <div class="rpt-section-header"><h3><i class="fas fa-boxes-stacked"></i> Inventory by category</h3><span class="rpt-section-hint">Retail stock value</span></div>
+                    <div class="rpt-stat-canvas-wrap"><canvas id="rpt-stat-chart-inventory"></canvas></div>
+                </div>
+                <div class="card rpt-stat-card">
+                    <div class="rpt-section-header"><h3><i class="fas fa-truck-field"></i> Supplier orders</h3></div>
+                    <div class="rpt-stat-canvas-wrap"><canvas id="rpt-stat-chart-orders"></canvas></div>
+                </div>
+                <div class="card rpt-stat-card">
+                    <div class="rpt-section-header"><h3><i class="fas fa-cart-flatbed"></i> Wholesale orders</h3></div>
+                    <div class="rpt-stat-canvas-wrap"><canvas id="rpt-stat-chart-wholesale"></canvas></div>
+                </div>
+                <div class="card rpt-stat-card">
+                    <div class="rpt-section-header"><h3><i class="fas fa-user-injured"></i> Patients</h3></div>
+                    <div class="rpt-stat-canvas-wrap"><canvas id="rpt-stat-chart-patients"></canvas></div>
+                </div>
+            </div>`}`;
+
+            if (chartUnavailable) return;
+
+            const payload = {
+                revenue: { labels: ['Retail sales', 'Wholesale sales', 'Patient billing'], data: [retailRev, wholesaleRev, totalBilling] },
+                expenses: { labels: expPie.labels.map(l => this._esc(String(l))), data: expPie.data },
+                payments: {
+                    labels: payLabels,
+                    amounts: payAmounts,
+                    saleCounts: paySaleCounts
+                },
+                salesLine: lineSeries,
+                inventory: { labels: invPie.labels.map(l => this._esc(String(l))), data: invPie.data },
+                orders: { labels: ordLabels.map(l => this._esc(String(l))), data: ordCounts },
+                wholesale: { labels: wsLabels.map(l => this._esc(String(l))), data: wsCounts },
+                patients: { labels: ['Active', 'Other'], data: [patActive, patOther] }
+            };
+
+            requestAnimationFrame(() => {
+                if (rptCurrentTab !== 'reports-statistics' || !rptContainer || !body.isConnected) return;
+                self._mountStatisticsCharts(payload);
+            });
+        },
+
+        _mountStatisticsCharts(payload) {
+            this._destroyStatisticsCharts();
+            if (typeof Chart === 'undefined') return;
+
+            const th = this._statisticsTheme();
+            const cols = this._statColors();
+            const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+            const sliceBorder = dark ? '#0f172a' : '#ffffff';
+
+            const tooltipMoney = {
+                backgroundColor: dark ? '#1e293b' : '#ffffff',
+                titleColor: th.text,
+                bodyColor: th.text,
+                borderColor: th.border,
+                borderWidth: 1,
+                padding: 10,
+                callbacks: {
+                    label: ctx => {
+                        const v = typeof ctx.raw === 'number' ? ctx.raw : parseFloat(ctx.raw);
+                        if (!isNaN(v)) return ' ' + this._fc(v);
+                        return ' ' + ctx.formattedValue;
+                    }
+                }
+            };
+
+            const tooltipCount = {
+                backgroundColor: dark ? '#1e293b' : '#ffffff',
+                titleColor: th.text,
+                bodyColor: th.text,
+                borderColor: th.border,
+                borderWidth: 1,
+                padding: 10
+            };
+
+            const tooltipSalesByMethod = {
+                ...tooltipCount,
+                callbacks: {
+                    label: ctx => {
+                        const n = Number(ctx.raw);
+                        return ' ' + n + ' sale' + (n === 1 ? '' : 's');
+                    }
+                }
+            };
+
+            const legendBottom = {
+                position: 'bottom',
+                labels: { color: th.text, boxWidth: 12, padding: 10, font: { size: 11 } }
+            };
+
+            const mk = (id, cfg) => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                try {
+                    rptStatCharts.push(new Chart(el, cfg));
+                } catch (e) {
+                    console.error('Statistics chart error:', id, e);
+                }
+            };
+
+            mk('rpt-stat-chart-revenue', {
+                type: 'doughnut',
+                data: {
+                    labels: payload.revenue.labels,
+                    datasets: [{
+                        data: payload.revenue.data,
+                        backgroundColor: cols.slice(0, 3),
+                        borderWidth: 2,
+                        borderColor: sliceBorder
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: legendBottom,
+                        tooltip: tooltipMoney,
+                        title: { display: true, text: 'Where revenue comes from', color: th.text, font: { size: 12, weight: '600' } }
+                    }
+                }
+            });
+
+            mk('rpt-stat-chart-expenses', {
+                type: 'doughnut',
+                data: {
+                    labels: payload.expenses.labels,
+                    datasets: [{
+                        data: payload.expenses.data,
+                        backgroundColor: payload.expenses.labels.map((_, i) => cols[i % cols.length]),
+                        borderWidth: 2,
+                        borderColor: sliceBorder
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: legendBottom,
+                        tooltip: tooltipMoney,
+                        title: { display: true, text: 'Spend breakdown', color: th.text, font: { size: 12, weight: '600' } }
+                    }
+                }
+            });
+
+            mk('rpt-stat-chart-sales-line', {
+                type: 'line',
+                data: {
+                    labels: payload.salesLine.labels,
+                    datasets: [{
+                        label: 'Revenue',
+                        data: payload.salesLine.data,
+                        borderColor: cols[0],
+                        backgroundColor: dark ? 'rgba(37,99,235,0.15)' : 'rgba(37,99,235,0.08)',
+                        fill: true,
+                        tension: 0.35,
+                        pointRadius: 3,
+                        pointHoverRadius: 6
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { ticks: { color: th.text, maxRotation: 45 }, grid: { color: th.grid } },
+                        y: { ticks: { color: th.text }, grid: { color: th.grid } }
+                    },
+                    plugins: { legend: { display: false }, tooltip: tooltipMoney }
+                }
+            });
+
+            mk('rpt-stat-chart-payments-bar', {
+                type: 'bar',
+                data: {
+                    labels: payload.payments.labels,
+                    datasets: [{
+                        label: 'Amount (KSH)',
+                        data: payload.payments.amounts,
+                        backgroundColor: payload.payments.labels.map((_, i) => cols[i % cols.length]),
+                        borderRadius: 8
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { ticks: { color: th.text, maxRotation: 35, minRotation: 0 }, grid: { display: false } },
+                        y: { ticks: { color: th.text }, grid: { color: th.grid }, beginAtZero: true }
+                    },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: tooltipMoney,
+                        title: { display: true, text: 'Revenue by payment channel', color: th.text, font: { size: 12, weight: '600' } }
+                    }
+                }
+            });
+
+            mk('rpt-stat-chart-payments-count', {
+                type: 'bar',
+                data: {
+                    labels: payload.payments.labels,
+                    datasets: [{
+                        label: 'Sales',
+                        data: payload.payments.saleCounts,
+                        backgroundColor: payload.payments.labels.map((_, i) => cols[(i + 2) % cols.length]),
+                        borderRadius: 6
+                    }]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            ticks: {
+                                color: th.text,
+                                stepSize: 1,
+                                callback: v => (Number.isInteger(v) ? v : null)
+                            },
+                            grid: { color: th.grid },
+                            beginAtZero: true
+                        },
+                        y: { ticks: { color: th.text }, grid: { display: false } }
+                    },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: tooltipSalesByMethod,
+                        title: { display: true, text: 'Sale count by method', color: th.text, font: { size: 12, weight: '600' } }
+                    }
+                }
+            });
+
+            mk('rpt-stat-chart-inventory', {
+                type: 'doughnut',
+                data: {
+                    labels: payload.inventory.labels,
+                    datasets: [{
+                        data: payload.inventory.data,
+                        backgroundColor: payload.inventory.labels.map((_, i) => cols[(i + 3) % cols.length]),
+                        borderWidth: 2,
+                        borderColor: sliceBorder
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: legendBottom,
+                        tooltip: tooltipMoney,
+                        title: { display: true, text: 'Stock value by category', color: th.text, font: { size: 12, weight: '600' } }
+                    }
+                }
+            });
+
+            mk('rpt-stat-chart-orders', {
+                type: 'bar',
+                data: {
+                    labels: payload.orders.labels,
+                    datasets: [{
+                        label: 'Orders',
+                        data: payload.orders.data,
+                        backgroundColor: cols[2],
+                        borderRadius: 8
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { ticks: { color: th.text }, grid: { display: false } },
+                        y: { ticks: { color: th.text, stepSize: 1 }, grid: { color: th.grid }, beginAtZero: true }
+                    },
+                    plugins: { legend: { display: false }, tooltip: tooltipCount }
+                }
+            });
+
+            mk('rpt-stat-chart-wholesale', {
+                type: 'bar',
+                data: {
+                    labels: payload.wholesale.labels,
+                    datasets: [{
+                        label: 'Orders',
+                        data: payload.wholesale.data,
+                        backgroundColor: cols[3],
+                        borderRadius: 8
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { ticks: { color: th.text }, grid: { display: false } },
+                        y: { ticks: { color: th.text, stepSize: 1 }, grid: { color: th.grid }, beginAtZero: true }
+                    },
+                    plugins: { legend: { display: false }, tooltip: tooltipCount }
+                }
+            });
+
+            mk('rpt-stat-chart-patients', {
+                type: 'pie',
+                data: {
+                    labels: payload.patients.labels,
+                    datasets: [{
+                        data: payload.patients.data,
+                        backgroundColor: [cols[1], cols[4]],
+                        borderWidth: 2,
+                        borderColor: sliceBorder
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: legendBottom,
+                        tooltip: tooltipCount,
+                        title: { display: true, text: 'Patient roster split', color: th.text, font: { size: 12, weight: '600' } }
+                    }
+                }
+            });
         },
 
         /* ─── Export Helpers ─── */
