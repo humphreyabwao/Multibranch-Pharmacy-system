@@ -13,6 +13,7 @@
     let unsubAllSales = null;
     let currentPage = 1;
     let pageSize = 50;
+    let exportMenuState = null;
 
     const AllSales = {
 
@@ -61,6 +62,31 @@
             return (sale.paymentMethod || '').toUpperCase();
         },
 
+        roundMoney: function (amount) {
+            return PharmaFlow.roundMoney ? PharmaFlow.roundMoney(amount) : Math.round((parseFloat(amount) || 0) * 100) / 100;
+        },
+
+        getProductVatTotal: function (sale) {
+            return PharmaFlow.getProductVatTotal ? PharmaFlow.getProductVatTotal(sale) : 0;
+        },
+
+        getCartVatTotal: function (sale) {
+            return PharmaFlow.getCartVatTotal ? PharmaFlow.getCartVatTotal(sale) : 0;
+        },
+
+        getTotalVat: function (sale) {
+            return PharmaFlow.getTotalVat ? PharmaFlow.getTotalVat(sale) : 0;
+        },
+
+        formatVatCell: function (sale, kind) {
+            if (PharmaFlow.formatSaleVatDisplay) {
+                return PharmaFlow.formatSaleVatDisplay(sale, kind || 'total');
+            }
+            const total = this.getTotalVat(sale);
+            if (total <= 0) return '—';
+            return this.formatCurrency(total);
+        },
+
         // ─── RENDER ──────────────────────────────────────────
 
         render: function (container) {
@@ -85,14 +111,11 @@
                                 <span>All Sales</span>
                             </div>
                         </div>
-                        <div class="page-header-right">
-                            <button class="btn btn-sm btn-outline" id="as-export-btn">
+                        <div class="page-header-right as-header-actions">
+                            ${PharmaFlow.vatFormatSelectHtml ? PharmaFlow.vatFormatSelectHtml('as-vat-format', 'VAT view', 'compact') : ''}
+                            <button type="button" class="btn btn-sm btn-outline" id="as-export-btn" aria-haspopup="true" aria-expanded="false">
                                 <i class="fas fa-file-export"></i> Export
                             </button>
-                            <div class="as-export-menu" id="as-export-menu" style="display:none;">
-                                <button class="as-export-option" data-type="excel"><i class="fas fa-file-excel"></i> Export Excel</button>
-                                <button class="as-export-option" data-type="pdf"><i class="fas fa-file-pdf"></i> Export PDF</button>
-                            </div>
                         </div>
                     </div>
 
@@ -173,7 +196,9 @@
                                     <th>Items</th>
                                     <th>Subtotal</th>
                                     <th>Discount</th>
-                                    <th>VAT</th>
+                                    <th>Product VAT</th>
+                                    <th>Sale VAT</th>
+                                    <th>Total VAT</th>
                                     <th>Total</th>
                                     <th>Profit</th>
                                     <th>Payment</th>
@@ -183,7 +208,7 @@
                                 </tr>
                             </thead>
                             <tbody id="as-tbody">
-                                <tr><td colspan="14" class="sales-loading"><i class="fas fa-spinner fa-spin"></i> Loading sales...</td></tr>
+                                <tr><td colspan="16" class="sales-loading"><i class="fas fa-spinner fa-spin"></i> Loading sales...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -227,22 +252,18 @@
                 self.renderCurrentPage();
             });
 
-            // Export button
-            const exportBtn = document.getElementById('as-export-btn');
-            const exportMenu = document.getElementById('as-export-menu');
-            if (exportBtn && exportMenu) {
-                exportBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    exportMenu.style.display = exportMenu.style.display === 'none' ? 'block' : 'none';
+            if (PharmaFlow.bindVatFormatSelect) {
+                PharmaFlow.bindVatFormatSelect(document.getElementById('as-vat-format'), function () {
+                    self.renderCurrentPage();
                 });
-                document.addEventListener('click', () => { exportMenu.style.display = 'none'; });
+            }
 
-                exportMenu.querySelectorAll('.as-export-option').forEach(opt => {
-                    opt.addEventListener('click', () => {
-                        exportMenu.style.display = 'none';
-                        if (opt.dataset.type === 'excel') this.exportExcel();
-                        else if (opt.dataset.type === 'pdf') this.exportPDF();
-                    });
+            const exportBtn = document.getElementById('as-export-btn');
+            if (exportBtn) {
+                exportBtn.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    self.showExportMenu(exportBtn);
                 });
             }
 
@@ -407,7 +428,7 @@
             const pageData = filteredSales.slice(start, start + pageSize);
 
             if (pageData.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="14" class="sales-loading"><i class="fas fa-inbox"></i> No sales found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="16" class="sales-loading"><i class="fas fa-inbox"></i> No sales found</td></tr>';
                 this.renderPagination(0, 0);
                 return;
             }
@@ -425,7 +446,9 @@
                     <td>${sale.itemCount || 0}</td>
                     <td>${this.formatCurrency(sale.subtotal)}</td>
                     <td>${sale.discountAmount > 0 ? '- ' + this.formatCurrency(sale.discountAmount) : '—'}</td>
-                    <td>${this.formatCurrency(sale.vatAmount || 0)}</td>
+                    <td class="sales-vat-cell">${this.formatVatCell(sale, 'product')}</td>
+                    <td class="sales-vat-cell">${this.formatVatCell(sale, 'cart')}</td>
+                    <td class="sales-vat-cell">${this.formatVatCell(sale, 'total')}</td>
                     <td><strong>${this.formatCurrency(sale.total)}</strong></td>
                     <td class="${(sale.totalProfit || 0) >= 0 ? 'sales-profit-pos' : 'sales-profit-neg'}">${this.formatCurrency(sale.totalProfit)}</td>
                     <td>${payBadge}</td>
@@ -599,67 +622,216 @@
 
         // ─── EXPORT ──────────────────────────────────────────
 
+        closeExportMenu: function () {
+            if (!exportMenuState) return;
+            const state = exportMenuState;
+            exportMenuState = null;
+            if (state.closeHandler) document.removeEventListener('click', state.closeHandler);
+            if (state.keyHandler) document.removeEventListener('keydown', state.keyHandler);
+            if (state.repositionHandler) {
+                window.removeEventListener('resize', state.repositionHandler);
+                window.removeEventListener('scroll', state.repositionHandler, true);
+            }
+            if (state.menu && state.menu.parentNode) state.menu.remove();
+            if (state.anchorBtn) state.anchorBtn.setAttribute('aria-expanded', 'false');
+        },
+
+        positionExportMenu: function (anchorBtn, menu) {
+            if (!anchorBtn || !menu) return;
+            const rect = anchorBtn.getBoundingClientRect();
+            const menuWidth = menu.offsetWidth || 200;
+            const left = Math.min(
+                Math.max(8, rect.right - menuWidth),
+                window.innerWidth - menuWidth - 8
+            );
+            menu.style.top = (rect.bottom + 6) + 'px';
+            menu.style.left = left + 'px';
+            menu.style.right = 'auto';
+        },
+
+        showExportMenu: function (anchorBtn) {
+            if (!anchorBtn) return;
+
+            if (exportMenuState && exportMenuState.anchorBtn === anchorBtn) {
+                this.closeExportMenu();
+                return;
+            }
+            this.closeExportMenu();
+
+            const menuId = 'as-export-menu-portal';
+            const menu = document.createElement('div');
+            menu.className = 'inv-export-menu';
+            menu.id = menuId;
+            menu.setAttribute('role', 'menu');
+            menu.innerHTML = `
+                <button type="button" role="menuitem" data-type="excel"><i class="fas fa-file-excel"></i> Export as Excel</button>
+                <button type="button" role="menuitem" data-type="pdf"><i class="fas fa-file-pdf"></i> Export as PDF</button>
+            `;
+            document.body.appendChild(menu);
+            this.positionExportMenu(anchorBtn, menu);
+            anchorBtn.setAttribute('aria-expanded', 'true');
+            requestAnimationFrame(() => menu.classList.add('show'));
+
+            const self = this;
+            const repositionHandler = () => self.positionExportMenu(anchorBtn, menu);
+            const closeHandler = (e) => {
+                if (!menu.contains(e.target) && e.target !== anchorBtn && !anchorBtn.contains(e.target)) {
+                    self.closeExportMenu();
+                }
+            };
+            const keyHandler = (e) => {
+                if (e.key === 'Escape') self.closeExportMenu();
+            };
+
+            exportMenuState = { menu, anchorBtn, closeHandler, keyHandler, repositionHandler };
+
+            menu.querySelector('[data-type="excel"]').addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                self.closeExportMenu();
+                self.exportExcel();
+            });
+            menu.querySelector('[data-type="pdf"]').addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                self.closeExportMenu();
+                self.exportPDF();
+            });
+
+            setTimeout(() => document.addEventListener('click', closeHandler), 0);
+            document.addEventListener('keydown', keyHandler);
+            window.addEventListener('resize', repositionHandler);
+            window.addEventListener('scroll', repositionHandler, true);
+        },
+
+        buildExportRow: function (sale) {
+            const vat = PharmaFlow.getSaleVatBreakdown ? PharmaFlow.getSaleVatBreakdown(sale) : {
+                productVat: this.getProductVatTotal(sale),
+                cartVat: this.getCartVatTotal(sale),
+                totalVat: this.getTotalVat(sale)
+            };
+            return {
+                productVat: vat.productVat,
+                cartVat: vat.cartVat,
+                totalVat: vat.totalVat,
+                status: sale.status || 'completed'
+            };
+        },
+
+        getExportFileBase: function () {
+            const name = (PharmaFlow.Settings ? PharmaFlow.Settings.getBusinessName() : 'PharmaFlow').replace(/\s+/g, '');
+            return name + '_AllSales_' + new Date().toISOString().split('T')[0];
+        },
+
         exportExcel: function () {
-            if (filteredSales.length === 0) { this.showToast('No sales to export', 'error'); return; }
+            if (filteredSales.length === 0) {
+                this.showToast('No sales to export', 'error');
+                return;
+            }
+            if (typeof XLSX === 'undefined') {
+                this.showToast('Excel export is not available. Please refresh the page.', 'error');
+                return;
+            }
 
-            const rows = filteredSales.map(sale => ({
-                'Receipt #': sale.saleId,
-                'Date': sale.saleDateStr || '',
-                'Items': sale.itemCount || 0,
-                'Subtotal': sale.subtotal || 0,
-                'Discount': sale.discountAmount || 0,
-                'VAT': sale.vatAmount || 0,
-                'Total': sale.total || 0,
-                'Profit': sale.totalProfit || 0,
-                'Payment': this.formatSalePaymentLabel(sale),
-                'Cashier': sale.soldBy || ''
-            }));
+            try {
+                const headers = PharmaFlow.SALE_REPORT_HEADERS;
+                const vatFormat = PharmaFlow.getVatDisplayFormat ? PharmaFlow.getVatDisplayFormat() : 'ksh_percent';
+                const rows = filteredSales.map(sale => {
+                    const row = PharmaFlow.buildSaleReportRow(sale, () => sale.saleDateStr || '', { vatFormat: vatFormat });
+                    const obj = {};
+                    headers.forEach((h, i) => { obj[h] = row[i]; });
+                    return obj;
+                });
 
-            const ws = XLSX.utils.json_to_sheet(rows);
-            const wb = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(wb, ws, 'All Sales');
-            XLSX.writeFile(wb, (PharmaFlow.Settings ? PharmaFlow.Settings.getBusinessName() : 'PharmaFlow').replace(/\s+/g, '') + '_AllSales_' + new Date().toISOString().split('T')[0] + '.xlsx');
-            this.showToast('Excel exported!');
+                const ws = XLSX.utils.json_to_sheet(rows);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, 'All Sales');
+                XLSX.writeFile(wb, this.getExportFileBase() + '.xlsx');
+                this.showToast('Excel exported!');
+            } catch (err) {
+                console.error('Excel export error:', err);
+                this.showToast('Failed to export Excel.', 'error');
+            }
         },
 
         exportPDF: function () {
-            if (filteredSales.length === 0) { this.showToast('No sales to export', 'error'); return; }
+            if (filteredSales.length === 0) {
+                this.showToast('No sales to export', 'error');
+                return;
+            }
+            if (!window.jspdf || !window.jspdf.jsPDF) {
+                this.showToast('PDF export is not available. Please refresh the page.', 'error');
+                return;
+            }
 
-            const { jsPDF } = window.jspdf;
-            const doc = new jsPDF('landscape');
-            doc.setFontSize(16);
-            doc.text((PharmaFlow.Settings ? PharmaFlow.Settings.getBusinessName() : 'PharmaFlow') + ' - All Sales Report', 14, 18);
-            doc.setFontSize(10);
-            doc.text('Generated: ' + new Date().toLocaleString('en-KE'), 14, 26);
+            try {
+                const { jsPDF } = window.jspdf;
+                const doc = new jsPDF('landscape');
+                const businessName = PharmaFlow.Settings ? PharmaFlow.Settings.getBusinessName() : 'PharmaFlow';
+                doc.setFontSize(16);
+                doc.text(businessName + ' - All Sales Report', 14, 18);
+                doc.setFontSize(10);
+                doc.text('Generated: ' + new Date().toLocaleString('en-KE'), 14, 26);
+                const vatFormat = PharmaFlow.getVatDisplayFormat ? PharmaFlow.getVatDisplayFormat() : 'ksh_percent';
+                const fmtVatNote = vatFormat === 'percent' ? 'VAT shown as %'
+                    : (vatFormat === 'ksh' ? 'VAT shown as KSH' : 'VAT shown as KSH with rate in brackets');
+                doc.text(fmtVatNote + '. Product VAT = VAT-enabled items. Sale VAT = checkout VAT.', 14, 32);
 
-            const rows = filteredSales.map((sale, i) => [
-                i + 1,
-                sale.saleId,
-                sale.saleDateStr || '',
-                sale.itemCount || 0,
-                this.formatCurrency(sale.subtotal),
-                this.formatCurrency(sale.vatAmount || 0),
-                this.formatCurrency(sale.total),
-                this.formatCurrency(sale.totalProfit),
-                this.formatSalePaymentLabel(sale),
-                sale.soldBy || ''
-            ]);
+                const rows = filteredSales.map((sale, i) => {
+                    const row = PharmaFlow.buildSaleReportRow
+                        ? PharmaFlow.buildSaleReportRow(sale, () => sale.saleDateStr || '', { vatFormat: vatFormat })
+                        : null;
+                    if (row) {
+                        return [i + 1, row[0], row[1], row[2], row[3], this.formatCurrency(row[4]), this.formatCurrency(row[5]), row[6], row[7], row[8], this.formatCurrency(row[9]), this.formatCurrency(row[10]), row[11], row[12]];
+                    }
+                    const built = this.buildExportRow(sale);
+                    return [
+                        i + 1,
+                        sale.saleId || '',
+                        sale.saleDateStr || '',
+                        built.status,
+                        sale.itemCount || 0,
+                        this.formatCurrency(sale.subtotal),
+                        this.formatCurrency(sale.discountAmount || 0),
+                        PharmaFlow.formatSaleVatDisplay(sale, 'product', vatFormat),
+                        PharmaFlow.formatSaleVatDisplay(sale, 'cart', vatFormat),
+                        PharmaFlow.formatSaleVatDisplay(sale, 'total', vatFormat),
+                        this.formatCurrency(sale.total),
+                        this.formatCurrency(sale.totalProfit),
+                        this.formatSalePaymentLabel(sale),
+                        sale.soldBy || ''
+                    ];
+                });
 
-            doc.autoTable({
-                startY: 32,
-                head: [['#', 'Receipt #', 'Date', 'Items', 'Subtotal', 'VAT', 'Total', 'Profit', 'Payment', 'Cashier']],
-                body: rows,
-                styles: { fontSize: 8 },
-                headStyles: { fillColor: [37, 99, 235] }
-            });
+                doc.autoTable({
+                    startY: 38,
+                    head: [[
+                        '#', 'Receipt #', 'Date', 'Status', 'Items', 'Subtotal', 'Discount',
+                        'Product VAT', 'Sale VAT', 'Total VAT', 'Total', 'Profit', 'Payment', 'Sold By'
+                    ]],
+                    body: rows,
+                    styles: { fontSize: 7, cellPadding: 2 },
+                    headStyles: { fillColor: [37, 99, 235], fontSize: 7 },
+                    columnStyles: {
+                        0: { cellWidth: 8 },
+                        7: { halign: 'right' },
+                        8: { halign: 'right' },
+                        9: { halign: 'right' }
+                    }
+                });
 
-            doc.save((PharmaFlow.Settings ? PharmaFlow.Settings.getBusinessName() : 'PharmaFlow').replace(/\s+/g, '') + '_AllSales_' + new Date().toISOString().split('T')[0] + '.pdf');
-            this.showToast('PDF exported!');
+                doc.save(this.getExportFileBase() + '.pdf');
+                this.showToast('PDF exported!');
+            } catch (err) {
+                console.error('PDF export error:', err);
+                this.showToast('Failed to export PDF.', 'error');
+            }
         },
 
         // ─── CLEANUP ─────────────────────────────────────────
 
         cleanup: function () {
+            this.closeExportMenu();
             if (unsubAllSales) { unsubAllSales(); unsubAllSales = null; }
             allSalesData = [];
             filteredSales = [];

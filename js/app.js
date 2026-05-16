@@ -1123,4 +1123,219 @@
         });
         return ok;
     };
+
+    window.PharmaFlow.roundMoney = function (amount) {
+        return Math.round((parseFloat(amount) || 0) * 100) / 100;
+    };
+
+    /** VAT on inventory lines where vatEnabled (productVatTotal or per-line productVatAmount). */
+    window.PharmaFlow.getProductVatTotal = function (sale) {
+        if (!sale) return 0;
+        if (sale.productVatTotal != null && sale.productVatTotal !== '') {
+            return PharmaFlow.roundMoney(sale.productVatTotal);
+        }
+        if (!Array.isArray(sale.items) || !sale.items.length) return 0;
+        return PharmaFlow.roundMoney(sale.items.reduce(function (sum, item) {
+            var lineVat = parseFloat(item.productVatAmount);
+            if (!isNaN(lineVat) && lineVat > 0) return sum + lineVat;
+            if (item.vatEnabled) return sum + (parseFloat(item.productVatAmount) || 0);
+            return sum;
+        }, 0));
+    };
+
+    /** Optional cart-level VAT at checkout (POS apply VAT). */
+    window.PharmaFlow.getCartVatTotal = function (sale) {
+        return PharmaFlow.roundMoney(sale && sale.vatAmount);
+    };
+
+    window.PharmaFlow.getTotalVat = function (sale) {
+        return PharmaFlow.roundMoney(PharmaFlow.getProductVatTotal(sale) + PharmaFlow.getCartVatTotal(sale));
+    };
+
+    window.PharmaFlow.getSaleVatBreakdown = function (sale) {
+        var productVat = PharmaFlow.getProductVatTotal(sale);
+        var cartVat = PharmaFlow.getCartVatTotal(sale);
+        return {
+            productVat: productVat,
+            cartVat: cartVat,
+            totalVat: PharmaFlow.roundMoney(productVat + cartVat)
+        };
+    };
+
+    window.PharmaFlow.VAT_DISPLAY_FORMAT_KEY = 'pf_vat_display_format';
+
+    window.PharmaFlow.getVatDisplayFormat = function () {
+        var v = localStorage.getItem(PharmaFlow.VAT_DISPLAY_FORMAT_KEY);
+        return (v === 'ksh' || v === 'percent' || v === 'ksh_percent') ? v : 'ksh_percent';
+    };
+
+    window.PharmaFlow.setVatDisplayFormat = function (format) {
+        if (format === 'ksh' || format === 'percent' || format === 'ksh_percent') {
+            localStorage.setItem(PharmaFlow.VAT_DISPLAY_FORMAT_KEY, format);
+        }
+    };
+
+    window.PharmaFlow.formatKshAmount = function (amount) {
+        return 'KSH ' + new Intl.NumberFormat('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount || 0);
+    };
+
+    window.PharmaFlow.getProductVatTaxableBase = function (sale) {
+        if (!sale || !Array.isArray(sale.items)) return 0;
+        return PharmaFlow.roundMoney(sale.items.reduce(function (sum, item) {
+            var lineVat = parseFloat(item.productVatAmount) || 0;
+            if (!(lineVat > 0 || item.vatEnabled)) return sum;
+            if (item.lineBaseTotal != null && item.lineBaseTotal !== '') {
+                return sum + (parseFloat(item.lineBaseTotal) || 0);
+            }
+            var gross = parseFloat(item.lineGrossTotal) || parseFloat(item.lineTotal) || 0;
+            return sum + Math.max(0, gross - lineVat);
+        }, 0));
+    };
+
+    /** Effective or configured VAT rate (%) for product / cart / total VAT on a sale. */
+    window.PharmaFlow.getSaleVatRatePercent = function (sale, kind) {
+        if (!sale) return null;
+        kind = kind || 'total';
+        var productVat = PharmaFlow.getProductVatTotal(sale);
+        var cartVat = PharmaFlow.getCartVatTotal(sale);
+        var totalVat = PharmaFlow.getTotalVat(sale);
+        var amount = kind === 'product' ? productVat : (kind === 'cart' ? cartVat : totalVat);
+        if (amount <= 0) return null;
+
+        if (kind === 'product') {
+            var rates = [];
+            if (Array.isArray(sale.items)) {
+                sale.items.forEach(function (item) {
+                    if (!item.vatEnabled && !(parseFloat(item.productVatAmount) > 0)) return;
+                    if ((item.vatType || 'percent') === 'percent') {
+                        var r = parseFloat(item.vatValue);
+                        if (!isNaN(r) && r > 0) rates.push(PharmaFlow.roundMoney(r));
+                    }
+                });
+            }
+            if (rates.length && rates.every(function (r) { return r === rates[0]; })) return rates[0];
+            var base = PharmaFlow.getProductVatTaxableBase(sale);
+            if (base > 0) return PharmaFlow.roundMoney((productVat / base) * 100);
+            return null;
+        }
+
+        if (kind === 'cart') {
+            if (sale.vatEnabled && (sale.vatType || 'percent') === 'percent') {
+                var cv = parseFloat(sale.vatValue);
+                if (!isNaN(cv) && cv > 0) return PharmaFlow.roundMoney(cv);
+            }
+            var net = parseFloat(sale.netTotal);
+            if (isNaN(net) || net <= 0) {
+                net = PharmaFlow.roundMoney((parseFloat(sale.subtotal) || 0) - (parseFloat(sale.discountAmount) || 0) + productVat);
+            }
+            if (net > 0 && cartVat > 0) return PharmaFlow.roundMoney((cartVat / net) * 100);
+            return null;
+        }
+
+        var beforeVat = PharmaFlow.roundMoney((parseFloat(sale.total) || 0) - totalVat);
+        if (beforeVat > 0) return PharmaFlow.roundMoney((totalVat / beforeVat) * 100);
+        return null;
+    };
+
+    window.PharmaFlow.formatPercentLabel = function (percent) {
+        if (percent == null || isNaN(percent) || percent <= 0) return null;
+        var n = PharmaFlow.roundMoney(percent);
+        return (n % 1 === 0 ? String(Math.round(n)) : String(n)) + '%';
+    };
+
+    /**
+     * @param {number} amount VAT amount in KSH
+     * @param {number|null} percent Rate label e.g. 16
+     * @param {'ksh'|'percent'|'ksh_percent'} [format]
+     */
+    window.PharmaFlow.formatVatAmount = function (amount, percent, format) {
+        amount = PharmaFlow.roundMoney(amount);
+        format = format || PharmaFlow.getVatDisplayFormat();
+        if (amount <= 0) return '—';
+        var ksh = PharmaFlow.formatKshAmount(amount);
+        var pct = PharmaFlow.formatPercentLabel(percent);
+        if (format === 'percent') return pct || ksh;
+        if (format === 'ksh') return ksh;
+        if (format === 'ksh_percent') return pct ? (ksh + ' (' + pct + ')') : ksh;
+        return ksh;
+    };
+
+    /** @param {'product'|'cart'|'total'} kind */
+    window.PharmaFlow.formatSaleVatDisplay = function (sale, kind, format) {
+        kind = kind || 'total';
+        format = format || PharmaFlow.getVatDisplayFormat();
+        var vat = PharmaFlow.getSaleVatBreakdown(sale);
+        var amount = kind === 'product' ? vat.productVat : (kind === 'cart' ? vat.cartVat : vat.totalVat);
+        return PharmaFlow.formatVatAmount(amount, PharmaFlow.getSaleVatRatePercent(sale, kind), format);
+    };
+
+    window.PharmaFlow.vatFormatSelectHtml = function (selectId, labelText, variant) {
+        var cur = PharmaFlow.getVatDisplayFormat();
+        var label = labelText || 'VAT display';
+        if (variant === 'compact') {
+            return '<div class="as-vat-display" role="group" aria-label="VAT column format">' +
+                '<label class="as-vat-display__label" for="' + selectId + '">' +
+                '<span class="as-vat-display__icon" aria-hidden="true"><i class="fas fa-percent"></i></span>' +
+                '<span class="as-vat-display__text">' + label + '</span></label>' +
+                '<div class="as-vat-display__control">' +
+                '<select id="' + selectId + '" class="as-vat-display__select" title="How VAT columns are shown in the table and exports">' +
+                '<option value="ksh"' + (cur === 'ksh' ? ' selected' : '') + '>KSH only</option>' +
+                '<option value="percent"' + (cur === 'percent' ? ' selected' : '') + '>% only</option>' +
+                '<option value="ksh_percent"' + (cur === 'ksh_percent' ? ' selected' : '') + '>KSH + (rate %)</option>' +
+                '</select><span class="as-vat-display__chevron" aria-hidden="true"><i class="fas fa-chevron-down"></i></span>' +
+                '</div></div>';
+        }
+        return '<div class="sales-vat-format">' +
+            '<label for="' + selectId + '">' + label + '</label>' +
+            '<select id="' + selectId + '" class="form-control sales-vat-format-select" title="How to show VAT amounts">' +
+            '<option value="ksh"' + (cur === 'ksh' ? ' selected' : '') + '>KSH amount</option>' +
+            '<option value="percent"' + (cur === 'percent' ? ' selected' : '') + '>Percentage (%)</option>' +
+            '<option value="ksh_percent"' + (cur === 'ksh_percent' ? ' selected' : '') + '>KSH + % (e.g. KSH 100 (16%))</option>' +
+            '</select></div>';
+    };
+
+    window.PharmaFlow.bindVatFormatSelect = function (selectEl, onChange) {
+        if (!selectEl) return;
+        selectEl.value = PharmaFlow.getVatDisplayFormat();
+        selectEl.addEventListener('change', function () {
+            PharmaFlow.setVatDisplayFormat(selectEl.value);
+            if (typeof onChange === 'function') onChange(selectEl.value);
+        });
+    };
+
+    /** Column headers shared by All Sales export and Reports → Sales Report. */
+    window.PharmaFlow.SALE_REPORT_HEADERS = [
+        'Receipt #', 'Date', 'Status', 'Items', 'Subtotal', 'Discount',
+        'Product VAT', 'Sale VAT', 'Total VAT', 'Total', 'Profit', 'Payment', 'Sold By'
+    ];
+
+    window.PharmaFlow.buildSaleReportRow = function (sale, formatDateFn, opts) {
+        opts = opts || {};
+        var vatFormat = opts.vatFormat || PharmaFlow.getVatDisplayFormat();
+        var dateStr = '-';
+        if (typeof formatDateFn === 'function') {
+            dateStr = formatDateFn(sale) || sale.saleDateStr || '-';
+        } else if (sale.saleDateStr) {
+            dateStr = sale.saleDateStr;
+        }
+        var payment = (sale.paymentMethod === 'split' && Array.isArray(sale.paymentSplits) && sale.paymentSplits.length)
+            ? 'SPLIT ' + sale.paymentSplits.filter(function (p) { return (p.amount || 0) > 0; })
+                .map(function (p) { return String(p.method || '').toUpperCase() + ':' + (p.amount || 0); }).join(', ')
+            : String(sale.paymentMethod || '').toUpperCase();
+        return [
+            sale.saleId || sale.id || '',
+            dateStr,
+            sale.status || 'completed',
+            sale.itemCount || 0,
+            sale.subtotal || 0,
+            sale.discountAmount || 0,
+            PharmaFlow.formatSaleVatDisplay(sale, 'product', vatFormat),
+            PharmaFlow.formatSaleVatDisplay(sale, 'cart', vatFormat),
+            PharmaFlow.formatSaleVatDisplay(sale, 'total', vatFormat),
+            sale.total || 0,
+            sale.totalProfit || 0,
+            payment,
+            sale.soldBy || '-'
+        ];
+    };
 })();

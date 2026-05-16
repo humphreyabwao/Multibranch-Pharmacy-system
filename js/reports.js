@@ -47,6 +47,64 @@
             return (s.paymentMethod || '').toUpperCase();
         },
 
+        _saleReportHeaders() {
+            return PharmaFlow.SALE_REPORT_HEADERS || [
+                'Receipt #', 'Date', 'Status', 'Items', 'Subtotal', 'Discount',
+                'Product VAT', 'Sale VAT', 'Total VAT', 'Total', 'Profit', 'Payment', 'Sold By'
+            ];
+        },
+
+        _saleReportDateLabel(sale) {
+            const d = this._dateObj(sale.createdAt || sale.saleDate);
+            return d ? d.toLocaleDateString('en-KE') : (sale.saleDateStr || '-');
+        },
+
+        _saleReportRow(sale) {
+            const vatFormat = PharmaFlow.getVatDisplayFormat ? PharmaFlow.getVatDisplayFormat() : 'ksh_percent';
+            if (PharmaFlow.buildSaleReportRow) {
+                return PharmaFlow.buildSaleReportRow(sale, (s) => this._saleReportDateLabel(s), { vatFormat: vatFormat });
+            }
+            return [
+                sale.saleId || sale.id,
+                this._saleReportDateLabel(sale),
+                sale.status || 'completed',
+                sale.itemCount || 0,
+                sale.subtotal || 0,
+                sale.discountAmount || 0,
+                PharmaFlow.formatSaleVatDisplay ? PharmaFlow.formatSaleVatDisplay(sale, 'product', vatFormat) : '—',
+                PharmaFlow.formatSaleVatDisplay ? PharmaFlow.formatSaleVatDisplay(sale, 'cart', vatFormat) : '—',
+                PharmaFlow.formatSaleVatDisplay ? PharmaFlow.formatSaleVatDisplay(sale, 'total', vatFormat) : '—',
+                sale.total || 0,
+                sale.totalProfit || 0,
+                this._salePaymentLabel(sale),
+                sale.soldBy || '-'
+            ];
+        },
+
+        _isSaleReportVatColumn(header) {
+            return header === 'Product VAT' || header === 'Sale VAT' || header === 'Total VAT';
+        },
+
+        _isSaleReportMoneyColumn(header) {
+            return ['Subtotal', 'Discount', 'Total', 'Profit'].includes(header);
+        },
+
+        _formatReportPreviewCell(header, value) {
+            return this._esc(this._formatReportCell(header, value));
+        },
+
+        _formatReportCell(header, value) {
+            if (this._isSaleReportVatColumn(header)) {
+                if (value == null || value === '') return '—';
+                return String(value);
+            }
+            if (typeof value === 'number') {
+                if (header === 'Items' || header === 'Qty' || header === 'Visits') return String(value);
+                if (this._isSaleReportMoneyColumn(header)) return this._fc(value);
+            }
+            return value == null ? '' : String(value);
+        },
+
         /* ─── Date Range Filter ─── */
         _getRange() {
             const now = new Date();
@@ -868,6 +926,7 @@
                                 <option value="print">Print</option>
                             </select>
                         </div>
+                        ${PharmaFlow.vatFormatSelectHtml ? PharmaFlow.vatFormatSelectHtml('rpt-vat-format', 'VAT display') : ''}
                     </div>
                     <div class="form-row">
                         <div class="form-group">
@@ -887,6 +946,13 @@
                 <div id="rpt-gen-preview-body"></div>
             </div>`;
 
+            if (PharmaFlow.bindVatFormatSelect) {
+                const self = this;
+                PharmaFlow.bindVatFormatSelect(body.querySelector('#rpt-vat-format'), function () {
+                    const preview = rptContainer && rptContainer.querySelector('#rpt-gen-preview');
+                    if (preview && preview.style.display !== 'none') self._generateReport();
+                });
+            }
             body.querySelector('#rpt-gen-btn').addEventListener('click', () => this._generateReport());
         },
 
@@ -909,12 +975,11 @@
             switch (type) {
                 case 'sales': {
                     title = 'Sales Report';
-                    const data = rptSales.filter(s => s.status !== 'voided' && inR(s));
-                    headers = ['Sale ID', 'Date', 'Items', 'Total', 'Profit', 'Payment', 'Sold By'];
-                    rows = data.map(s => {
-                        const d = this._dateObj(s.createdAt || s.saleDate);
-                        return [s.saleId || s.id, d ? d.toLocaleDateString('en-KE') : '-', s.itemCount || 0, s.total || 0, s.totalProfit || 0, this._salePaymentLabel(s), s.soldBy || '-'];
-                    });
+                    const data = rptSales.filter(s =>
+                        s.status !== 'voided' && s.status !== 'cancelled' && inR(s)
+                    );
+                    headers = this._saleReportHeaders();
+                    rows = data.map(s => this._saleReportRow(s));
                     break;
                 }
                 case 'inventory': {
@@ -980,7 +1045,7 @@
                 <p><strong>${title}</strong> | ${from} to ${to} | ${rows.length} records</p>
                 <div class="table-responsive"><table class="data-table">
                     <thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead>
-                    <tbody>${rows.slice(0, 20).map(r => `<tr>${r.map(c => `<td>${typeof c === 'number' && headers[r.indexOf(c)] !== 'Qty' && headers[r.indexOf(c)] !== 'Items' && headers[r.indexOf(c)] !== 'Visits' ? this._fc(c) : this._esc(String(c))}</td>`).join('')}</tr>`).join('')}
+                    <tbody>${rows.slice(0, 20).map(r => `<tr>${r.map((c, ci) => `<td>${this._formatReportPreviewCell(headers[ci], c)}</td>`).join('')}</tr>`).join('')}
                     ${rows.length > 20 ? `<tr><td colspan="${headers.length}" class="rpt-empty">... and ${rows.length - 20} more rows (shown in export)</td></tr>` : ''}
                     </tbody>
                 </table></div>`;
@@ -1458,8 +1523,20 @@
             doc.text(`${_bn} - ${title}`, 14, 15);
             doc.setFontSize(10);
             doc.text(`Period: ${from} to ${to} | Generated: ${new Date().toLocaleString('en-KE')}`, 14, 22);
-            const fmtRows = rows.map(r => r.map(c => typeof c === 'number' ? this._fc(c) : String(c)));
-            doc.autoTable({ head: [headers], body: fmtRows, startY: 28, styles: { fontSize: 8 }, headStyles: { fillColor: [37, 99, 235] } });
+            const fmtRows = rows.map(r => r.map((c, i) => this._formatReportCell(headers[i], c)));
+            doc.autoTable({
+                head: [headers],
+                body: fmtRows,
+                startY: title === 'Sales Report' ? 30 : 28,
+                styles: { fontSize: title === 'Sales Report' ? 7 : 8, cellPadding: 2 },
+                headStyles: { fillColor: [37, 99, 235], fontSize: title === 'Sales Report' ? 7 : 8 }
+            });
+            if (title === 'Sales Report') {
+                doc.setFontSize(8);
+                var vf = PharmaFlow.getVatDisplayFormat ? PharmaFlow.getVatDisplayFormat() : 'ksh_percent';
+                var vfNote = vf === 'percent' ? 'VAT as %' : (vf === 'ksh' ? 'VAT as KSH' : 'VAT as KSH with % in brackets');
+                doc.text(vfNote + '. Product VAT = VAT-enabled items. Sale VAT = checkout VAT.', 14, 26);
+            }
             doc.save(`${_bn.replace(/\s+/g, '')}_${title.replace(/\s+/g, '_')}_${from}_${to}.pdf`);
         },
 
@@ -1472,7 +1549,7 @@
         },
 
         _printReport(title, headers, rows, from, to) {
-            const fmtRows = rows.map(r => r.map(c => typeof c === 'number' ? this._fc(c) : String(this._esc(c))));
+            const fmtRows = rows.map(r => r.map((c, i) => this._esc(this._formatReportCell(headers[i], c))));
             const html = `<!DOCTYPE html><html><head><title>${title}</title><style>
                 body{font-family:Arial,sans-serif;padding:20px;font-size:12px}
                 h1{font-size:18px;margin-bottom:4px}
@@ -1496,11 +1573,8 @@
 
         _exportSalesReport(sales, topProducts, dailyArr) {
             const { from, to } = this._getRange();
-            const headers = ['Sale ID', 'Date', 'Items', 'Total', 'Profit', 'Payment', 'Sold By'];
-            const rows = sales.map(s => {
-                const d = this._dateObj(s.createdAt || s.saleDate);
-                return [s.saleId || s.id, d ? d.toLocaleDateString('en-KE') : '-', s.itemCount || 0, s.total || 0, s.totalProfit || 0, this._salePaymentLabel(s), s.soldBy || '-'];
-            });
+            const headers = this._saleReportHeaders();
+            const rows = sales.map(s => this._saleReportRow(s));
             this._exportPDF('Sales Report', headers, rows, from, to);
         },
 

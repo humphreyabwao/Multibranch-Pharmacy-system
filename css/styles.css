@@ -4653,9 +4653,159 @@ input, select, textarea {
 }
 .as-export-option:hover { background: var(--bg-tertiary); }
 
+.sales-vat-cell { white-space: nowrap; font-size: 0.78rem; }
+.sales-vat-detail {
+    display: block;
+    font-size: 0.7rem;
+    color: var(--text-tertiary);
+    font-weight: 400;
+    margin-top: 2px;
+}
+
+/* All Sales — VAT format control (header) */
+.as-vat-display {
+    display: inline-flex;
+    align-items: stretch;
+    min-height: 34px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+.as-vat-display:hover {
+    border-color: color-mix(in srgb, var(--primary) 35%, var(--border-color));
+}
+.as-vat-display:focus-within {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+.as-vat-display__label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    padding: 0 12px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    cursor: pointer;
+    user-select: none;
+    border-right: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+}
+.as-vat-display__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--primary) 12%, var(--bg-secondary));
+    color: var(--primary);
+    font-size: 0.72rem;
+}
+.as-vat-display__text {
+    color: var(--text-primary);
+    letter-spacing: 0.01em;
+}
+.as-vat-display__control {
+    position: relative;
+    display: flex;
+    align-items: center;
+    min-width: 148px;
+}
+.as-vat-display__select {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 100%;
+    height: 100%;
+    min-height: 34px;
+    padding: 0 34px 0 12px;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 0.82rem;
+    font-weight: 500;
+    cursor: pointer;
+    line-height: 1.2;
+}
+.as-vat-display__select:hover {
+    background: color-mix(in srgb, var(--primary) 4%, transparent);
+}
+.as-vat-display__chevron {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    pointer-events: none;
+    color: var(--text-tertiary);
+    font-size: 0.65rem;
+    transition: color 0.15s, transform 0.15s;
+}
+.as-vat-display:focus-within .as-vat-display__chevron {
+    color: var(--primary);
+    transform: translateY(-50%) rotate(180deg);
+}
+
+[data-theme="dark"] .as-vat-display {
+    background: var(--bg-card);
+    border-color: var(--border-color);
+}
+[data-theme="dark"] .as-vat-display__label {
+    background: color-mix(in srgb, var(--bg-tertiary) 80%, #000);
+}
+[data-theme="dark"] .as-vat-display__icon {
+    background: color-mix(in srgb, var(--primary) 22%, transparent);
+}
+
+.sales-vat-format {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 140px;
+}
+.sales-vat-format label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+.sales-vat-format-select {
+    font-size: 0.8rem;
+    padding: 6px 10px;
+    min-height: 34px;
+}
+.as-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.rpt-gen-form .sales-vat-format {
+    flex: 1;
+    min-width: 160px;
+}
+
 /* ─── Sales Responsive ─── */
 
 @media (max-width: 768px) {
+    .as-header-actions {
+        width: 100%;
+        justify-content: stretch;
+    }
+    .as-vat-display {
+        flex: 1;
+        min-width: 0;
+    }
+    .as-vat-display__control {
+        flex: 1;
+        min-width: 0;
+    }
     .sales-toolbar {
         flex-direction: column;
         align-items: stretch;
