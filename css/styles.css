@@ -12532,6 +12532,93 @@ input, select, textarea {
 .mr-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .mr-field { display: flex; flex-direction: column; gap: 4px; }
 .mr-field label { font-size: 13px; font-weight: 600; color: #475569; }
+.mr-field--full { grid-column: 1 / -1; }
+
+/* ── Add Refill: patient picker ── */
+.mr-patient-picker { display: flex; flex-direction: column; gap: 12px; }
+.mr-patient-mode {
+    display: flex; flex-wrap: wrap; gap: 8px; padding: 0;
+    background: transparent; border-radius: 0; width: 100%; max-width: 100%;
+}
+.mr-patient-mode-btn {
+    border: 1px solid #e2e8f0; background: #fff; color: #475569;
+    font-size: 13px; font-weight: 600; padding: 10px 16px; border-radius: 8px;
+    cursor: pointer; display: inline-flex; align-items: center; gap: 8px;
+    white-space: nowrap; flex: 1 1 200px; justify-content: center;
+    transition: background .15s, border-color .15s, color .15s, box-shadow .15s;
+}
+.mr-patient-mode-btn:hover { color: #1e293b; background: #f8fafc; border-color: #cbd5e1; }
+.mr-patient-mode-btn.active {
+    background: #eff6ff; color: #1d4ed8; border-color: #93c5fd;
+    box-shadow: 0 0 0 3px rgba(59,130,246,.12);
+}
+.mr-patient-mode-btn--manual {
+    color: #dc2626; border-color: #fca5a5; background: #fef2f2;
+}
+.mr-patient-mode-btn--manual:hover {
+    color: #b91c1c; background: #fee2e2; border-color: #f87171;
+}
+.mr-patient-mode-btn--manual.active {
+    background: #dc2626; color: #fff; border-color: #dc2626;
+    box-shadow: 0 2px 10px rgba(220, 38, 38, 0.35);
+}
+.mr-patient-mode-btn--manual.active i { color: #fff; }
+.mr-patient-panel { display: flex; flex-direction: column; gap: 10px; }
+.mr-patient-picker[data-mode="manual"] #mr-patient-manual-panel {
+    padding: 12px; border-radius: 8px; border: 1px solid #fecaca; background: #fff5f5;
+}
+.mr-patient-search-wrap { position: relative; }
+.mr-patient-search-bar {
+    display: flex; align-items: center; gap: 10px;
+    border: 1px solid #e2e8f0; border-radius: 8px; padding: 0 12px; background: #fff;
+}
+.mr-patient-search-bar:focus-within {
+    border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,.15);
+}
+.mr-patient-search-bar > i { color: #94a3b8; font-size: 14px; }
+.mr-patient-search-bar .mr-input {
+    border: none; box-shadow: none; padding-left: 0; flex: 1;
+}
+.mr-patient-search-bar .mr-input:focus { outline: none; box-shadow: none; }
+.mr-patient-dropdown {
+    display: none;
+    position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 20;
+    background: #fff; border: 1px solid #e2e8f0; border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(15,23,42,.12); max-height: 240px; overflow-y: auto;
+}
+.mr-patient-dropdown.is-open { display: block; }
+.mr-patient-dropdown-item {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+    width: 100%; text-align: left; padding: 10px 14px; border: none; background: #fff;
+    cursor: pointer; border-bottom: 1px solid #f1f5f9;
+}
+.mr-patient-dropdown-item:last-child { border-bottom: none; }
+.mr-patient-dropdown-item:hover { background: #f8fafc; }
+.mr-patient-dropdown-item strong { font-size: 14px; color: #1e293b; }
+.mr-patient-dropdown-item small { font-size: 12px; color: #64748b; }
+.mr-patient-dropdown-empty {
+    padding: 14px; text-align: center; font-size: 13px; color: #94a3b8;
+}
+.mr-patient-selected {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 12px 14px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px;
+}
+.mr-patient-selected-info { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.mr-patient-selected-avatar {
+    width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0;
+    background: #3b82f6; color: #fff; font-size: 14px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+}
+.mr-patient-selected-info strong {
+    display: block; font-size: 14px; color: #1e293b;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mr-patient-selected-info small { font-size: 12px; color: #64748b; }
+.mr-patient-hint {
+    margin: 0; font-size: 12px; color: #94a3b8; display: flex; align-items: flex-start; gap: 6px;
+}
+.mr-patient-hint i { margin-top: 2px; }
+
 .mr-form-actions { display: flex; gap: 10px; margin-top: 20px; }
 
 /* ── Modal ── */
@@ -12751,6 +12838,47 @@ input, select, textarea {
     color: var(--text-primary); border-bottom-color: var(--border-color);
 }
 [data-theme="dark"] .mr-field label { color: var(--text-secondary); }
+
+[data-theme="dark"] .mr-patient-mode-btn {
+    background: var(--bg-input); border-color: var(--border-color); color: var(--text-secondary);
+}
+[data-theme="dark"] .mr-patient-mode-btn:hover {
+    background: var(--bg-secondary); color: var(--text-primary); border-color: var(--text-tertiary);
+}
+[data-theme="dark"] .mr-patient-mode-btn.active {
+    background: rgba(37, 99, 235, 0.15); color: #60a5fa; border-color: rgba(59, 130, 246, 0.45);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+[data-theme="dark"] .mr-patient-mode-btn--manual {
+    color: #f87171; border-color: rgba(248, 113, 113, 0.45); background: rgba(220, 38, 38, 0.12);
+}
+[data-theme="dark"] .mr-patient-mode-btn--manual:hover {
+    color: #fca5a5; background: rgba(220, 38, 38, 0.2); border-color: #f87171;
+}
+[data-theme="dark"] .mr-patient-mode-btn--manual.active {
+    background: #dc2626; color: #fff; border-color: #dc2626;
+    box-shadow: 0 2px 10px rgba(220, 38, 38, 0.4);
+}
+[data-theme="dark"] .mr-patient-search-bar {
+    background: var(--bg-input); border-color: var(--border-color);
+}
+[data-theme="dark"] .mr-patient-dropdown {
+    background: var(--bg-secondary); border-color: var(--border-color);
+    box-shadow: 0 8px 24px rgba(0,0,0,.35);
+}
+[data-theme="dark"] .mr-patient-dropdown-item {
+    background: var(--bg-secondary); border-bottom-color: var(--border-color);
+}
+[data-theme="dark"] .mr-patient-dropdown-item:hover { background: var(--bg-input); }
+[data-theme="dark"] .mr-patient-dropdown-item strong { color: var(--text-primary); }
+[data-theme="dark"] .mr-patient-selected {
+    background: rgba(37, 99, 235, 0.1); border-color: rgba(59, 130, 246, 0.35);
+}
+[data-theme="dark"] .mr-patient-selected-info strong { color: var(--text-primary); }
+[data-theme="dark"] .mr-patient-hint { color: var(--text-tertiary); }
+[data-theme="dark"] .mr-patient-picker[data-mode="manual"] #mr-patient-manual-panel {
+    border-color: rgba(248, 113, 113, 0.35); background: rgba(220, 38, 38, 0.08);
+}
 
 [data-theme="dark"] .mr-modal {
     background: var(--bg-secondary); box-shadow: 0 20px 40px rgba(0,0,0,.5);

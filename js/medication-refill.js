@@ -21,6 +21,11 @@
     let mrFilteredRefills = [];
     let mrCurrentPage = 1;
     const MR_PAGE_SIZE = 20;
+    let mrAddPatientMode = 'registered';
+    let mrAddSelectedPatient = null;
+    let mrAddPatientDocClick = null;
+    let mrAddPickerAbort = null;
+    let mrAddSearchTimer = null;
 
     const MR_FREQUENCIES = [
         'Daily', 'Every 2 Days', 'Every 3 Days', 'Weekly', 'Every 2 Weeks',
@@ -123,18 +128,265 @@
             mrAllPatients = [];
             mrFilteredRefills = [];
             mrCurrentPage = 1;
+            mrAddPatientMode = 'registered';
+            mrAddSelectedPatient = null;
+            this._unbindAddPatientPicker();
+        },
+
+        _unbindAddPatientPicker: function () {
+            if (mrAddPickerAbort) {
+                mrAddPickerAbort.abort();
+                mrAddPickerAbort = null;
+            }
+            if (mrAddSearchTimer) {
+                clearTimeout(mrAddSearchTimer);
+                mrAddSearchTimer = null;
+            }
+            if (mrAddPatientDocClick) {
+                document.removeEventListener('click', mrAddPatientDocClick);
+                mrAddPatientDocClick = null;
+            }
+        },
+
+        _patientDisplayName: function (p) {
+            if (!p) return '';
+            return (p.fullName || ((p.firstName || '') + ' ' + (p.lastName || '')).trim()).trim();
+        },
+
+        _patientInitials: function (name) {
+            var parts = (name || '').trim().split(/\s+/).filter(Boolean);
+            if (!parts.length) return '?';
+            if (parts.length === 1) return parts[0].charAt(0).toUpperCase();
+            return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
+        },
+
+        _setAddPatientMode: function (mode) {
+            var nextMode = mode === 'manual' ? 'manual' : 'registered';
+            if (nextMode !== mrAddPatientMode) {
+                if (nextMode === 'manual') {
+                    this._clearAddPatientSelection();
+                } else {
+                    var manualName = document.getElementById('mr-patient-manual-name');
+                    var manualPhone = document.getElementById('mr-patient-manual-phone');
+                    if (manualName) manualName.value = '';
+                    if (manualPhone) manualPhone.value = '';
+                }
+            }
+            mrAddPatientMode = nextMode;
+            var regPanel = document.getElementById('mr-patient-registered-panel');
+            var manPanel = document.getElementById('mr-patient-manual-panel');
+            var btnReg = document.getElementById('mr-patient-mode-registered');
+            var btnMan = document.getElementById('mr-patient-mode-manual');
+            var picker = document.querySelector('.mr-patient-picker');
+            if (regPanel) regPanel.style.display = mrAddPatientMode === 'registered' ? '' : 'none';
+            if (manPanel) manPanel.style.display = mrAddPatientMode === 'manual' ? '' : 'none';
+            if (btnReg) {
+                btnReg.classList.toggle('active', mrAddPatientMode === 'registered');
+                btnReg.setAttribute('aria-selected', mrAddPatientMode === 'registered' ? 'true' : 'false');
+            }
+            if (btnMan) {
+                btnMan.classList.toggle('active', mrAddPatientMode === 'manual');
+                btnMan.setAttribute('aria-selected', mrAddPatientMode === 'manual' ? 'true' : 'false');
+            }
+            if (picker) picker.dataset.mode = mrAddPatientMode;
+        },
+
+        _closeAddPatientDropdown: function () {
+            var dropdown = document.getElementById('mr-patient-dropdown');
+            if (dropdown) {
+                dropdown.innerHTML = '';
+                dropdown.classList.remove('is-open');
+            }
+        },
+
+        _clearAddPatientSelection: function () {
+            mrAddSelectedPatient = null;
+            var selected = document.getElementById('mr-patient-selected');
+            var search = document.getElementById('mr-patient-search');
+            var dropdown = document.getElementById('mr-patient-dropdown');
+            if (selected) selected.style.display = 'none';
+            if (search) {
+                search.value = '';
+                search.disabled = false;
+            }
+            this._closeAddPatientDropdown();
+        },
+
+        _selectAddPatient: function (patient) {
+            if (!patient) return;
+            mrAddSelectedPatient = patient;
+            var name = this._patientDisplayName(patient);
+            var pid = patient.patientId || patient.id || '';
+            var phone = patient.phone || '';
+            var selected = document.getElementById('mr-patient-selected');
+            var search = document.getElementById('mr-patient-search');
+            var dropdown = document.getElementById('mr-patient-dropdown');
+            var avatar = document.getElementById('mr-patient-selected-avatar');
+            var nameEl = document.getElementById('mr-patient-selected-name');
+            var metaEl = document.getElementById('mr-patient-selected-meta');
+            if (avatar) avatar.textContent = this._patientInitials(name);
+            if (nameEl) nameEl.textContent = name;
+            if (metaEl) metaEl.textContent = (phone ? phone + ' · ' : '') + pid;
+            if (selected) selected.style.display = 'flex';
+            if (search) {
+                search.value = name;
+                search.disabled = true;
+            }
+            this._closeAddPatientDropdown();
+        },
+
+        _renderAddPatientDropdown: function (query) {
+            var dropdown = document.getElementById('mr-patient-dropdown');
+            if (!dropdown) return;
+            var q = (query || '').toLowerCase().trim();
+            if (!q) {
+                this._closeAddPatientDropdown();
+                return;
+            }
+            var self = this;
+            var matches = mrAllPatients.filter(function (p) {
+                var hay = [
+                    self._patientDisplayName(p),
+                    p.phone || '',
+                    p.patientId || '',
+                    p.id || ''
+                ].join(' ').toLowerCase();
+                return hay.indexOf(q) !== -1;
+            }).slice(0, 12);
+
+            if (!matches.length) {
+                dropdown.innerHTML = '<div class="mr-patient-dropdown-empty">No patients found</div>';
+                dropdown.classList.add('is-open');
+                return;
+            }
+
+            dropdown.classList.add('is-open');
+            dropdown.innerHTML = matches.map(function (p) {
+                var name = self._patientDisplayName(p);
+                var pid = p.patientId || p.id || '';
+                return '<button type="button" class="mr-patient-dropdown-item" data-patient-id="' + self.escapeHtml(p.id) + '">' +
+                    '<strong>' + self.escapeHtml(name) + '</strong>' +
+                    '<small>' + self.escapeHtml((p.phone || 'No phone') + ' · ' + pid) + '</small>' +
+                '</button>';
+            }).join('');
+        },
+
+        _bindAddPatientPicker: function () {
+            var self = this;
+            var picker = document.querySelector('.mr-patient-picker');
+            if (!picker) return;
+
+            this._unbindAddPatientPicker();
+            mrAddPickerAbort = new AbortController();
+            var signal = mrAddPickerAbort.signal;
+
+            this._setAddPatientMode(mrAddPatientMode || 'registered');
+
+            picker.addEventListener('click', function (e) {
+                var modeBtn = e.target.closest('.mr-patient-mode-btn');
+                if (modeBtn && picker.contains(modeBtn)) {
+                    e.preventDefault();
+                    self._setAddPatientMode(modeBtn.dataset.mode || 'registered');
+                    return;
+                }
+                var item = e.target.closest('.mr-patient-dropdown-item');
+                if (item) {
+                    e.preventDefault();
+                    var p = mrAllPatients.find(function (x) { return x.id === item.dataset.patientId; });
+                    if (p) self._selectAddPatient(p);
+                    return;
+                }
+                if (e.target.closest('#mr-patient-clear')) {
+                    e.preventDefault();
+                    self._clearAddPatientSelection();
+                }
+            }, { signal: signal });
+
+            var search = document.getElementById('mr-patient-search');
+            if (search) {
+                search.addEventListener('input', function () {
+                    if (mrAddSelectedPatient) return;
+                    if (mrAddSearchTimer) clearTimeout(mrAddSearchTimer);
+                    mrAddSearchTimer = setTimeout(function () {
+                        mrAddSearchTimer = null;
+                        self._renderAddPatientDropdown(search.value);
+                    }, 150);
+                }, { signal: signal });
+                search.addEventListener('focus', function () {
+                    if (!mrAddSelectedPatient && search.value.trim()) {
+                        self._renderAddPatientDropdown(search.value);
+                    }
+                }, { signal: signal });
+                search.addEventListener('keydown', function (e) {
+                    if (e.key === 'Escape') self._closeAddPatientDropdown();
+                }, { signal: signal });
+            }
+
+            mrAddPatientDocClick = function (e) {
+                var wrap = document.querySelector('.mr-patient-search-wrap');
+                if (wrap && !wrap.contains(e.target)) {
+                    self._closeAddPatientDropdown();
+                }
+            };
+            document.addEventListener('click', mrAddPatientDocClick);
+
+            var form = document.getElementById('mr-add-form');
+            if (form) {
+                form.addEventListener('reset', function () {
+                    self._clearAddPatientSelection();
+                    self._setAddPatientMode('registered');
+                    var manualName = document.getElementById('mr-patient-manual-name');
+                    var manualPhone = document.getElementById('mr-patient-manual-phone');
+                    if (manualName) manualName.value = '';
+                    if (manualPhone) manualPhone.value = '';
+                }, { signal: signal });
+            }
+        },
+
+        _resolveAddPatientForSave: function () {
+            if (mrAddPatientMode === 'manual') {
+                var manualName = (document.getElementById('mr-patient-manual-name')?.value || '').trim();
+                var manualPhone = (document.getElementById('mr-patient-manual-phone')?.value || '').trim();
+                if (!manualName) {
+                    return { error: 'Please enter the patient name' };
+                }
+                return {
+                    patientId: '',
+                    patientName: manualName,
+                    patientPhone: manualPhone,
+                    patientSource: 'manual'
+                };
+            }
+            if (!mrAddSelectedPatient) {
+                return { error: 'Please search and select a registered patient' };
+            }
+            return {
+                patientId: mrAddSelectedPatient.patientId || mrAddSelectedPatient.id || '',
+                patientName: this._patientDisplayName(mrAddSelectedPatient),
+                patientPhone: mrAddSelectedPatient.phone || '',
+                patientSource: 'registered'
+            };
         },
 
         /* helper: load patients list for dropdowns */
         _loadPatients: function (businessId, callback) {
             const ref = PharmaFlow.getBusinessCollection(businessId, 'patients');
-            if (!ref) { callback([]); return; }
+            if (!ref) { if (callback) callback([]); return; }
             if (mrUnsubPatients) { mrUnsubPatients(); mrUnsubPatients = null; }
+            var readyCallback = callback || null;
             mrUnsubPatients = ref.orderBy('fullName', 'asc').onSnapshot(function (snap) {
                 mrAllPatients = [];
                 snap.forEach(function (doc) { mrAllPatients.push(Object.assign({ id: doc.id }, doc.data())); });
-                if (callback) callback(mrAllPatients);
-            }, function () { if (callback) callback([]); });
+                if (readyCallback) {
+                    readyCallback(mrAllPatients);
+                    readyCallback = null;
+                }
+            }, function () {
+                if (readyCallback) {
+                    readyCallback([]);
+                    readyCallback = null;
+                }
+            });
         },
 
         /* ══════════════════════════════════════════
@@ -339,15 +591,54 @@
                     <div class="mr-form-card">
                         <form id="mr-add-form" autocomplete="off">
                             <h3><i class="fas fa-user"></i> Patient Information</h3>
-                            <div class="mr-form-grid">
-                                <div class="mr-field">
-                                    <label>Patient *</label>
-                                    <select id="mr-patient" class="mr-select" required>
-                                        <option value="">— Select Patient —</option>
-                                    </select>
+                            <div class="mr-patient-picker">
+                                <div class="mr-patient-mode" role="tablist" aria-label="Patient entry mode">
+                                    <button type="button" class="mr-patient-mode-btn active" id="mr-patient-mode-registered" data-mode="registered" role="tab" aria-selected="true">
+                                        <i class="fas fa-search"></i> Search registered patient
+                                    </button>
+                                    <button type="button" class="mr-patient-mode-btn mr-patient-mode-btn--manual" id="mr-patient-mode-manual" data-mode="manual" role="tab" aria-selected="false">
+                                        <i class="fas fa-user-edit"></i> Enter name manually
+                                    </button>
                                 </div>
-                                <div class="mr-field">
-                                    <label>Condition / Diagnosis *</label>
+                                <div id="mr-patient-registered-panel" class="mr-patient-panel">
+                                    <div class="mr-patient-search-wrap">
+                                        <div class="mr-patient-search-bar">
+                                            <i class="fas fa-search"></i>
+                                            <input type="text" id="mr-patient-search" class="mr-input" placeholder="Search by name, phone, or patient ID..." autocomplete="off">
+                                        </div>
+                                        <div class="mr-patient-dropdown" id="mr-patient-dropdown"></div>
+                                    </div>
+                                    <div class="mr-patient-selected" id="mr-patient-selected" style="display:none;">
+                                        <div class="mr-patient-selected-info">
+                                            <div class="mr-patient-selected-avatar" id="mr-patient-selected-avatar">?</div>
+                                            <div>
+                                                <strong id="mr-patient-selected-name">—</strong>
+                                                <small id="mr-patient-selected-meta">—</small>
+                                            </div>
+                                        </div>
+                                        <button type="button" class="mr-btn mr-btn--sm mr-btn--outline" id="mr-patient-clear">
+                                            <i class="fas fa-times"></i> Clear
+                                        </button>
+                                    </div>
+                                    <p class="mr-patient-hint"><i class="fas fa-info-circle"></i> Pick a patient already registered under <strong>Patients</strong>.</p>
+                                </div>
+                                <div id="mr-patient-manual-panel" class="mr-patient-panel" style="display:none;">
+                                    <div class="mr-form-grid">
+                                        <div class="mr-field">
+                                            <label for="mr-patient-manual-name">Patient name *</label>
+                                            <input type="text" id="mr-patient-manual-name" class="mr-input" placeholder="e.g. Jane Wanjiku">
+                                        </div>
+                                        <div class="mr-field">
+                                            <label for="mr-patient-manual-phone">Phone (optional)</label>
+                                            <input type="tel" id="mr-patient-manual-phone" class="mr-input" placeholder="e.g. 0712345678">
+                                        </div>
+                                    </div>
+                                    <p class="mr-patient-hint"><i class="fas fa-info-circle"></i> Use when the patient is not in the system. Name is stored on this refill only.</p>
+                                </div>
+                            </div>
+                            <div class="mr-form-grid" style="margin-top:14px;">
+                                <div class="mr-field mr-field--full">
+                                    <label for="mr-condition">Condition / Diagnosis *</label>
                                     <input type="text" id="mr-condition" class="mr-input" placeholder="e.g. Diabetes Type 2, Hypertension" required>
                                 </div>
                             </div>
@@ -417,17 +708,11 @@
                 e.preventDefault(); PharmaFlow.Sidebar.setActive('dashboard', null);
             });
 
-            // Load patients for dropdown
             var self = this;
-            this._loadPatients(businessId, function (patients) {
-                var sel = document.getElementById('mr-patient');
-                if (!sel) return;
-                sel.innerHTML = '<option value="">— Select Patient —</option>' +
-                    patients.map(function (p) {
-                        return '<option value="' + (p.patientId || p.id) + '" data-name="' + self.escapeHtml(p.fullName || (p.firstName + ' ' + p.lastName)) + '">' +
-                            self.escapeHtml(p.fullName || (p.firstName + ' ' + p.lastName)) + ' (' + (p.patientId || p.id) + ')' +
-                        '</option>';
-                    }).join('');
+            mrAddPatientMode = 'registered';
+            mrAddSelectedPatient = null;
+            this._loadPatients(businessId, function () {
+                self._bindAddPatientPicker();
             });
 
             // Auto-calculate next refill
@@ -460,9 +745,15 @@
         _saveRefill: async function (businessId) {
             if (!businessId) return;
 
-            var patientSel = document.getElementById('mr-patient');
-            var patientId = patientSel ? patientSel.value : '';
-            var patientName = patientSel && patientSel.selectedOptions[0] ? patientSel.selectedOptions[0].dataset.name || '' : '';
+            var patientInfo = this._resolveAddPatientForSave();
+            if (patientInfo.error) {
+                this.showToast(patientInfo.error, 'error');
+                return;
+            }
+            var patientId = patientInfo.patientId;
+            var patientName = patientInfo.patientName;
+            var patientPhone = patientInfo.patientPhone || '';
+            var patientSource = patientInfo.patientSource || 'registered';
             var condition = (document.getElementById('mr-condition')?.value || '').trim();
             var medication = (document.getElementById('mr-medication')?.value || '').trim();
             var dosage = (document.getElementById('mr-dosage')?.value || '').trim();
@@ -474,7 +765,7 @@
             var doctor = (document.getElementById('mr-doctor')?.value || '').trim();
             var notes = (document.getElementById('mr-notes')?.value || '').trim();
 
-            if (!patientId || !condition || !medication || !dosage || !lastRefillDate) {
+            if (!patientName || !condition || !medication || !dosage || !lastRefillDate) {
                 this.showToast('Please fill all required fields', 'error');
                 return;
             }
@@ -491,6 +782,8 @@
                 refillId: refillId,
                 patientId: patientId,
                 patientName: patientName,
+                patientPhone: patientPhone,
+                patientSource: patientSource,
                 condition: condition,
                 medication: medication,
                 dosage: dosage,
@@ -525,8 +818,15 @@
 
                 this.showToast('Refill schedule saved for ' + patientName + '!');
                 document.getElementById('mr-add-form')?.reset();
-                document.getElementById('mr-next-refill').value = '';
-                document.getElementById('mr-last-refill').value = this.toISODate(new Date());
+                this._clearAddPatientSelection();
+                this._setAddPatientMode('registered');
+                var lastEl = document.getElementById('mr-last-refill');
+                var nextEl = document.getElementById('mr-next-refill');
+                var freqEl = document.getElementById('mr-frequency');
+                if (lastEl) lastEl.value = this.toISODate(new Date());
+                if (nextEl && lastEl && freqEl) {
+                    nextEl.value = this.calcNextRefill(lastEl.value, freqEl.value);
+                }
             } catch (err) {
                 console.error('Save refill error:', err);
                 this.showToast('Failed to save: ' + err.message, 'error');
