@@ -2454,6 +2454,208 @@ input, select, textarea {
     background: rgba(5, 150, 105, 0.15);
 }
 
+.inv-recon-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 16px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-size: 0.86rem;
+}
+.inv-recon-status strong {
+    margin-left: auto;
+    color: var(--text-tertiary);
+    font-size: 0.78rem;
+    font-weight: 700;
+}
+.inv-live-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 999px;
+    background: #16a34a;
+    box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.14);
+}
+.inv-recon-stats,
+.inv-recon-toolbar {
+    margin-bottom: 16px;
+}
+.inv-recon-stats {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 18px;
+}
+.inv-recon-stats .stat-card {
+    min-width: 0;
+    justify-content: flex-start;
+}
+.inv-recon-stats .stat-card__body {
+    flex: 1;
+}
+.inv-recon-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 330px;
+    gap: 16px;
+    align-items: start;
+}
+.inv-recon-card { min-width: 0; }
+.inv-recon-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border-color);
+}
+.inv-recon-card-head h3 {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-primary);
+    font-size: 0.98rem;
+}
+.inv-recon-card-head h3 i { color: var(--primary); }
+.inv-recon-card-head span {
+    color: var(--text-tertiary);
+    font-size: 0.78rem;
+    font-weight: 700;
+}
+.inv-recon-table td { vertical-align: middle; }
+.inv-recon-source {
+    display: block;
+    margin-top: 2px;
+    color: var(--text-tertiary);
+    font-size: 0.72rem;
+    text-transform: capitalize;
+}
+.inv-recon-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 8px;
+    border-radius: 999px;
+    font-size: 0.74rem;
+    font-weight: 800;
+    white-space: nowrap;
+}
+.inv-recon-badge--ok {
+    background: #dcfce7;
+    color: #166534;
+}
+.inv-recon-badge--warn {
+    background: #fef3c7;
+    color: #92400e;
+}
+.inv-recon-batch-ok {
+    color: #15803d;
+    font-weight: 800;
+}
+.inv-recon-batch-warn {
+    color: #b45309;
+    font-weight: 900;
+}
+.inv-recon-activity {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+}
+.inv-recon-movements {
+    display: flex;
+    flex-direction: column;
+    max-height: 620px;
+    overflow-y: auto;
+}
+.inv-recon-move {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 10px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border-light);
+}
+.inv-recon-move:last-child { border-bottom: 0; }
+.inv-recon-move-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    display: grid;
+    place-items: center;
+    font-size: 0.78rem;
+}
+.inv-recon-move--in .inv-recon-move-icon {
+    background: #dcfce7;
+    color: #15803d;
+}
+.inv-recon-move--out .inv-recon-move-icon {
+    background: #fee2e2;
+    color: #dc2626;
+}
+.inv-recon-move strong,
+.inv-recon-move span,
+.inv-recon-move small {
+    display: block;
+    min-width: 0;
+}
+.inv-recon-move strong {
+    color: var(--text-primary);
+    font-size: 0.86rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.inv-recon-move span {
+    margin-top: 2px;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+}
+.inv-recon-move small {
+    margin-top: 3px;
+    color: var(--text-tertiary);
+    font-size: 0.72rem;
+}
+
+@media (max-width: 1100px) {
+    .inv-recon-grid { grid-template-columns: 1fr; }
+    .inv-recon-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 640px) {
+    .inv-recon-stats { grid-template-columns: 1fr; }
+    .inv-recon-status {
+        align-items: flex-start;
+        flex-wrap: wrap;
+    }
+    .inv-recon-status strong {
+        margin-left: 19px;
+        width: 100%;
+    }
+    .inv-recon-card-head {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+}
+
+[data-theme="dark"] .inv-recon-badge--ok {
+    background: rgba(22, 163, 74, 0.16);
+    color: #86efac;
+}
+[data-theme="dark"] .inv-recon-badge--warn {
+    background: rgba(245, 158, 11, 0.16);
+    color: #fcd34d;
+}
+[data-theme="dark"] .inv-recon-move--in .inv-recon-move-icon {
+    background: rgba(22, 163, 74, 0.16);
+    color: #86efac;
+}
+[data-theme="dark"] .inv-recon-move--out .inv-recon-move-icon {
+    background: rgba(220, 38, 38, 0.16);
+    color: #fca5a5;
+}
+
 /* Stock modal info */
 .inv-stock-info {
     display: flex;

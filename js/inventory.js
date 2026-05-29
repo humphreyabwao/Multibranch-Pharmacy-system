@@ -14,7 +14,11 @@
 
     // Active Firestore listener unsubscribers
     let unsubInventory = null;
+    let unsubReconciliationSales = null;
+    let unsubReconciliationStock = null;
     let allProducts = [];
+    let reconciliationSales = [];
+    let reconciliationStockHistory = [];
 
     // Pagination state
     let currentPage = 1;
@@ -40,6 +44,14 @@
             if (!ts) return '—';
             const d = ts.toDate ? ts.toDate() : new Date(ts);
             return d.toLocaleDateString('en-KE', { year: 'numeric', month: 'short', day: 'numeric' });
+        },
+
+        formatDateTime: function (val) {
+            if (!val) return '—';
+            const d = val.toDate ? val.toDate() : (val.seconds ? new Date(val.seconds * 1000) : new Date(val));
+            if (isNaN(d.getTime())) return '—';
+            return d.toLocaleDateString('en-KE', { month: 'short', day: 'numeric' }) + ' ' +
+                d.toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
         },
 
         getStockBatches: function (product) {
@@ -554,6 +566,355 @@
                     }
                 }
             );
+        },
+
+        renderReconciliation: function (container) {
+            this.cleanup();
+            const businessId = this.getBusinessId();
+
+            container.innerHTML = `
+                <div class="inv-module inv-recon-module">
+                    <div class="page-header">
+                        <div>
+                            <h2>Inventory Reconciliation</h2>
+                            <div class="breadcrumb">
+                                <a href="#" data-nav="dashboard">Home</a><span>/</span>
+                                <span>Inventory</span><span>/</span>
+                                <span>Reconciliation</span>
+                            </div>
+                        </div>
+                        <div class="page-header-right">
+                            <button class="btn btn-sm btn-outline" id="inv-recon-refresh">
+                                <i class="fas fa-rotate"></i> Refresh
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="inv-recon-status">
+                        <span class="inv-live-dot"></span>
+                        <span>Live reconciliation of inventory stock, sold items, and stock additions</span>
+                        <strong id="inv-recon-updated">Waiting for data...</strong>
+                    </div>
+
+                    <div class="stats-row inv-recon-stats">
+                        <div class="stat-card stat-card--green">
+                            <div class="stat-card__icon"><i class="fas fa-circle-check"></i></div>
+                            <div class="stat-card__body">
+                                <span class="stat-card__label">Matched Items</span>
+                                <span class="stat-card__value" id="recon-stat-matched">0</span>
+                            </div>
+                        </div>
+                        <div class="stat-card stat-card--red">
+                            <div class="stat-card__icon"><i class="fas fa-triangle-exclamation"></i></div>
+                            <div class="stat-card__body">
+                                <span class="stat-card__label">Needs Review</span>
+                                <span class="stat-card__value" id="recon-stat-mismatch">0</span>
+                            </div>
+                        </div>
+                        <div class="stat-card stat-card--blue">
+                            <div class="stat-card__icon"><i class="fas fa-cart-shopping"></i></div>
+                            <div class="stat-card__body">
+                                <span class="stat-card__label">Sold Units</span>
+                                <span class="stat-card__value" id="recon-stat-sold">0</span>
+                            </div>
+                        </div>
+                        <div class="stat-card stat-card--purple">
+                            <div class="stat-card__icon"><i class="fas fa-boxes-stacked"></i></div>
+                            <div class="stat-card__body">
+                                <span class="stat-card__label">Current Units</span>
+                                <span class="stat-card__value" id="recon-stat-current">0</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="inv-toolbar inv-recon-toolbar">
+                        <div class="inv-search">
+                            <i class="fas fa-search"></i>
+                            <input type="text" id="inv-recon-search" placeholder="Search item, SKU, category, or sale...">
+                        </div>
+                        <div class="inv-filters">
+                            <select id="inv-recon-filter">
+                                <option value="">All reconciliation rows</option>
+                                <option value="mismatch">Needs review only</option>
+                                <option value="matched">Matched only</option>
+                                <option value="sold">Sold items only</option>
+                                <option value="added">Items with additions</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="inv-recon-grid">
+                        <div class="inv-table-card inv-recon-card">
+                            <div class="inv-recon-card-head">
+                                <h3><i class="fas fa-scale-balanced"></i> Stock vs Sales Match</h3>
+                                <span id="inv-recon-count">0 items</span>
+                            </div>
+                            <div class="inv-table-wrap">
+                                <table class="inv-table inv-recon-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Item</th>
+                                            <th>Added</th>
+                                            <th>Sold</th>
+                                            <th>Expected Left</th>
+                                            <th>Current Stock</th>
+                                            <th>Batch Check</th>
+                                            <th>Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="inv-recon-body">
+                                        <tr><td colspan="7" class="inv-loading-cell"><i class="fas fa-spinner fa-spin"></i> Loading reconciliation...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div class="inv-recon-activity">
+                            <div class="inv-recon-card-head">
+                                <h3><i class="fas fa-clock-rotate-left"></i> Live Movements</h3>
+                                <span>Latest stock in and sales</span>
+                            </div>
+                            <div id="inv-recon-movements" class="inv-recon-movements">
+                                <div class="inv-empty-cell">Waiting for movements...</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            const dashLink = container.querySelector('[data-nav="dashboard"]');
+            if (dashLink) {
+                dashLink.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    PharmaFlow.Sidebar.setActive('dashboard', null);
+                });
+            }
+
+            document.getElementById('inv-recon-search')?.addEventListener('input', () => this.renderReconciliationData());
+            document.getElementById('inv-recon-filter')?.addEventListener('change', () => this.renderReconciliationData());
+            document.getElementById('inv-recon-refresh')?.addEventListener('click', () => this.renderReconciliationData());
+
+            if (businessId) this.subscribeToReconciliation(businessId);
+        },
+
+        subscribeToReconciliation: function (businessId) {
+            if (unsubInventory) { unsubInventory(); unsubInventory = null; }
+            if (unsubReconciliationSales) { unsubReconciliationSales(); unsubReconciliationSales = null; }
+            if (unsubReconciliationStock) { unsubReconciliationStock(); unsubReconciliationStock = null; }
+
+            const invRef = getBusinessCollection(businessId, 'inventory');
+            const salesRef = getBusinessCollection(businessId, 'sales');
+            const stockRef = getBusinessCollection(businessId, 'stock_history');
+            if (!invRef || !salesRef || !stockRef) return;
+
+            const render = () => this.renderReconciliationData();
+
+            unsubInventory = invRef.onSnapshot(snap => {
+                allProducts = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                render();
+            }, err => this.showReconciliationError(err));
+
+            unsubReconciliationSales = salesRef.onSnapshot(snap => {
+                reconciliationSales = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                render();
+            }, err => this.showReconciliationError(err));
+
+            unsubReconciliationStock = stockRef.onSnapshot(snap => {
+                reconciliationStockHistory = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                render();
+            }, err => this.showReconciliationError(err));
+        },
+
+        showReconciliationError: function (err) {
+            console.error('Inventory reconciliation listener error:', err);
+            const body = document.getElementById('inv-recon-body');
+            if (body) {
+                body.innerHTML = '<tr><td colspan="7" class="inv-loading-cell" style="color:var(--danger)"><i class="fas fa-exclamation-triangle"></i> Failed to load reconciliation data</td></tr>';
+            }
+        },
+
+        buildReconciliationRows: function () {
+            const rowsById = new Map();
+
+            allProducts.forEach(product => {
+                const currentQty = Math.max(0, parseInt(product.quantity, 10) || 0);
+                const batchQty = this.getStockBatches(product).reduce((sum, batch) => sum + (parseInt(batch.quantity, 10) || 0), 0);
+                rowsById.set(product.id, {
+                    productId: product.id,
+                    name: product.name || 'Unnamed item',
+                    sku: product.sku || '',
+                    category: product.category || '',
+                    currentQty: currentQty,
+                    batchQty: batchQty,
+                    soldQty: 0,
+                    addedQty: 0,
+                    hasStockHistory: false,
+                    saleRefs: new Set(),
+                    lastMovementAt: product.updatedAt || product.createdAt || ''
+                });
+            });
+
+            reconciliationStockHistory.forEach(entry => {
+                const productId = entry.productId;
+                if (!productId) return;
+                if (!rowsById.has(productId)) {
+                    rowsById.set(productId, {
+                        productId: productId,
+                        name: entry.productName || 'Deleted / missing inventory item',
+                        sku: entry.sku || '',
+                        category: entry.category || '',
+                        currentQty: 0,
+                        batchQty: 0,
+                        soldQty: 0,
+                        addedQty: 0,
+                        hasStockHistory: false,
+                        saleRefs: new Set(),
+                        lastMovementAt: ''
+                    });
+                }
+                const row = rowsById.get(productId);
+                row.addedQty += parseInt(entry.addedQty, 10) || 0;
+                row.hasStockHistory = true;
+                if (entry.createdAt && String(entry.createdAt) > String(row.lastMovementAt || '')) row.lastMovementAt = entry.createdAt;
+            });
+
+            reconciliationSales.forEach(sale => {
+                const status = sale.status || 'completed';
+                if (status === 'cancelled') return;
+                (sale.items || []).forEach(item => {
+                    const productId = item.productId;
+                    if (!productId) return;
+                    if (!rowsById.has(productId)) {
+                        rowsById.set(productId, {
+                            productId: productId,
+                            name: item.name || 'Sold item missing from inventory',
+                            sku: item.sku || '',
+                            category: item.category || '',
+                            currentQty: 0,
+                            batchQty: 0,
+                            soldQty: 0,
+                            addedQty: 0,
+                            hasStockHistory: false,
+                            saleRefs: new Set(),
+                            lastMovementAt: ''
+                        });
+                    }
+                    const row = rowsById.get(productId);
+                    row.soldQty += parseInt(item.quantity, 10) || 0;
+                    row.saleRefs.add(sale.saleId || sale.id);
+                    if (sale.saleDate && String(sale.saleDate) > String(row.lastMovementAt || '')) row.lastMovementAt = sale.saleDate;
+                });
+            });
+
+            rowsById.forEach(row => {
+                row.addedSource = row.hasStockHistory ? 'recorded' : 'inferred';
+                if (!row.hasStockHistory) row.addedQty = row.currentQty + row.soldQty;
+                row.expectedQty = row.addedQty - row.soldQty;
+                row.diffQty = row.currentQty - row.expectedQty;
+                row.batchDiff = row.batchQty - row.currentQty;
+                row.matched = row.diffQty === 0 && row.batchDiff === 0;
+            });
+
+            return Array.from(rowsById.values()).sort((a, b) => {
+                if (a.matched !== b.matched) return a.matched ? 1 : -1;
+                return (a.name || '').localeCompare(b.name || '');
+            });
+        },
+
+        renderReconciliationData: function () {
+            const body = document.getElementById('inv-recon-body');
+            if (!body) return;
+
+            const query = (document.getElementById('inv-recon-search')?.value || '').toLowerCase().trim();
+            const filter = document.getElementById('inv-recon-filter')?.value || '';
+            let rows = this.buildReconciliationRows();
+            const allRows = rows.slice();
+
+            if (query) {
+                rows = rows.filter(row => {
+                    const haystack = [row.name, row.sku, row.category, Array.from(row.saleRefs || []).join(' ')].join(' ').toLowerCase();
+                    return haystack.indexOf(query) !== -1;
+                });
+            }
+            if (filter === 'mismatch') rows = rows.filter(row => !row.matched);
+            if (filter === 'matched') rows = rows.filter(row => row.matched);
+            if (filter === 'sold') rows = rows.filter(row => row.soldQty > 0);
+            if (filter === 'added') rows = rows.filter(row => row.addedQty > 0);
+
+            const matched = allRows.filter(row => row.matched).length;
+            const mismatched = allRows.length - matched;
+            this.setStat('recon-stat-matched', matched);
+            this.setStat('recon-stat-mismatch', mismatched);
+            this.setStat('recon-stat-sold', allRows.reduce((sum, row) => sum + row.soldQty, 0));
+            this.setStat('recon-stat-current', allRows.reduce((sum, row) => sum + row.currentQty, 0));
+
+            const count = document.getElementById('inv-recon-count');
+            if (count) count.textContent = rows.length + ' item' + (rows.length !== 1 ? 's' : '');
+            const updated = document.getElementById('inv-recon-updated');
+            if (updated) updated.textContent = 'Updated ' + this.formatDateTime(new Date().toISOString());
+
+            if (!rows.length) {
+                body.innerHTML = '<tr><td colspan="7" class="inv-empty-cell"><i class="fas fa-inbox"></i> No reconciliation rows found</td></tr>';
+            } else {
+                body.innerHTML = rows.map(row => {
+                    const status = row.matched
+                        ? '<span class="inv-recon-badge inv-recon-badge--ok"><i class="fas fa-check"></i> Matched</span>'
+                        : '<span class="inv-recon-badge inv-recon-badge--warn"><i class="fas fa-triangle-exclamation"></i> Review ' + (row.diffQty > 0 ? '+' : '') + row.diffQty + '</span>';
+                    const batchStatus = row.batchDiff === 0
+                        ? '<span class="inv-recon-batch-ok">OK</span>'
+                        : '<span class="inv-recon-batch-warn">' + (row.batchDiff > 0 ? '+' : '') + row.batchDiff + '</span>';
+                    return '<tr>' +
+                        '<td><div class="inv-product-name"><strong>' + this.escapeHtml(row.name) + '</strong><small>' + this.escapeHtml(row.sku || row.category || 'No SKU') + '</small></div></td>' +
+                        '<td><strong>' + row.addedQty + '</strong><small class="inv-recon-source">' + row.addedSource + '</small></td>' +
+                        '<td>' + row.soldQty + '</td>' +
+                        '<td>' + row.expectedQty + '</td>' +
+                        '<td><strong>' + row.currentQty + '</strong></td>' +
+                        '<td>' + batchStatus + '</td>' +
+                        '<td>' + status + '</td>' +
+                    '</tr>';
+                }).join('');
+            }
+
+            this.renderReconciliationMovements();
+        },
+
+        renderReconciliationMovements: function () {
+            const container = document.getElementById('inv-recon-movements');
+            if (!container) return;
+
+            const stockMoves = reconciliationStockHistory.map(entry => ({
+                type: 'in',
+                date: entry.createdAt || '',
+                title: entry.productName || 'Stock added',
+                meta: '+' + (entry.addedQty || 0) + ' units' + (entry.orderId ? ' from ' + entry.orderId : ''),
+                icon: 'fa-arrow-down'
+            }));
+            const saleMoves = [];
+            reconciliationSales.forEach(sale => {
+                if ((sale.status || 'completed') === 'cancelled') return;
+                (sale.items || []).forEach(item => {
+                    saleMoves.push({
+                        type: 'out',
+                        date: sale.saleDate || sale.createdAt || '',
+                        title: item.name || 'Sold item',
+                        meta: '-' + (item.quantity || 0) + ' units on ' + (sale.saleId || sale.id || 'sale'),
+                        icon: 'fa-arrow-up'
+                    });
+                });
+            });
+
+            const moves = stockMoves.concat(saleMoves).sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).slice(0, 12);
+            if (!moves.length) {
+                container.innerHTML = '<div class="inv-empty-cell">No stock or sale movements yet.</div>';
+                return;
+            }
+
+            container.innerHTML = moves.map(move => {
+                return '<div class="inv-recon-move inv-recon-move--' + move.type + '">' +
+                    '<div class="inv-recon-move-icon"><i class="fas ' + move.icon + '"></i></div>' +
+                    '<div><strong>' + this.escapeHtml(move.title) + '</strong><span>' + this.escapeHtml(move.meta) + '</span><small>' + this.formatDateTime(move.date) + '</small></div>' +
+                '</div>';
+            }).join('');
         },
 
         /**
@@ -1473,10 +1834,38 @@
                 const batch = window.db.batch();
                 chunk.forEach(p => {
                     const ref = colRef.doc();
-                    batch.set(ref, p);
+                    p._importProductId = ref.id;
+                    const productData = Object.assign({}, p);
+                    delete productData._importProductId;
+                    batch.set(ref, productData);
                 });
                 try {
                     await batch.commit();
+                    try {
+                        const stockBatch = window.db.batch();
+                        chunk.forEach(p => {
+                            const historyRef = getBusinessCollection(businessId, 'stock_history').doc();
+                            stockBatch.set(historyRef, {
+                                productId: p._importProductId,
+                                productName: p.name || '',
+                                sku: p.sku || '',
+                                category: p.category || '',
+                                type: 'bulk_import',
+                                previousQty: 0,
+                                addedQty: p.quantity || 0,
+                                newQty: p.quantity || 0,
+                                unitCost: p.buyingPrice || 0,
+                                batchNumber: p.batchNumber || '',
+                                expiryDate: p.expiryDate || null,
+                                addedBy: PharmaFlow.Auth?.userProfile?.displayName || PharmaFlow.Auth?.userProfile?.email || 'Unknown',
+                                createdAt: new Date().toISOString()
+                            });
+                            delete p._importProductId;
+                        });
+                        await stockBatch.commit();
+                    } catch (historyErr) {
+                        console.warn('Inventory import succeeded but stock history logging failed:', historyErr);
+                    }
                     imported += chunk.length;
                 } catch (err) {
                     console.error('Batch import error at chunk ' + Math.floor(i / BATCH_SIZE) + ':', err);
@@ -1903,7 +2292,22 @@
 
             try {
                 const colRef = getBusinessCollection(businessId, 'inventory');
-                await colRef.add(product);
+                const docRef = await colRef.add(product);
+                await getBusinessCollection(businessId, 'stock_history').add({
+                    productId: docRef.id,
+                    productName: name,
+                    sku: sku,
+                    category: category,
+                    type: 'initial',
+                    previousQty: 0,
+                    addedQty: quantity,
+                    newQty: quantity,
+                    unitCost: buyingPrice,
+                    batchNumber: batch || sku,
+                    expiryDate: expiryStr,
+                    addedBy: PharmaFlow.Auth?.userProfile?.displayName || PharmaFlow.Auth?.userProfile?.email || 'Unknown',
+                    createdAt: new Date().toISOString()
+                });
 
                 // Log activity
                 if (PharmaFlow.ActivityLog) {
@@ -2033,12 +2437,16 @@
 
                     const docRef = getBusinessCollection(businessId, 'inventory').doc(productId);
                     const self = this;
+                    let previousQtyForHistory = 0;
+                    let newQtyForHistory = 0;
+                    let batchNumberForHistory = newBatchNumber;
 
                     await window.db.runTransaction(async (transaction) => {
                         const snapshot = await transaction.get(docRef);
                         if (!snapshot.exists) throw new Error('Product not found');
 
                         const data = snapshot.data() || {};
+                        previousQtyForHistory = parseInt(data.quantity) || 0;
                         const currentBatches = Array.isArray(data.stockBatches) && data.stockBatches.length
                             ? data.stockBatches.slice()
                             : self.getStockBatches(data);
@@ -2053,14 +2461,31 @@
                         };
 
                         currentBatches.push(batchRecord);
+                        newQtyForHistory = previousQtyForHistory + addQty;
+                        batchNumberForHistory = batchRecord.batchNumber;
 
                         transaction.update(docRef, {
-                            quantity: (parseInt(data.quantity) || 0) + addQty,
+                            quantity: newQtyForHistory,
                             batchNumber: data.batchNumber || batchRecord.batchNumber,
                             expiryDate: self.getPrimaryExpiryFromBatches(currentBatches) || expiryTimestamp,
                             stockBatches: currentBatches,
                             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
                         });
+                    });
+                    await getBusinessCollection(businessId, 'stock_history').add({
+                        productId: productId,
+                        productName: product.name || '',
+                        sku: product.sku || '',
+                        category: product.category || '',
+                        type: 'restock',
+                        previousQty: previousQtyForHistory,
+                        addedQty: addQty,
+                        newQty: newQtyForHistory,
+                        unitCost: product.buyingPrice || 0,
+                        batchNumber: batchNumberForHistory,
+                        expiryDate: expiryValue,
+                        addedBy: PharmaFlow.Auth?.userProfile?.displayName || PharmaFlow.Auth?.userProfile?.email || 'Unknown',
+                        createdAt: new Date().toISOString()
                     });
 
                     // Log activity
@@ -2408,6 +2833,16 @@
                 unsubInventory();
                 unsubInventory = null;
             }
+            if (unsubReconciliationSales) {
+                unsubReconciliationSales();
+                unsubReconciliationSales = null;
+            }
+            if (unsubReconciliationStock) {
+                unsubReconciliationStock();
+                unsubReconciliationStock = null;
+            }
+            reconciliationSales = [];
+            reconciliationStockHistory = [];
         }
     };
 

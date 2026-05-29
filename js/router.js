@@ -166,6 +166,8 @@
                 const subId = subModule ? subModule.id : 'view-inventory';
                 if (subId === 'add-inventory') {
                     PharmaFlow.Inventory.renderAdd(contentBody);
+                } else if (subId === 'inventory-reconciliation') {
+                    PharmaFlow.Inventory.renderReconciliation(contentBody);
                 } else {
                     PharmaFlow.Inventory.renderView(contentBody);
                 }

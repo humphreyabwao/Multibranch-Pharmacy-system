@@ -49,7 +49,8 @@
             section: 'Stock Management',
             children: [
                 { id: 'view-inventory', label: 'View Inventory', icon: 'fas fa-warehouse' },
-                { id: 'add-inventory', label: 'Add Inventory', icon: 'fas fa-plus-circle' }
+                { id: 'add-inventory', label: 'Add Inventory', icon: 'fas fa-plus-circle' },
+                { id: 'inventory-reconciliation', label: 'Reconciliation', icon: 'fas fa-scale-balanced' }
             ]
         },
         {

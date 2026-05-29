@@ -1575,6 +1575,11 @@
                         const nextQty = currentQty - itemQty;
                         const nextBatches = this.reduceStockBatches(product, itemQty);
                         const primaryBatch = this.getPrimaryBatchAfterSale(nextBatches);
+                        const saleLine = saleData.items.find(line => line.productId === item.id);
+                        if (saleLine) {
+                            saleLine.stockBefore = currentQty;
+                            saleLine.stockAfter = nextQty;
+                        }
 
                         stockUpdates.push({
                             ref: ref,
