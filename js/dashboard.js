@@ -2,7 +2,7 @@
  * PharmaFlow - Dashboard Module
  * Renders the main dashboard with:
  *   1. Stats cards (real-time Firestore onSnapshot listeners)
- *   2. Quick access buttons (6)
+ *   2. Quick access buttons
  *   3. Today's activities feed (real-time Firestore onSnapshot listeners)
  *   4. Global search with live Firestore results
  *   5. Refresh button to re-establish all listeners
@@ -47,6 +47,9 @@
                                 <i class="fas fa-search"></i>
                                 <input type="text" id="dashboard-search-input" placeholder="Search anything... (Ctrl+K)" autocomplete="off" readonly>
                             </div>
+                            <button class="btn btn-sm btn-primary dashboard-ticket-btn" id="dashboard-raise-ticket-btn">
+                                <i class="fas fa-ticket"></i> Raise Ticket
+                            </button>
                             <button class="btn btn-sm btn-outline" id="dashboard-refresh-btn">
                                 <i class="fas fa-arrows-rotate"></i> Refresh All
                             </button>
@@ -160,6 +163,10 @@
                             <i class="fas fa-clipboard-list"></i>
                             <span>Generate Report</span>
                         </button>
+                        <button class="quick-access-btn quick-access-btn--indigo" data-navigate="support-tickets" data-sub="raise-ticket">
+                            <i class="fas fa-ticket"></i>
+                            <span>Raise Ticket</span>
+                        </button>
                     </div>
 
                     <!-- Today's Activities -->
@@ -195,6 +202,16 @@
 
             // Bind quick access buttons
             this.bindQuickAccess(container);
+
+            // Bind header support ticket button
+            const raiseTicketBtn = document.getElementById('dashboard-raise-ticket-btn');
+            if (raiseTicketBtn) {
+                raiseTicketBtn.addEventListener('click', () => {
+                    if (PharmaFlow.Sidebar) {
+                        PharmaFlow.Sidebar.setActive('support-tickets', 'raise-ticket');
+                    }
+                });
+            }
 
             // Bind view all activities
             const viewAllBtn = document.getElementById('view-all-activities');

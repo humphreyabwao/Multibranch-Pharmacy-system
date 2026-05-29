@@ -172,6 +172,17 @@
             ]
         },
         {
+            id: 'support-tickets',
+            label: 'Support Tickets',
+            icon: 'fas fa-ticket',
+            roles: [],
+            section: 'Support',
+            children: [
+                { id: 'raise-ticket', label: 'Raise Ticket', icon: 'fas fa-plus-circle' },
+                { id: 'my-tickets', label: 'My Tickets', icon: 'fas fa-list-check' }
+            ]
+        },
+        {
             id: 'admin-panel',
             label: 'Admin Panel',
             icon: 'fas fa-shield-halved',
@@ -182,6 +193,7 @@
                 { id: 'manage-franchises', label: 'Manage Franchises', icon: 'fas fa-building', roles: ['superadmin'] },
                 { id: 'admin-analytics', label: 'Analytics', icon: 'fas fa-chart-pie', roles: ['superadmin'] },
                 { id: 'franchise-alerts', label: 'Franchise Alerts', icon: 'fas fa-bell-concierge', roles: ['superadmin'] },
+                { id: 'admin-tickets', label: 'Tickets', icon: 'fas fa-ticket', roles: ['superadmin'] },
                 { id: 'pricing-page', label: 'Pricing Page', icon: 'fas fa-tags', roles: ['superadmin'] }
             ]
         }

@@ -350,6 +350,16 @@
                 if (subId === 'system-alerts') { PharmaFlow.ActivityLog.renderAlerts(contentBody); return; }
             }
 
+            // Support Tickets module
+            if (moduleConfig.id === 'support-tickets' && PharmaFlow.SupportTickets) {
+                const subId = subModule ? subModule.id : 'raise-ticket';
+                PharmaFlow.SupportTickets.cleanup();
+
+                if (subId === 'my-tickets') { PharmaFlow.SupportTickets.renderMyTickets(contentBody); return; }
+                PharmaFlow.SupportTickets.renderRaise(contentBody);
+                return;
+            }
+
             // Medication Refill module
             if (moduleConfig.id === 'medication-refill' && PharmaFlow.MedicationRefill) {
                 const subId = subModule ? subModule.id : 'refill-overview';
@@ -400,6 +410,10 @@
                 }
                 if (subId === 'pricing-page') {
                     PharmaFlow.AdminPanel.renderPricingPage(contentBody);
+                    return;
+                }
+                if (subId === 'admin-tickets') {
+                    PharmaFlow.AdminPanel.renderTickets(contentBody);
                     return;
                 }
             }

@@ -21,11 +21,14 @@
     let bizUsersListener = null;
     let analyticsListener = null;
     let alertsListener = null;
+    let ticketsListener = null;
     let allUsers = [];
     let allBusinesses = [];
+    let allTickets = [];
     let bizNameCache = {};
     let filteredUsers = [];
     let filteredBusinesses = [];
+    let filteredTickets = [];
     let userCurrentPage = 1;
     let bizCurrentPage = 1;
     const PAGE_SIZE = 20;
@@ -110,10 +113,13 @@
             if (bizUsersListener) { bizUsersListener(); bizUsersListener = null; }
             if (analyticsListener) { analyticsListener(); analyticsListener = null; }
             if (alertsListener) { alertsListener(); alertsListener = null; }
+            if (ticketsListener) { ticketsListener(); ticketsListener = null; }
             allUsers = [];
             allBusinesses = [];
+            allTickets = [];
             filteredUsers = [];
             filteredBusinesses = [];
+            filteredTickets = [];
         },
 
         // ═══════════════════════════════════════════════
@@ -1778,6 +1784,268 @@
             if (dashLink) dashLink.addEventListener('click', (e) => { e.preventDefault(); PharmaFlow.Sidebar.setActive('dashboard', null); });
             document.getElementById('anl-refresh-btn')?.addEventListener('click', () => this.loadAnalyticsData());
             this.loadAnalyticsData();
+        },
+
+        // ═══════════════════════════════════════════════
+        //  SUPPORT TICKETS
+        // ═══════════════════════════════════════════════
+
+        renderTickets: function (container) {
+            this.cleanup();
+
+            container.innerHTML = `
+                <div class="dda-module adm-ticket-module">
+                    <div class="page-header">
+                        <div>
+                            <h2><i class="fas fa-ticket"></i> Support Tickets</h2>
+                            <div class="breadcrumb">
+                                <a href="#" data-nav="dashboard">Home</a>
+                                <span>/</span><span>Admin Panel</span>
+                                <span>/</span><span>Tickets</span>
+                            </div>
+                        </div>
+                        <div class="page-header-right">
+                            <button class="btn btn-sm btn-outline" id="adm-ticket-refresh"><i class="fas fa-rotate"></i> Refresh</button>
+                        </div>
+                    </div>
+
+                    <div class="dda-stats adm-ticket-stats">
+                        <div class="dda-stat-card adm-ticket-stat-card">
+                            <div class="dda-stat-icon adm-ticket-stat-icon adm-ticket-stat-icon--total"><i class="fas fa-ticket"></i></div>
+                            <div class="dda-stat-info"><span class="dda-stat-value" id="adm-ticket-total">0</span><span class="dda-stat-label">Total Tickets</span></div>
+                        </div>
+                        <div class="dda-stat-card adm-ticket-stat-card">
+                            <div class="dda-stat-icon adm-ticket-stat-icon adm-ticket-stat-icon--open"><i class="fas fa-folder-open"></i></div>
+                            <div class="dda-stat-info"><span class="dda-stat-value" id="adm-ticket-open">0</span><span class="dda-stat-label">Open</span></div>
+                        </div>
+                        <div class="dda-stat-card adm-ticket-stat-card">
+                            <div class="dda-stat-icon adm-ticket-stat-icon adm-ticket-stat-icon--progress"><i class="fas fa-spinner"></i></div>
+                            <div class="dda-stat-info"><span class="dda-stat-value" id="adm-ticket-progress">0</span><span class="dda-stat-label">In Progress</span></div>
+                        </div>
+                        <div class="dda-stat-card adm-ticket-stat-card">
+                            <div class="dda-stat-icon adm-ticket-stat-icon adm-ticket-stat-icon--done"><i class="fas fa-circle-check"></i></div>
+                            <div class="dda-stat-info"><span class="dda-stat-value" id="adm-ticket-resolved">0</span><span class="dda-stat-label">Resolved / Closed</span></div>
+                        </div>
+                    </div>
+
+                    <div class="adm-ticket-toolbar">
+                        <div class="adm-ticket-search"><i class="fas fa-search"></i><input id="adm-ticket-search" type="text" placeholder="Search ticket, branch, category, subject..."></div>
+                        <select id="adm-ticket-status" class="adm-ticket-select">
+                            <option value="">All statuses</option>
+                            <option value="Open">Open</option>
+                            <option value="In Progress">In Progress</option>
+                            <option value="Resolved">Resolved</option>
+                            <option value="Closed">Closed</option>
+                        </select>
+                        <select id="adm-ticket-priority" class="adm-ticket-select">
+                            <option value="">All priorities</option>
+                            <option value="Urgent">Urgent</option>
+                            <option value="High">High</option>
+                            <option value="Normal">Normal</option>
+                            <option value="Low">Low</option>
+                        </select>
+                    </div>
+
+                    <div class="ord-card adm-ticket-queue">
+                        <div class="ord-card-header"><i class="fas fa-inbox"></i> Branch Ticket Queue</div>
+                        <div class="ord-card-body">
+                            <div class="dda-table-wrap">
+                                <table class="dda-table adm-ticket-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Ticket</th>
+                                            <th>Branch</th>
+                                            <th>Category</th>
+                                            <th>Priority</th>
+                                            <th>Status</th>
+                                            <th>Raised</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="adm-ticket-tbody">
+                                        <tr><td colspan="7" class="dda-loading"><i class="fas fa-spinner fa-spin"></i> Loading tickets...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            const dashLink = container.querySelector('[data-nav="dashboard"]');
+            if (dashLink) dashLink.addEventListener('click', (e) => { e.preventDefault(); PharmaFlow.Sidebar.setActive('dashboard', null); });
+            document.getElementById('adm-ticket-refresh')?.addEventListener('click', () => this.filterTickets());
+            document.getElementById('adm-ticket-search')?.addEventListener('input', () => this.filterTickets());
+            document.getElementById('adm-ticket-status')?.addEventListener('change', () => this.filterTickets());
+            document.getElementById('adm-ticket-priority')?.addEventListener('change', () => this.filterTickets());
+
+            this.subscribeTickets();
+        },
+
+        subscribeTickets: function () {
+            if (ticketsListener) ticketsListener();
+            ticketsListener = window.db.collectionGroup('tickets')
+                .orderBy('updatedAt', 'desc')
+                .onSnapshot(snap => {
+                    allTickets = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                    this.filterTickets();
+                }, err => {
+                    console.error('Tickets subscribe error:', err);
+                    const tbody = document.getElementById('adm-ticket-tbody');
+                    if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="dda-loading"><i class="fas fa-exclamation-triangle"></i> Failed to load tickets</td></tr>';
+                });
+        },
+
+        filterTickets: function () {
+            const q = (document.getElementById('adm-ticket-search')?.value || '').toLowerCase().trim();
+            const status = document.getElementById('adm-ticket-status')?.value || '';
+            const priority = document.getElementById('adm-ticket-priority')?.value || '';
+
+            filteredTickets = allTickets.filter(t => {
+                if (status && t.status !== status) return false;
+                if (priority && t.priority !== priority) return false;
+                if (q) {
+                    const haystack = [t.ticketId, t.businessName, t.title, t.description, t.category, t.priority, t.status, t.raisedBy, t.reference].join(' ').toLowerCase();
+                    if (haystack.indexOf(q) === -1) return false;
+                }
+                return true;
+            });
+
+            this.updateTicketStats();
+            this.renderTicketRows();
+        },
+
+        updateTicketStats: function () {
+            const el = id => document.getElementById(id);
+            if (el('adm-ticket-total')) el('adm-ticket-total').textContent = allTickets.length;
+            if (el('adm-ticket-open')) el('adm-ticket-open').textContent = allTickets.filter(t => (t.status || 'Open') === 'Open').length;
+            if (el('adm-ticket-progress')) el('adm-ticket-progress').textContent = allTickets.filter(t => t.status === 'In Progress').length;
+            if (el('adm-ticket-resolved')) el('adm-ticket-resolved').textContent = allTickets.filter(t => t.status === 'Resolved' || t.status === 'Closed').length;
+        },
+
+        renderTicketRows: function () {
+            const tbody = document.getElementById('adm-ticket-tbody');
+            if (!tbody) return;
+            if (!filteredTickets.length) {
+                tbody.innerHTML = '<tr><td colspan="7" class="dda-loading"><i class="fas fa-inbox"></i> No tickets found</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = filteredTickets.map(t => {
+                return '<tr>' +
+                    '<td><strong>' + this.escapeHtml(t.title || '') + '</strong><br><code>' + this.escapeHtml(t.ticketId || t.id) + '</code>' + (t.reference ? '<br><small>' + this.escapeHtml(t.reference) + '</small>' : '') + '</td>' +
+                    '<td><strong>' + this.escapeHtml(t.businessName || t.businessId || 'Unknown') + '</strong><br><small>' + this.escapeHtml(t.raisedBy || '') + '</small></td>' +
+                    '<td>' + this.escapeHtml(t.category || 'Other') + '</td>' +
+                    '<td>' + this.ticketPriorityBadge(t.priority) + '</td>' +
+                    '<td>' + this.ticketStatusBadge(t.status) + '</td>' +
+                    '<td>' + this.formatAdminDate(t.createdAt) + '</td>' +
+                    '<td><button class="sales-action-btn sales-action--view" data-ticket-id="' + this.escapeHtml(t.id) + '" title="View / Update"><i class="fas fa-eye"></i></button></td>' +
+                '</tr>';
+            }).join('');
+
+            tbody.querySelectorAll('[data-ticket-id]').forEach(btn => {
+                btn.addEventListener('click', () => this.openTicketModal(btn.dataset.ticketId));
+            });
+        },
+
+        openTicketModal: function (ticketDocId) {
+            const t = allTickets.find(x => x.id === ticketDocId);
+            if (!t) return;
+            const existing = document.getElementById('adm-ticket-modal');
+            if (existing) existing.remove();
+
+            const modal = document.createElement('div');
+            modal.id = 'adm-ticket-modal';
+            modal.className = 'adm-ticket-modal-overlay';
+            modal.innerHTML = `
+                <div class="adm-ticket-modal">
+                    <div class="adm-ticket-modal-header">
+                        <h3><i class="fas fa-ticket"></i> ${this.escapeHtml(t.ticketId || t.id)}</h3>
+                        <button class="adm-ticket-close" id="adm-ticket-close"><i class="fas fa-times"></i></button>
+                    </div>
+                    <div class="adm-ticket-modal-body">
+                        <div class="adm-ticket-detail">
+                            <div><label>Branch</label><span>${this.escapeHtml(t.businessName || t.businessId || 'Unknown')}</span></div>
+                            <div><label>Raised By</label><span>${this.escapeHtml(t.raisedBy || 'Unknown')}</span></div>
+                            <div><label>Category</label><span>${this.escapeHtml(t.category || 'Other')}</span></div>
+                            <div><label>Priority</label><span>${this.ticketPriorityBadge(t.priority)}</span></div>
+                            <div><label>Contact</label><span>${this.escapeHtml(t.contactPhone || '—')}</span></div>
+                            <div><label>Reference</label><span>${this.escapeHtml(t.reference || '—')}</span></div>
+                        </div>
+                        <div class="adm-ticket-message">
+                            <label>Subject</label>
+                            <h4>${this.escapeHtml(t.title || '')}</h4>
+                            <label>Description</label>
+                            <p>${this.escapeHtml(t.description || '')}</p>
+                        </div>
+                        <div class="adm-ticket-update-grid">
+                            <div class="dda-form-group">
+                                <label>Status</label>
+                                <select id="adm-ticket-edit-status">
+                                    ${['Open', 'In Progress', 'Resolved', 'Closed'].map(s => '<option value="' + s + '"' + ((t.status || 'Open') === s ? ' selected' : '') + '>' + s + '</option>').join('')}
+                                </select>
+                            </div>
+                            <div class="dda-form-group">
+                                <label>Admin Note</label>
+                                <textarea id="adm-ticket-note" rows="4" placeholder="Add progress note or resolution...">${this.escapeHtml(t.adminNote || '')}</textarea>
+                            </div>
+                        </div>
+                        <div class="adm-ticket-modal-actions">
+                            <button class="btn btn-primary" id="adm-ticket-save"><i class="fas fa-save"></i> Update Ticket</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+            modal.querySelector('#adm-ticket-close').addEventListener('click', () => modal.remove());
+            modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+            modal.querySelector('#adm-ticket-save').addEventListener('click', () => this.updateTicket(t, modal));
+        },
+
+        updateTicket: async function (ticket, modal) {
+            const status = document.getElementById('adm-ticket-edit-status')?.value || 'Open';
+            const adminNote = (document.getElementById('adm-ticket-note')?.value || '').trim();
+            const now = new Date().toISOString();
+            const updatedBy = PharmaFlow.Auth?.userProfile ? (PharmaFlow.Auth.userProfile.displayName || PharmaFlow.Auth.userProfile.email) : 'Admin';
+            const updates = {
+                status: status,
+                adminNote: adminNote,
+                updatedAt: now,
+                lastUpdatedBy: updatedBy
+            };
+
+            try {
+                if (!ticket.businessId) {
+                    throw new Error('Ticket is missing branch information.');
+                }
+                await window.db.collection('businesses').doc(ticket.businessId).collection('tickets').doc(ticket.id).set(updates, { merge: true });
+                window.db.collection('support_tickets').doc(ticket.id).update(updates)
+                    .catch(err => console.warn('Central support ticket sync failed; branch copy was updated:', err));
+                this.showToast('Ticket updated and branch copy synced.');
+                modal.remove();
+            } catch (err) {
+                console.error('Update ticket error:', err);
+                this.showToast('Failed to update ticket: ' + err.message, 'error');
+            }
+        },
+
+        ticketStatusBadge: function (status) {
+            const s = status || 'Open';
+            const cls = s === 'Resolved' || s === 'Closed' ? 'ok' : s === 'In Progress' ? 'info' : 'warn';
+            return '<span class="adm-ticket-badge adm-ticket-badge--' + cls + '">' + this.escapeHtml(s) + '</span>';
+        },
+
+        ticketPriorityBadge: function (priority) {
+            const p = priority || 'Normal';
+            const cls = p === 'Urgent' || p === 'High' ? 'danger' : p === 'Low' ? 'muted' : 'info';
+            return '<span class="adm-ticket-badge adm-ticket-badge--' + cls + '">' + this.escapeHtml(p) + '</span>';
+        },
+
+        formatAdminDate: function (val) {
+            if (!val) return '—';
+            const d = val.toDate ? val.toDate() : (val.seconds ? new Date(val.seconds * 1000) : new Date(val));
+            if (isNaN(d.getTime())) return '—';
+            return d.toLocaleDateString('en-KE', { month: 'short', day: 'numeric', year: 'numeric' }) + '<br><small>' + d.toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' }) + '</small>';
         },
 
         loadAnalyticsData: async function () {
