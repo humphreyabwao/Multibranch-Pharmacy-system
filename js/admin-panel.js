@@ -31,6 +31,8 @@
     let filteredTickets = [];
     let userCurrentPage = 1;
     let bizCurrentPage = 1;
+    let ticketCurrentPage = 1;
+    let ticketPageSize = 10;
     const PAGE_SIZE = 20;
 
     /**
@@ -120,6 +122,7 @@
             filteredUsers = [];
             filteredBusinesses = [];
             filteredTickets = [];
+            ticketCurrentPage = 1;
         },
 
         // ═══════════════════════════════════════════════
@@ -1844,10 +1847,21 @@
                             <option value="Normal">Normal</option>
                             <option value="Low">Low</option>
                         </select>
+                        <select id="adm-ticket-page-size" class="adm-ticket-select">
+                            <option value="10">10 per page</option>
+                            <option value="25">25 per page</option>
+                            <option value="50">50 per page</option>
+                        </select>
                     </div>
 
                     <div class="ord-card adm-ticket-queue">
-                        <div class="ord-card-header"><i class="fas fa-inbox"></i> Branch Ticket Queue</div>
+                        <div class="ord-card-header adm-ticket-queue-header">
+                            <span><i class="fas fa-inbox"></i> Branch Ticket Queue</span>
+                            <span class="adm-ticket-live" id="adm-ticket-live-state"><i class="fas fa-circle"></i> Connecting</span>
+                        </div>
+                        <div class="adm-ticket-queue-note" id="adm-ticket-queue-note">
+                            Tickets load from the central support queue and stay visible while Firestore reconnects.
+                        </div>
                         <div class="ord-card-body">
                             <div class="dda-table-wrap">
                                 <table class="dda-table adm-ticket-table">
@@ -1868,35 +1882,131 @@
                                 </table>
                             </div>
                         </div>
+                        <div class="dda-pagination adm-ticket-pagination" id="adm-ticket-pagination"></div>
                     </div>
                 </div>
             `;
 
             const dashLink = container.querySelector('[data-nav="dashboard"]');
             if (dashLink) dashLink.addEventListener('click', (e) => { e.preventDefault(); PharmaFlow.Sidebar.setActive('dashboard', null); });
-            document.getElementById('adm-ticket-refresh')?.addEventListener('click', () => this.filterTickets());
-            document.getElementById('adm-ticket-search')?.addEventListener('input', () => this.filterTickets());
-            document.getElementById('adm-ticket-status')?.addEventListener('change', () => this.filterTickets());
-            document.getElementById('adm-ticket-priority')?.addEventListener('change', () => this.filterTickets());
+            document.getElementById('adm-ticket-refresh')?.addEventListener('click', () => this.subscribeTickets());
+            document.getElementById('adm-ticket-search')?.addEventListener('input', () => this.filterTickets(true));
+            document.getElementById('adm-ticket-status')?.addEventListener('change', () => this.filterTickets(true));
+            document.getElementById('adm-ticket-priority')?.addEventListener('change', () => this.filterTickets(true));
+            document.getElementById('adm-ticket-page-size')?.addEventListener('change', (e) => {
+                ticketPageSize = parseInt(e.target.value, 10) || 10;
+                this.filterTickets(true);
+            });
 
             this.subscribeTickets();
         },
 
         subscribeTickets: function () {
             if (ticketsListener) ticketsListener();
-            ticketsListener = window.db.collectionGroup('tickets')
-                .orderBy('updatedAt', 'desc')
+            if (!window.db) {
+                this.renderTicketLoadError(new Error('Firestore is not initialized yet.'));
+                return;
+            }
+
+            this.setTicketLiveState('syncing', 'Connecting');
+            let hasLoadedOnce = allTickets.length > 0;
+            const ticketStore = {};
+            allTickets.forEach(t => { if (t.id) ticketStore[t.id] = t; });
+
+            ticketsListener = window.db.collection('support_tickets')
                 .onSnapshot(snap => {
-                    allTickets = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                    const incoming = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                    if (!incoming.length && hasLoadedOnce && Object.keys(ticketStore).length > 0) {
+                        this.setTicketLiveState('syncing', snap.metadata && snap.metadata.fromCache ? 'Reconnecting' : 'Revalidating');
+                        this.setTicketQueueNote('Firestore returned an empty queue snapshot. Keeping the last loaded tickets visible while the queue revalidates.');
+                        this.filterTickets();
+                        return;
+                    }
+
+                    Object.keys(ticketStore).forEach(id => delete ticketStore[id]);
+                    incoming.forEach(t => { ticketStore[t.id] = t; });
+                    allTickets = this.sortAdminTickets(Object.values(ticketStore));
+                    hasLoadedOnce = true;
                     this.filterTickets();
+                    this.setTicketLiveState('live', snap.metadata && snap.metadata.fromCache ? 'Cached' : 'Live');
+                    this.setTicketQueueNote(allTickets.length ? allTickets.length + ' ticket(s) loaded from Firestore.' : 'No tickets in the central support queue yet.');
                 }, err => {
-                    console.error('Tickets subscribe error:', err);
-                    const tbody = document.getElementById('adm-ticket-tbody');
-                    if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="dda-loading"><i class="fas fa-exclamation-triangle"></i> Failed to load tickets</td></tr>';
+                    console.error('Central ticket queue subscribe error:', err);
+                    this.setTicketLiveState('error', 'Offline');
+                    if (allTickets.length) {
+                        this.setTicketQueueNote(this.ticketQueueErrorMessage(err) + ' Showing the last loaded tickets.');
+                        this.filterTickets();
+                        return;
+                    }
+                    this.renderTicketLoadError(err);
+                });
+            this.backfillCentralTicketsFromBranches();
+        },
+
+        backfillCentralTicketsFromBranches: function () {
+            window.db.collectionGroup('tickets').get()
+                .then(snap => {
+                    if (!snap || snap.empty) return;
+                    const batch = window.db.batch();
+                    let count = 0;
+                    snap.docs.forEach(d => {
+                        const data = d.data() || {};
+                        if (!data.businessId) return;
+                        batch.set(window.db.collection('support_tickets').doc(d.id), data, { merge: true });
+                        count += 1;
+                    });
+                    if (!count) return;
+                    return batch.commit().then(() => {
+                        this.setTicketQueueNote('Central support queue checked and synced with branch ticket copies.');
+                    });
+                })
+                .catch(err => {
+                    console.warn('Branch ticket backfill skipped:', err);
+                    this.setTicketQueueNote('Central support queue is active. Branch backfill was skipped: ' + (err.message || err.code || 'permission issue'));
                 });
         },
 
-        filterTickets: function () {
+        setTicketLiveState: function (state, label) {
+            const el = document.getElementById('adm-ticket-live-state');
+            if (!el) return;
+            el.className = 'adm-ticket-live adm-ticket-live--' + state;
+            el.innerHTML = '<i class="fas fa-circle"></i> ' + this.escapeHtml(label || 'Live');
+        },
+
+        setTicketQueueNote: function (message) {
+            const el = document.getElementById('adm-ticket-queue-note');
+            if (el) el.textContent = message || '';
+        },
+
+        sortAdminTickets: function (tickets) {
+            return tickets.slice().sort((a, b) => {
+                const aVal = a.updatedAt || a.createdAt || 0;
+                const bVal = b.updatedAt || b.createdAt || 0;
+                const aDate = aVal.toDate ? aVal.toDate() : (aVal.seconds ? new Date(aVal.seconds * 1000) : new Date(aVal));
+                const bDate = bVal.toDate ? bVal.toDate() : (bVal.seconds ? new Date(bVal.seconds * 1000) : new Date(bVal));
+                return (bDate.getTime() || 0) - (aDate.getTime() || 0);
+            });
+        },
+
+        ticketQueueErrorMessage: function (err) {
+            if (!err) return 'Failed to load tickets.';
+            if (err.code === 'permission-denied') {
+                return 'Ticket queue access is blocked by Firestore rules. Confirm the signed-in admin is a superadmin and the latest rules are deployed.';
+            }
+            if (err.code === 'failed-precondition') {
+                return 'Ticket queue needs a Firestore index. The central queue should still load without an index.';
+            }
+            return 'Failed to load tickets: ' + (err.message || err.code || 'Unknown error');
+        },
+
+        renderTicketLoadError: function (err) {
+            const tbody = document.getElementById('adm-ticket-tbody');
+            if (!tbody) return;
+            tbody.innerHTML = '<tr><td colspan="7" class="dda-loading" style="color:#ef4444"><i class="fas fa-exclamation-triangle"></i> ' + this.escapeHtml(this.ticketQueueErrorMessage(err)) + '</td></tr>';
+        },
+
+        filterTickets: function (resetPage) {
+            if (resetPage) ticketCurrentPage = 1;
             const q = (document.getElementById('adm-ticket-search')?.value || '').toLowerCase().trim();
             const status = document.getElementById('adm-ticket-status')?.value || '';
             const priority = document.getElementById('adm-ticket-priority')?.value || '';
@@ -1912,7 +2022,10 @@
             });
 
             this.updateTicketStats();
+            const totalPages = Math.ceil(filteredTickets.length / ticketPageSize) || 1;
+            if (ticketCurrentPage > totalPages) ticketCurrentPage = totalPages;
             this.renderTicketRows();
+            this.renderTicketPagination();
         },
 
         updateTicketStats: function () {
@@ -1928,24 +2041,125 @@
             if (!tbody) return;
             if (!filteredTickets.length) {
                 tbody.innerHTML = '<tr><td colspan="7" class="dda-loading"><i class="fas fa-inbox"></i> No tickets found</td></tr>';
+                this.renderTicketPagination();
                 return;
             }
 
-            tbody.innerHTML = filteredTickets.map(t => {
+            const start = (ticketCurrentPage - 1) * ticketPageSize;
+            const pageRows = filteredTickets.slice(start, start + ticketPageSize);
+
+            tbody.innerHTML = pageRows.map(t => {
+                const status = t.status || 'Open';
+                const resolvedDisabled = status === 'Resolved' || status === 'Closed' ? ' disabled' : '';
+                const progressDisabled = status === 'In Progress' || status === 'Resolved' || status === 'Closed' ? ' disabled' : '';
+                const closedDisabled = status === 'Closed' ? ' disabled' : '';
                 return '<tr>' +
-                    '<td><strong>' + this.escapeHtml(t.title || '') + '</strong><br><code>' + this.escapeHtml(t.ticketId || t.id) + '</code>' + (t.reference ? '<br><small>' + this.escapeHtml(t.reference) + '</small>' : '') + '</td>' +
-                    '<td><strong>' + this.escapeHtml(t.businessName || t.businessId || 'Unknown') + '</strong><br><small>' + this.escapeHtml(t.raisedBy || '') + '</small></td>' +
+                    '<td><div class="adm-ticket-title"><strong>' + this.escapeHtml(t.title || '') + '</strong><code>' + this.escapeHtml(t.ticketId || t.id) + '</code>' + (t.reference ? '<small>' + this.escapeHtml(t.reference) + '</small>' : '') + '</div></td>' +
+                    '<td><div class="adm-ticket-branch"><strong>' + this.escapeHtml(t.businessName || t.businessId || 'Unknown') + '</strong><small>' + this.escapeHtml(t.raisedBy || '') + '</small></div></td>' +
                     '<td>' + this.escapeHtml(t.category || 'Other') + '</td>' +
                     '<td>' + this.ticketPriorityBadge(t.priority) + '</td>' +
                     '<td>' + this.ticketStatusBadge(t.status) + '</td>' +
                     '<td>' + this.formatAdminDate(t.createdAt) + '</td>' +
-                    '<td><button class="sales-action-btn sales-action--view" data-ticket-id="' + this.escapeHtml(t.id) + '" title="View / Update"><i class="fas fa-eye"></i></button></td>' +
+                    '<td><div class="adm-ticket-actions">' +
+                        '<button class="sales-action-btn sales-action--view adm-ticket-action-btn" data-ticket-id="' + this.escapeHtml(t.id) + '" data-ticket-action="view" title="View / Update"><i class="fas fa-eye"></i></button>' +
+                        '<button class="sales-action-btn adm-ticket-action-btn adm-ticket-action--progress" data-ticket-id="' + this.escapeHtml(t.id) + '" data-ticket-action="progress" title="Mark in progress"' + progressDisabled + '><i class="fas fa-spinner"></i></button>' +
+                        '<button class="sales-action-btn adm-ticket-action-btn adm-ticket-action--resolve" data-ticket-id="' + this.escapeHtml(t.id) + '" data-ticket-action="resolve" title="Mark as resolved"' + resolvedDisabled + '><i class="fas fa-check"></i></button>' +
+                        '<button class="sales-action-btn adm-ticket-action-btn adm-ticket-action--close" data-ticket-id="' + this.escapeHtml(t.id) + '" data-ticket-action="close" title="Close ticket"' + closedDisabled + '><i class="fas fa-lock"></i></button>' +
+                    '</div></td>' +
                 '</tr>';
             }).join('');
 
-            tbody.querySelectorAll('[data-ticket-id]').forEach(btn => {
-                btn.addEventListener('click', () => this.openTicketModal(btn.dataset.ticketId));
+            tbody.querySelectorAll('[data-ticket-action]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const action = btn.dataset.ticketAction;
+                    if (action === 'view') {
+                        this.openTicketModal(btn.dataset.ticketId);
+                        return;
+                    }
+                    const nextStatus = action === 'resolve' ? 'Resolved' : action === 'close' ? 'Closed' : 'In Progress';
+                    this.quickUpdateTicketStatus(btn.dataset.ticketId, nextStatus);
+                });
             });
+        },
+
+        renderTicketPagination: function () {
+            const container = document.getElementById('adm-ticket-pagination');
+            if (!container) return;
+            const totalItems = filteredTickets.length;
+            const totalPages = Math.ceil(totalItems / ticketPageSize) || 1;
+            if (!totalItems) {
+                container.innerHTML = '';
+                return;
+            }
+
+            const start = (ticketCurrentPage - 1) * ticketPageSize + 1;
+            const end = Math.min(ticketCurrentPage * ticketPageSize, totalItems);
+            let pagesHtml = '';
+            const maxVisible = 5;
+            let sp = Math.max(1, ticketCurrentPage - Math.floor(maxVisible / 2));
+            let ep = Math.min(totalPages, sp + maxVisible - 1);
+            if (ep - sp < maxVisible - 1) sp = Math.max(1, ep - maxVisible + 1);
+
+            if (sp > 1) pagesHtml += '<button class="dda-page-btn" data-page="1">1</button>';
+            if (sp > 2) pagesHtml += '<span class="dda-page-dots">...</span>';
+            for (let p = sp; p <= ep; p++) {
+                pagesHtml += '<button class="dda-page-btn' + (p === ticketCurrentPage ? ' active' : '') + '" data-page="' + p + '">' + p + '</button>';
+            }
+            if (ep < totalPages - 1) pagesHtml += '<span class="dda-page-dots">...</span>';
+            if (ep < totalPages) pagesHtml += '<button class="dda-page-btn" data-page="' + totalPages + '">' + totalPages + '</button>';
+
+            container.innerHTML = '<span class="dda-page-info">Showing ' + start + '-' + end + ' of ' + totalItems + ' tickets</span><div class="dda-page-controls"><button class="dda-page-btn" data-page="' + (ticketCurrentPage - 1) + '"' + (ticketCurrentPage === 1 ? ' disabled' : '') + '><i class="fas fa-chevron-left"></i></button>' + pagesHtml + '<button class="dda-page-btn" data-page="' + (ticketCurrentPage + 1) + '"' + (ticketCurrentPage === totalPages ? ' disabled' : '') + '><i class="fas fa-chevron-right"></i></button></div>';
+
+            container.querySelectorAll('.dda-page-btn[data-page]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const page = parseInt(btn.dataset.page, 10);
+                    if (page >= 1 && page <= totalPages) {
+                        ticketCurrentPage = page;
+                        this.renderTicketRows();
+                        this.renderTicketPagination();
+                    }
+                });
+            });
+        },
+
+        updateTicketCopies: async function (ticket, updates) {
+            if (!ticket || !ticket.id) throw new Error('Ticket record is missing.');
+            if (!ticket.businessId) throw new Error('Ticket is missing branch information.');
+
+            const batch = window.db.batch();
+            batch.set(
+                window.db.collection('businesses').doc(ticket.businessId).collection('tickets').doc(ticket.id),
+                updates,
+                { merge: true }
+            );
+            batch.set(
+                window.db.collection('support_tickets').doc(ticket.id),
+                updates,
+                { merge: true }
+            );
+            await batch.commit();
+        },
+
+        quickUpdateTicketStatus: async function (ticketId, status) {
+            const ticket = allTickets.find(t => t.id === ticketId);
+            if (!ticket) return;
+            const updatedBy = PharmaFlow.Auth?.userProfile ? (PharmaFlow.Auth.userProfile.displayName || PharmaFlow.Auth.userProfile.email) : 'Admin';
+            const updates = {
+                status: status,
+                adminNote: ticket.adminNote || (status === 'Resolved' ? 'Marked as resolved by admin.' : status === 'Closed' ? 'Closed by admin.' : 'Marked as in progress by admin.'),
+                updatedAt: new Date().toISOString(),
+                lastUpdatedBy: updatedBy
+            };
+
+            try {
+                await this.updateTicketCopies(ticket, updates);
+                allTickets = allTickets.map(t => t.id === ticketId ? { ...t, ...updates } : t);
+                this.filterTickets(false);
+                this.showToast('Ticket marked as ' + status + '.');
+            } catch (err) {
+                console.error('Quick ticket update error:', err);
+                this.showToast('Failed to update ticket: ' + err.message, 'error');
+            }
         },
 
         openTicketModal: function (ticketDocId) {
@@ -2015,12 +2229,7 @@
             };
 
             try {
-                if (!ticket.businessId) {
-                    throw new Error('Ticket is missing branch information.');
-                }
-                await window.db.collection('businesses').doc(ticket.businessId).collection('tickets').doc(ticket.id).set(updates, { merge: true });
-                window.db.collection('support_tickets').doc(ticket.id).update(updates)
-                    .catch(err => console.warn('Central support ticket sync failed; branch copy was updated:', err));
+                await this.updateTicketCopies(ticket, updates);
                 this.showToast('Ticket updated and branch copy synced.');
                 modal.remove();
             } catch (err) {

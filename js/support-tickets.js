@@ -19,6 +19,14 @@
             return PharmaFlow.Auth && PharmaFlow.Auth.getBusinessId ? PharmaFlow.Auth.getBusinessId() : null;
         },
 
+        getTicketsCollection: function (businessId) {
+            if (!window.db || !businessId) return null;
+            if (PharmaFlow.getBusinessCollection) {
+                return PharmaFlow.getBusinessCollection(businessId, 'tickets');
+            }
+            return window.db.collection('businesses').doc(businessId).collection('tickets');
+        },
+
         getCurrentUser: function () {
             const p = PharmaFlow.Auth ? PharmaFlow.Auth.userProfile : null;
             return p ? (p.displayName || p.email || 'User') : 'Unknown';
@@ -47,6 +55,27 @@
             if (isNaN(d.getTime())) return '—';
             return d.toLocaleDateString('en-KE', { month: 'short', day: 'numeric', year: 'numeric' }) + ' ' +
                 d.toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
+        },
+
+        sortTickets: function (tickets) {
+            return tickets.slice().sort((a, b) => {
+                const aVal = a.updatedAt || a.createdAt || 0;
+                const bVal = b.updatedAt || b.createdAt || 0;
+                const aDate = aVal.toDate ? aVal.toDate() : (aVal.seconds ? new Date(aVal.seconds * 1000) : new Date(aVal));
+                const bDate = bVal.toDate ? bVal.toDate() : (bVal.seconds ? new Date(bVal.seconds * 1000) : new Date(bVal));
+                return (bDate.getTime() || 0) - (aDate.getTime() || 0);
+            });
+        },
+
+        ticketLoadErrorMessage: function (err) {
+            if (!err) return 'Failed to load tickets';
+            if (err.code === 'permission-denied') {
+                return 'Ticket access is blocked by Firestore rules. Deploy the updated ticket rules.';
+            }
+            if (err.code === 'failed-precondition') {
+                return 'Ticket query needs a Firestore index. Use the simple branch ticket query or create the index shown by Firebase.';
+            }
+            return 'Failed to load tickets: ' + (err.message || err.code || 'Unknown error');
         },
 
         generateTicketId: function () {
@@ -217,10 +246,14 @@
                     lastUpdatedBy: user.displayName || user.email || 'Unknown'
                 };
 
-                const branchRef = window.db.collection('businesses').doc(businessId).collection('tickets').doc(ticketId);
-                await branchRef.set(data);
-                window.db.collection('support_tickets').doc(ticketId).set(data)
-                    .catch(err => console.warn('Central support ticket copy failed; branch copy was saved:', err));
+                const ticketsCol = this.getTicketsCollection(businessId);
+                if (!ticketsCol) throw new Error('Firestore tickets collection is not ready.');
+                const branchRef = ticketsCol.doc(ticketId);
+                const centralRef = window.db.collection('support_tickets').doc(ticketId);
+                const batch = window.db.batch();
+                batch.set(branchRef, data);
+                batch.set(centralRef, data);
+                await batch.commit();
 
                 if (PharmaFlow.ActivityLog) {
                     PharmaFlow.ActivityLog.log({
@@ -315,21 +348,51 @@
             document.getElementById('tkt-search')?.addEventListener('input', () => this.renderTicketTable());
             document.getElementById('tkt-status-filter')?.addEventListener('change', () => this.renderTicketTable());
 
-            if (businessId) this.subscribeBranchTickets(businessId);
+            if (!window.db) {
+                this.showTicketLoadError(new Error('Firestore is not initialized yet.'));
+                return;
+            }
+            if (!businessId) {
+                this.showTicketLoadError(new Error('No branch is assigned to this user.'));
+                return;
+            }
+            this.subscribeBranchTickets(businessId);
         },
 
         subscribeBranchTickets: function (businessId) {
             if (branchTicketsListener) branchTicketsListener();
-            branchTicketsListener = window.db.collection('businesses').doc(businessId).collection('tickets')
-                .orderBy('updatedAt', 'desc')
+            const ticketsCol = this.getTicketsCollection(businessId);
+            if (!ticketsCol) {
+                this.showTicketLoadError(new Error('Firestore tickets collection is not ready.'));
+                return;
+            }
+            branchTicketsListener = ticketsCol
                 .onSnapshot(snap => {
-                    branchTickets = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    branchTickets = this.sortTickets(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
                     this.renderTicketTable();
                 }, err => {
                     console.error('Branch tickets listener error:', err);
-                    const body = document.getElementById('tkt-my-body');
-                    if (body) body.innerHTML = '<tr><td colspan="6" class="tkt-empty tkt-empty--error"><i class="fas fa-triangle-exclamation"></i> Failed to load tickets</td></tr>';
+                    this.subscribeCentralTicketCopy(businessId, err);
                 });
+        },
+
+        subscribeCentralTicketCopy: function (businessId, originalErr) {
+            if (branchTicketsListener) branchTicketsListener();
+            branchTicketsListener = window.db.collection('support_tickets')
+                .where('businessId', '==', businessId)
+                .onSnapshot(snap => {
+                    branchTickets = this.sortTickets(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+                    this.renderTicketTable();
+                }, err => {
+                    console.error('Central tickets fallback listener error:', err);
+                    this.showTicketLoadError(err || originalErr);
+                });
+        },
+
+        showTicketLoadError: function (err) {
+            const body = document.getElementById('tkt-my-body');
+            if (!body) return;
+            body.innerHTML = '<tr><td colspan="6" class="tkt-empty tkt-empty--error"><i class="fas fa-triangle-exclamation"></i> ' + this.escapeHtml(this.ticketLoadErrorMessage(err)) + '</td></tr>';
         },
 
         renderTicketTable: function () {

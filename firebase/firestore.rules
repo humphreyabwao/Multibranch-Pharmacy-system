@@ -228,6 +228,20 @@ service cloud.firestore {
         allow delete: if canAccessBusiness(businessId) && isAdminOrAbove();
       }
 
+      // ── Support Tickets — branch creates/tracks, superadmin resolves ──
+      match /tickets/{ticketId} {
+        allow read: if canAccessBusiness(businessId);
+        allow create: if canAccessBusiness(businessId)
+          && request.resource.data.businessId == businessId;
+        allow update: if isSuperAdmin()
+          || (
+            canAccessBusiness(businessId)
+            && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['title', 'description', 'category', 'priority', 'contactPhone', 'reference', 'updatedAt', 'lastUpdatedBy'])
+          );
+        allow delete: if isSuperAdmin();
+      }
+
       // ── Settings (retention, etc.) — admin+ to read/write ──
       match /settings/{settingId} {
         allow read: if canAccessBusiness(businessId);
@@ -286,6 +300,22 @@ service cloud.firestore {
       allow create, delete: if isAdminOrAbove();
       // Any authenticated user can update (dismiss/acknowledge from dashboard)
       allow update: if isAuthenticated();
+    }
+
+    // ===== CENTRAL SUPPORT TICKET COPIES =====
+    match /support_tickets/{ticketId} {
+      allow read: if isSuperAdmin()
+        || (isAuthenticated() && belongsToBusiness(resource.data.businessId));
+      allow create: if isAuthenticated()
+        && request.resource.data.businessId is string
+        && (isSuperAdmin() || belongsToBusiness(request.resource.data.businessId));
+      allow update: if isSuperAdmin();
+      allow delete: if isSuperAdmin();
+    }
+
+    // Allow superadmin collection-group ticket queue reads.
+    match /{path=**}/tickets/{ticketId} {
+      allow read: if isSuperAdmin();
     }
 
     // Deny all other access by default
