@@ -210,6 +210,93 @@
             return 'SL-' + y + m + d + '-' + rand;
         },
 
+        getBatchDateValue: function (value) {
+            if (!value) return Number.POSITIVE_INFINITY;
+            const date = value.toDate ? value.toDate() : new Date(value);
+            const time = date && !isNaN(date.getTime()) ? date.getTime() : Number.POSITIVE_INFINITY;
+            return time;
+        },
+
+        getProductStockBatches: function (product) {
+            if (!product) return [];
+            const productQty = Math.max(0, parseInt(product.quantity, 10) || 0);
+            let batches = [];
+
+            if (Array.isArray(product.stockBatches) && product.stockBatches.length) {
+                batches = product.stockBatches
+                    .map(batch => ({ ...batch, quantity: Math.max(0, parseInt(batch.quantity, 10) || 0) }))
+                    .filter(batch => batch.quantity > 0);
+            } else if (productQty > 0 || product.expiryDate || product.batchNumber) {
+                batches = [{
+                    batchNumber: product.batchNumber || '',
+                    quantity: productQty,
+                    expiryDate: product.expiryDate || null,
+                    addedAt: product.createdAt || product.updatedAt || null,
+                    legacy: true
+                }];
+            }
+
+            if (!productQty) return [];
+
+            batches.sort((a, b) => this.getBatchDateValue(a.expiryDate) - this.getBatchDateValue(b.expiryDate));
+
+            const normalized = [];
+            let assigned = 0;
+            batches.forEach(batch => {
+                if (assigned >= productQty) return;
+                const available = Math.max(0, parseInt(batch.quantity, 10) || 0);
+                const qty = Math.min(available, productQty - assigned);
+                if (qty > 0) {
+                    normalized.push({ ...batch, quantity: qty });
+                    assigned += qty;
+                }
+            });
+
+            if (assigned < productQty) {
+                normalized.push({
+                    batchNumber: product.batchNumber || '',
+                    quantity: productQty - assigned,
+                    expiryDate: product.expiryDate || null,
+                    addedAt: product.updatedAt || product.createdAt || null,
+                    reconciled: true
+                });
+            }
+
+            return normalized;
+        },
+
+        getPrimaryBatchAfterSale: function (batches) {
+            if (!batches || !batches.length) return { batchNumber: '', expiryDate: null };
+            const sorted = batches
+                .slice()
+                .filter(batch => (parseInt(batch.quantity, 10) || 0) > 0)
+                .sort((a, b) => this.getBatchDateValue(a.expiryDate) - this.getBatchDateValue(b.expiryDate));
+            if (!sorted.length) return { batchNumber: '', expiryDate: null };
+            return {
+                batchNumber: sorted[0].batchNumber || '',
+                expiryDate: sorted[0].expiryDate || null
+            };
+        },
+
+        reduceStockBatches: function (product, soldQty) {
+            let remaining = Math.max(0, parseInt(soldQty, 10) || 0);
+            const sortedBatches = this.getProductStockBatches(product)
+                .sort((a, b) => this.getBatchDateValue(a.expiryDate) - this.getBatchDateValue(b.expiryDate));
+
+            const updatedBatches = sortedBatches.map(batch => {
+                const available = Math.max(0, parseInt(batch.quantity, 10) || 0);
+                const used = Math.min(available, remaining);
+                remaining -= used;
+                return { ...batch, quantity: available - used };
+            }).filter(batch => (parseInt(batch.quantity, 10) || 0) > 0);
+
+            if (remaining > 0) {
+                throw new Error('Insufficient stock for ' + (product.name || 'selected product'));
+            }
+
+            return updatedBatches;
+        },
+
         // ─── RENDER POS ─────────────────────────────────────
 
         render: function (container) {
@@ -278,49 +365,72 @@
                         <!-- RIGHT: Totals & checkout (unchanged order) -->
                         <div class="pos-cart-panel">
                             <div class="pos-cart-summary" id="pos-cart-summary">
-                                <div class="pos-summary-row">
-                                    <span>Subtotal (ex. VAT)</span>
-                                    <span id="pos-base-subtotal">KSH 0.00</span>
+                                <div class="pos-summary-head">
+                                    <span><i class="fas fa-receipt"></i> Sale Summary</span>
+                                    <small>Current cart</small>
                                 </div>
-                                <div class="pos-summary-row" id="pos-product-vat-summary-row" style="display:none;">
-                                    <span>Product VAT</span>
-                                    <span id="pos-product-vat-total">KSH 0.00</span>
-                                </div>
-                                <div class="pos-summary-row" style="font-weight:600;">
-                                    <span>Subtotal (incl. VAT)</span>
-                                    <span id="pos-subtotal">KSH 0.00</span>
-                                </div>
-                                <div class="pos-summary-row">
-                                    <span>Discount</span>
-                                    <div class="pos-discount-input">
-                                        <input type="number" id="pos-discount" min="0" value="0" placeholder="0">
-                                        <select id="pos-discount-type">
-                                            <option value="amount">KSH</option>
-                                            <option value="percent">%</option>
-                                        </select>
+
+                                <div class="pos-summary-group">
+                                    <div class="pos-summary-row">
+                                        <span>Subtotal (ex. VAT)</span>
+                                        <strong id="pos-base-subtotal">KSH 0.00</strong>
+                                    </div>
+                                    <div class="pos-summary-row" id="pos-product-vat-summary-row" style="display:none;">
+                                        <span>Product VAT</span>
+                                        <strong id="pos-product-vat-total">KSH 0.00</strong>
+                                    </div>
+                                    <div class="pos-summary-row pos-summary-row--emphasis">
+                                        <span>Subtotal (incl. VAT)</span>
+                                        <strong id="pos-subtotal">KSH 0.00</strong>
                                     </div>
                                 </div>
-                                <div class="pos-summary-row">
-                                    <span>Net Total</span>
-                                    <span id="pos-net-total">KSH 0.00</span>
-                                </div>
-                                <div class="pos-summary-row">
-                                    <label class="checkbox-wrapper" style="margin:0;">
-                                        <input type="checkbox" id="pos-apply-vat">
-                                        <span>Apply VAT</span>
-                                    </label>
-                                    <div class="pos-discount-input">
-                                        <input type="number" id="pos-vat" min="0" value="0" placeholder="0">
-                                        <select id="pos-vat-type">
-                                            <option value="percent">%</option>
-                                            <option value="amount">KSH</option>
-                                        </select>
+
+                                <div class="pos-summary-group pos-summary-group--controls">
+                                    <div class="pos-summary-row">
+                                        <span>Discount</span>
+                                        <div class="pos-discount-input">
+                                            <input type="number" id="pos-discount" min="0" value="0" placeholder="0">
+                                            <select id="pos-discount-type">
+                                                <option value="amount">KSH</option>
+                                                <option value="percent">%</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="pos-summary-row">
+                                        <span>Net Total</span>
+                                        <strong id="pos-net-total">KSH 0.00</strong>
+                                    </div>
+                                    <div class="pos-summary-row">
+                                        <span>Dispensing Fee</span>
+                                        <div class="pos-discount-input">
+                                            <input type="number" id="pos-dispensing-fee" min="0" value="0" placeholder="0" step="0.01">
+                                            <select disabled>
+                                                <option>KSH</option>
+                                            </select>
+                                        </div>
                                     </div>
                                 </div>
-                                <div class="pos-summary-row">
-                                    <span>VAT</span>
-                                    <span id="pos-vat-amount">KSH 0.00</span>
+
+                                <div class="pos-summary-group">
+                                    <div class="pos-summary-row">
+                                        <label class="checkbox-wrapper pos-summary-check">
+                                            <input type="checkbox" id="pos-apply-vat">
+                                            <span>Apply VAT</span>
+                                        </label>
+                                        <div class="pos-discount-input">
+                                            <input type="number" id="pos-vat" min="0" value="0" placeholder="0">
+                                            <select id="pos-vat-type">
+                                                <option value="percent">%</option>
+                                                <option value="amount">KSH</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="pos-summary-row">
+                                        <span>VAT</span>
+                                        <strong id="pos-vat-amount">KSH 0.00</strong>
+                                    </div>
                                 </div>
+
                                 <div class="pos-summary-total">
                                     <span>Total</span>
                                     <span id="pos-total">KSH 0.00</span>
@@ -328,41 +438,43 @@
                             </div>
 
                             <div class="pos-payment-section">
-                                <label>Customer (Optional)</label>
+                                <div class="pos-payment-topline">
+                                    <label>Customer <span>(Optional)</span></label>
+                                    <label class="checkbox-wrapper pos-split-toggle">
+                                        <input type="checkbox" id="pos-split-payment">
+                                        <span>Split payment</span>
+                                    </label>
+                                </div>
+
                                 <div class="pos-customer-fields">
-                                    <input type="text" id="pos-customer-name" placeholder="Customer name (optional)" autocomplete="off">
-                                    <input type="tel" id="pos-customer-phone" placeholder="Phone number (optional)" autocomplete="tel">
+                                    <input type="text" id="pos-customer-name" placeholder="Customer name" autocomplete="off">
+                                    <input type="tel" id="pos-customer-phone" placeholder="Phone number" autocomplete="tel">
                                 </div>
                                 <datalist id="pos-customer-name-list"></datalist>
                                 <datalist id="pos-customer-phone-list"></datalist>
                                 <div class="pos-customer-match" id="pos-customer-match" style="display:none;"></div>
 
-                                <label class="checkbox-wrapper pos-split-toggle">
-                                    <input type="checkbox" id="pos-split-payment">
-                                    <span>Split payment</span>
-                                </label>
-
                                 <div id="pos-payment-single">
-                                <label>Payment method</label>
-                                <div class="pos-payment-methods">
-                                    <button type="button" class="pos-pay-method active" data-method="cash">
-                                        <i class="fas fa-money-bill-wave"></i> Cash
-                                    </button>
-                                    <button type="button" class="pos-pay-method" data-method="mpesa">
-                                        <i class="fas fa-mobile-alt"></i> M-Pesa
-                                    </button>
-                                    <button type="button" class="pos-pay-method" data-method="card">
-                                        <i class="fas fa-credit-card"></i> Card
-                                    </button>
-                                </div>
-
-                                <div class="pos-cash-tender" id="pos-cash-tender" style="display:none;">
-                                    <label for="pos-amount-paid">Amount paid</label>
-                                    <input type="number" id="pos-amount-paid" min="0" placeholder="0.00" step="0.01">
-                                    <div class="pos-change-due" id="pos-change-due" style="display:none;">
-                                        Change: <strong id="pos-change-amount">KSH 0.00</strong>
+                                    <label class="pos-field-label">Payment method</label>
+                                    <div class="pos-payment-methods">
+                                        <button type="button" class="pos-pay-method active" data-method="cash">
+                                            <i class="fas fa-money-bill-wave"></i><span>Cash</span>
+                                        </button>
+                                        <button type="button" class="pos-pay-method" data-method="mpesa">
+                                            <i class="fas fa-mobile-alt"></i><span>M-Pesa</span>
+                                        </button>
+                                        <button type="button" class="pos-pay-method" data-method="card">
+                                            <i class="fas fa-credit-card"></i><span>Card</span>
+                                        </button>
                                     </div>
-                                </div>
+
+                                    <div class="pos-cash-tender" id="pos-cash-tender" style="display:none;">
+                                        <label for="pos-amount-paid">Amount paid</label>
+                                        <input type="number" id="pos-amount-paid" min="0" placeholder="0.00" step="0.01">
+                                        <div class="pos-change-due" id="pos-change-due" style="display:none;">
+                                            Change: <strong id="pos-change-amount">KSH 0.00</strong>
+                                        </div>
+                                    </div>
                                 </div>
 
                                 <div id="pos-payment-split" class="pos-payment-split" style="display:none;">
@@ -502,6 +614,12 @@
             }
             if (discountType) {
                 discountType.addEventListener('change', () => this.onDiscountInputCommitted());
+            }
+
+            const dispensingFeeInput = document.getElementById('pos-dispensing-fee');
+            if (dispensingFeeInput) {
+                dispensingFeeInput.addEventListener('input', () => this.updateTotals());
+                dispensingFeeInput.addEventListener('change', () => this.updateTotals());
             }
 
             // VAT input
@@ -1178,6 +1296,7 @@
             const vatInput = document.getElementById('pos-vat');
             const vatType = document.getElementById('pos-vat-type');
             const applyVat = document.getElementById('pos-apply-vat');
+            const dispensingFeeInput = document.getElementById('pos-dispensing-fee');
 
             let discount = 0;
             const discountValue = parseFloat(discountInput?.value) || 0;
@@ -1190,6 +1309,7 @@
             }
 
             const netTotal = this.roundMoney(Math.max(grossSubtotal - discount, 0));
+            const dispensingFee = this.roundMoney(Math.max(parseFloat(dispensingFeeInput?.value) || 0, 0));
 
             let vatAmount = 0;
             const posVatValue = parseFloat(vatInput?.value) || 0;
@@ -1202,7 +1322,7 @@
                 }
             }
 
-            const total = this.roundMoney(netTotal + vatAmount);
+            const total = this.roundMoney(netTotal + dispensingFee + vatAmount);
 
             return {
                 baseSubtotal,
@@ -1213,6 +1333,7 @@
                 discountType: discountType?.value || 'amount',
                 discountAmount: discount,
                 netTotal,
+                dispensingFee,
                 vatEnabled,
                 vatValue: posVatValue,
                 vatType: vatType?.value || 'percent',
@@ -1329,7 +1450,9 @@
             try {
                 const totals = this.getCurrentTotals();
                 const totalProfit = this.roundMoney(
-                    cart.reduce((sum, item) => sum + this.roundMoney((this.getLineUnitPrice(item) - (parseFloat(item.buyingPrice) || 0)) * this.getLineQuantity(item)), 0) - totals.discountAmount
+                    cart.reduce((sum, item) => sum + this.roundMoney((this.getLineUnitPrice(item) - (parseFloat(item.buyingPrice) || 0)) * this.getLineQuantity(item)), 0)
+                    - totals.discountAmount
+                    + totals.dispensingFee
                 );
 
                 const splitCb = document.getElementById('pos-split-payment');
@@ -1408,6 +1531,7 @@
                     discountType: totals.discountType,
                     discountAmount: totals.discountAmount,
                     netTotal: totals.netTotal,
+                    dispensingFee: totals.dispensingFee,
                     vatEnabled: totals.vatEnabled,
                     vatValue: totals.vatValue,
                     vatType: totals.vatType,
@@ -1427,10 +1551,48 @@
                     saleDateStr: now.toISOString().split('T')[0]
                 };
 
-                // Write sale to Firestore
-                await getBusinessCollection(businessId, 'sales').doc(saleId).set(saleData);
+                const inventoryCol = getBusinessCollection(businessId, 'inventory');
+                const salesCol = getBusinessCollection(businessId, 'sales');
+                const saleRef = salesCol.doc(saleId);
 
-                // Record DDA sales in DDA register
+                await window.db.runTransaction(async (transaction) => {
+                    const stockUpdates = [];
+
+                    for (const item of cart) {
+                        const itemQty = this.getLineQuantity(item);
+                        const ref = inventoryCol.doc(item.id);
+                        const snapshot = await transaction.get(ref);
+                        if (!snapshot.exists) {
+                            throw new Error('Product no longer exists: ' + item.name);
+                        }
+
+                        const product = snapshot.data() || {};
+                        const currentQty = Math.max(0, parseInt(product.quantity, 10) || 0);
+                        if (currentQty < itemQty) {
+                            throw new Error('Only ' + currentQty + ' left in stock for ' + (product.name || item.name));
+                        }
+
+                        const nextQty = currentQty - itemQty;
+                        const nextBatches = this.reduceStockBatches(product, itemQty);
+                        const primaryBatch = this.getPrimaryBatchAfterSale(nextBatches);
+
+                        stockUpdates.push({
+                            ref: ref,
+                            data: {
+                                quantity: nextQty,
+                                stockBatches: nextBatches,
+                                batchNumber: primaryBatch.batchNumber || '',
+                                expiryDate: primaryBatch.expiryDate || null,
+                                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                            }
+                        });
+                    }
+
+                    transaction.set(saleRef, saleData);
+                    stockUpdates.forEach(update => transaction.update(update.ref, update.data));
+                });
+
+                // Record DDA sales in DDA register after the sale + stock transaction commits.
                 const ddaItems = saleData.items.filter(item => item.drugType === 'DDA');
                 if (ddaItems.length > 0 && PharmaFlow.DdaRegister) {
                     const soldBy = saleData.soldBy;
@@ -1441,17 +1603,6 @@
                         await PharmaFlow.DdaRegister.recordDdaSale(businessId, saleId, ddaItem, soldBy, soldByUid, sDate, sDateStr);
                     }
                 }
-
-                // Update inventory quantities (decrement)
-                const batch = window.db.batch();
-                cart.forEach(item => {
-                    const ref = getBusinessCollection(businessId, 'inventory').doc(item.id);
-                    batch.update(ref, {
-                        quantity: firebase.firestore.FieldValue.increment(-item.qty),
-                        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-                    });
-                });
-                await batch.commit();
 
                 // Log activity
                 if (PharmaFlow.ActivityLog) {
@@ -1477,6 +1628,8 @@
                 // Reset discount & payment
                 const di = document.getElementById('pos-discount');
                 if (di) di.value = '0';
+                const df = document.getElementById('pos-dispensing-fee');
+                if (df) df.value = '0';
                 const ap = document.getElementById('pos-amount-paid');
                 if (ap) ap.value = '';
                 const spl = document.getElementById('pos-split-payment');
@@ -1617,6 +1770,11 @@
                                 <span>Net Total</span>
                                 <span>${this.formatCurrency(sale.netTotal != null ? sale.netTotal : (this.roundMoney((sale.subtotal || 0) + (sale.productVatTotal || 0)) - (sale.discountAmount || 0)))}</span>
                             </div>
+                            ${(sale.dispensingFee || 0) > 0 ? `
+                            <div class="pos-receipt-row">
+                                <span>Dispensing Fee</span>
+                                <span>${this.formatCurrency(sale.dispensingFee)}</span>
+                            </div>` : ''}
                             ${(sale.vatAmount || 0) > 0 ? `
                             <div class="pos-receipt-row">
                                 <span>VAT ${sale.vatType === 'percent' ? '(' + sale.vatValue + '%)' : ''}</span>

@@ -121,6 +121,47 @@
             return 'scheduled';
         },
 
+        normalizePhoneForMessage: function (phone) {
+            var raw = String(phone || '').trim();
+            if (!raw) return '';
+            var cleaned = raw.replace(/[^\d+]/g, '');
+            if (cleaned.charAt(0) === '+') return cleaned.substring(1);
+            if (cleaned.indexOf('00') === 0) return cleaned.substring(2);
+            if (cleaned.charAt(0) === '0' && cleaned.length >= 10) return '254' + cleaned.substring(1);
+            if (cleaned.length === 9) return '254' + cleaned;
+            return cleaned;
+        },
+
+        buildReminderMessage: function (refill, options) {
+            options = options || {};
+            var patientName = refill.patientName || 'valued client';
+            var medication = refill.medication || 'your medication';
+            var dosage = refill.dosage ? ' (' + refill.dosage + ')' : '';
+            var dateText = this.formatDate(refill.nextRefillDate);
+            var prefix = options.overdue ? 'Your refill is overdue.' : 'This is a refill reminder.';
+            return 'Hello ' + patientName + ', ' + prefix + ' Please refill ' + medication + dosage + ' by ' + dateText + '. Thank you.';
+        },
+
+        openWhatsAppReminder: function (refill, customMessage) {
+            var phone = this.normalizePhoneForMessage(refill.patientPhone || '');
+            if (!phone) {
+                this.showToast('No WhatsApp phone number on file for this client', 'error');
+                return;
+            }
+            var message = (customMessage || this.buildReminderMessage(refill)).trim();
+            window.open('https://wa.me/' + phone + '?text=' + encodeURIComponent(message), '_blank', 'noopener');
+        },
+
+        openSmsReminder: function (refill, customMessage) {
+            var phone = this.normalizePhoneForMessage(refill.patientPhone || '');
+            if (!phone) {
+                this.showToast('No SMS phone number on file for this client', 'error');
+                return;
+            }
+            var message = (customMessage || this.buildReminderMessage(refill)).trim();
+            window.open('sms:+' + phone + '?&body=' + encodeURIComponent(message), '_blank', 'noopener');
+        },
+
         cleanup: function () {
             if (mrUnsubRefills) { mrUnsubRefills(); mrUnsubRefills = null; }
             if (mrUnsubPatients) { mrUnsubPatients(); mrUnsubPatients = null; }
@@ -366,6 +407,172 @@
                 patientPhone: mrAddSelectedPatient.phone || '',
                 patientSource: 'registered'
             };
+        },
+
+        _renderMedicationRow: function (index, isFirst) {
+            var label = 'Medication ' + (index + 1);
+            return '<div class="mr-medication-item" data-med-row>' +
+                '<div class="mr-medication-item__head">' +
+                    '<h4><i class="fas fa-pills"></i> <span data-med-title>' + label + '</span></h4>' +
+                    '<button type="button" class="mr-btn mr-btn--sm mr-btn--outline mr-remove-medication" ' + (isFirst ? 'style="display:none;"' : '') + '>' +
+                        '<i class="fas fa-times"></i> Remove' +
+                    '</button>' +
+                '</div>' +
+                '<div class="mr-form-grid">' +
+                    '<div class="mr-field">' +
+                        '<label>Medication Name *</label>' +
+                        '<input type="text" class="mr-input mr-medication-name" placeholder="e.g. Metformin 500mg">' +
+                    '</div>' +
+                    '<div class="mr-field">' +
+                        '<label>Dosage *</label>' +
+                        '<input type="text" class="mr-input mr-medication-dosage" placeholder="e.g. 1 tablet twice daily">' +
+                    '</div>' +
+                    '<div class="mr-field">' +
+                        '<label>Quantity per Refill</label>' +
+                        '<input type="number" class="mr-input mr-medication-quantity" placeholder="e.g. 60" min="1">' +
+                    '</div>' +
+                    '<div class="mr-field">' +
+                        '<label>Refill Frequency *</label>' +
+                        '<select class="mr-select mr-medication-frequency">' +
+                            MR_FREQUENCIES.map(function (f) { return '<option value="' + f + '">' + f + '</option>'; }).join('') +
+                        '</select>' +
+                    '</div>' +
+                    '<div class="mr-field">' +
+                        '<label>Last Refill Date *</label>' +
+                        '<input type="date" class="mr-input mr-medication-last-refill">' +
+                    '</div>' +
+                    '<div class="mr-field">' +
+                        '<label>Next Refill Date</label>' +
+                        '<input type="date" class="mr-input mr-medication-next-refill" readonly>' +
+                    '</div>' +
+                    '<div class="mr-field">' +
+                        '<label>Reminder (days before)</label>' +
+                        '<input type="number" class="mr-input mr-medication-reminder" value="3" min="0" max="30">' +
+                    '</div>' +
+                    '<div class="mr-field">' +
+                        '<label>Prescribing Doctor</label>' +
+                        '<input type="text" class="mr-input mr-medication-doctor" placeholder="e.g. Dr. Kamau">' +
+                    '</div>' +
+                    '<div class="mr-field mr-field--full">' +
+                        '<label>Notes</label>' +
+                        '<textarea class="mr-input mr-textarea mr-medication-notes" rows="2" placeholder="Additional notes for this medication..."></textarea>' +
+                    '</div>' +
+                '</div>' +
+            '</div>';
+        },
+
+        _refreshMedicationRowLabels: function () {
+            document.querySelectorAll('[data-med-row]').forEach(function (row, index) {
+                var title = row.querySelector('[data-med-title]');
+                var removeBtn = row.querySelector('.mr-remove-medication');
+                if (title) title.textContent = 'Medication ' + (index + 1);
+                if (removeBtn) removeBtn.style.display = index === 0 ? 'none' : '';
+            });
+        },
+
+        _updateMedicationNextDate: function (row) {
+            if (!row) return;
+            var lastInput = row.querySelector('.mr-medication-last-refill');
+            var freqSelect = row.querySelector('.mr-medication-frequency');
+            var nextInput = row.querySelector('.mr-medication-next-refill');
+            if (lastInput && freqSelect && nextInput && lastInput.value) {
+                nextInput.value = this.calcNextRefill(lastInput.value, freqSelect.value);
+            }
+        },
+
+        _bindMedicationRow: function (row) {
+            if (!row) return;
+            var self = this;
+            var lastInput = row.querySelector('.mr-medication-last-refill');
+            var freqSelect = row.querySelector('.mr-medication-frequency');
+            if (lastInput && !lastInput.value) lastInput.value = this.toISODate(new Date());
+            if (row.dataset.medicationBound === 'true') {
+                this._updateMedicationNextDate(row);
+                return;
+            }
+            if (lastInput) lastInput.addEventListener('change', function () { self._updateMedicationNextDate(row); });
+            if (freqSelect) freqSelect.addEventListener('change', function () { self._updateMedicationNextDate(row); });
+            row.dataset.medicationBound = 'true';
+            this._updateMedicationNextDate(row);
+        },
+
+        _addMedicationRow: function () {
+            var list = document.getElementById('mr-medication-list');
+            if (!list) return;
+            var index = list.querySelectorAll('[data-med-row]').length;
+            list.insertAdjacentHTML('beforeend', this._renderMedicationRow(index, false));
+            var row = list.querySelector('[data-med-row]:last-child');
+            this._bindMedicationRow(row);
+            this._refreshMedicationRowLabels();
+        },
+
+        _bindMedicationRows: function () {
+            var self = this;
+            var list = document.getElementById('mr-medication-list');
+            var addBtn = document.getElementById('mr-add-medication-btn');
+            if (!list) return;
+
+            list.querySelectorAll('[data-med-row]').forEach(function (row) {
+                self._bindMedicationRow(row);
+            });
+
+            if (list.dataset.medicationBound !== 'true') {
+                list.addEventListener('click', function (e) {
+                    var removeBtn = e.target.closest('.mr-remove-medication');
+                    if (!removeBtn) return;
+                    e.preventDefault();
+                    var row = removeBtn.closest('[data-med-row]');
+                    if (row && list.querySelectorAll('[data-med-row]').length > 1) {
+                        row.remove();
+                        self._refreshMedicationRowLabels();
+                    }
+                });
+                list.dataset.medicationBound = 'true';
+            }
+
+            if (addBtn && addBtn.dataset.medicationBound !== 'true') {
+                addBtn.addEventListener('click', function () {
+                    self._addMedicationRow();
+                });
+                addBtn.dataset.medicationBound = 'true';
+            }
+        },
+
+        _getMedicationRowsForSave: function () {
+            var rows = Array.from(document.querySelectorAll('#mr-medication-list [data-med-row]'));
+            var meds = [];
+            for (var i = 0; i < rows.length; i++) {
+                var row = rows[i];
+                var medication = (row.querySelector('.mr-medication-name')?.value || '').trim();
+                var dosage = (row.querySelector('.mr-medication-dosage')?.value || '').trim();
+                var quantity = parseInt(row.querySelector('.mr-medication-quantity')?.value) || 0;
+                var frequency = row.querySelector('.mr-medication-frequency')?.value || 'Monthly';
+                var lastRefillDate = row.querySelector('.mr-medication-last-refill')?.value || '';
+                var nextRefillDate = row.querySelector('.mr-medication-next-refill')?.value || '';
+                var reminderParsed = parseInt(row.querySelector('.mr-medication-reminder')?.value);
+                var reminderDays = isFinite(reminderParsed) ? reminderParsed : 3;
+                var doctor = (row.querySelector('.mr-medication-doctor')?.value || '').trim();
+                var notes = (row.querySelector('.mr-medication-notes')?.value || '').trim();
+
+                if (!medication && !dosage && !quantity && !doctor && !notes) continue;
+                if (!medication || !dosage || !lastRefillDate) {
+                    return { error: 'Please complete medication name, dosage, and last refill date for Medication ' + (i + 1) };
+                }
+                if (!nextRefillDate) nextRefillDate = this.calcNextRefill(lastRefillDate, frequency);
+                meds.push({
+                    medication: medication,
+                    dosage: dosage,
+                    quantityPerRefill: quantity,
+                    frequency: frequency,
+                    lastRefillDate: lastRefillDate,
+                    nextRefillDate: nextRefillDate,
+                    reminderDays: reminderDays,
+                    doctor: doctor,
+                    notes: notes
+                });
+            }
+            if (!meds.length) return { error: 'Add at least one medication for refill' };
+            return { medications: meds };
         },
 
         /* helper: load patients list for dropdowns */
@@ -643,56 +850,17 @@
                                 </div>
                             </div>
 
-                            <h3><i class="fas fa-pills"></i> Medication Details</h3>
-                            <div class="mr-form-grid">
-                                <div class="mr-field">
-                                    <label>Medication Name *</label>
-                                    <input type="text" id="mr-medication" class="mr-input" placeholder="e.g. Metformin 500mg" required>
-                                </div>
-                                <div class="mr-field">
-                                    <label>Dosage *</label>
-                                    <input type="text" id="mr-dosage" class="mr-input" placeholder="e.g. 1 tablet twice daily" required>
-                                </div>
-                                <div class="mr-field">
-                                    <label>Quantity per Refill</label>
-                                    <input type="number" id="mr-quantity" class="mr-input" placeholder="e.g. 60" min="1">
-                                </div>
-                                <div class="mr-field">
-                                    <label>Refill Frequency *</label>
-                                    <select id="mr-frequency" class="mr-select" required>
-                                        ${MR_FREQUENCIES.map(function (f) { return '<option value="' + f + '">' + f + '</option>'; }).join('')}
-                                    </select>
-                                </div>
+                            <h3><i class="fas fa-pills"></i> Refill Medications</h3>
+                            <div class="mr-medication-list" id="mr-medication-list">
+                                ${this._renderMedicationRow(0, true)}
                             </div>
-
-                            <h3><i class="fas fa-calendar"></i> Schedule</h3>
-                            <div class="mr-form-grid">
-                                <div class="mr-field">
-                                    <label>Last Refill Date *</label>
-                                    <input type="date" id="mr-last-refill" class="mr-input" required>
-                                </div>
-                                <div class="mr-field">
-                                    <label>Next Refill Date</label>
-                                    <input type="date" id="mr-next-refill" class="mr-input" readonly>
-                                </div>
-                                <div class="mr-field">
-                                    <label>Reminder (days before)</label>
-                                    <input type="number" id="mr-reminder-days" class="mr-input" value="3" min="0" max="30">
-                                </div>
-                                <div class="mr-field">
-                                    <label>Prescribing Doctor</label>
-                                    <input type="text" id="mr-doctor" class="mr-input" placeholder="e.g. Dr. Kamau">
-                                </div>
-                            </div>
-
-                            <div class="mr-field" style="margin-top:8px;">
-                                <label>Notes</label>
-                                <textarea id="mr-notes" class="mr-input mr-textarea" rows="3" placeholder="Additional notes..."></textarea>
-                            </div>
+                            <button type="button" class="mr-btn mr-btn--outline mr-add-medication-btn" id="mr-add-medication-btn">
+                                <i class="fas fa-plus"></i> Add another medication
+                            </button>
 
                             <div class="mr-form-actions">
                                 <button type="submit" class="mr-btn mr-btn--primary" id="mr-save-btn">
-                                    <i class="fas fa-save"></i> Save Refill Schedule
+                                    <i class="fas fa-save"></i> Save Refill Schedule(s)
                                 </button>
                                 <button type="reset" class="mr-btn mr-btn--secondary">
                                     <i class="fas fa-rotate-left"></i> Reset
@@ -714,32 +882,25 @@
             this._loadPatients(businessId, function () {
                 self._bindAddPatientPicker();
             });
-
-            // Auto-calculate next refill
-            var lastInput = document.getElementById('mr-last-refill');
-            var freqSelect = document.getElementById('mr-frequency');
-            var nextInput = document.getElementById('mr-next-refill');
-
-            function updateNext() {
-                if (lastInput && lastInput.value && freqSelect) {
-                    nextInput.value = self.calcNextRefill(lastInput.value, freqSelect.value);
-                }
-            }
-            if (lastInput) lastInput.addEventListener('change', updateNext);
-            if (freqSelect) freqSelect.addEventListener('change', updateNext);
-
-            // Set default last refill to today
-            if (lastInput) {
-                lastInput.value = this.toISODate(new Date());
-                updateNext();
-            }
+            this._bindMedicationRows();
 
             // Submit handler
             var form = document.getElementById('mr-add-form');
-            if (form) form.addEventListener('submit', function (e) {
-                e.preventDefault();
-                self._saveRefill(businessId);
-            });
+            if (form) {
+                form.addEventListener('submit', function (e) {
+                    e.preventDefault();
+                    self._saveRefill(businessId);
+                });
+                form.addEventListener('reset', function () {
+                    setTimeout(function () {
+                        var list = document.getElementById('mr-medication-list');
+                        if (list) {
+                            list.innerHTML = self._renderMedicationRow(0, true);
+                            self._bindMedicationRows();
+                        }
+                    }, 0);
+                });
+            }
         },
 
         _saveRefill: async function (businessId) {
@@ -755,83 +916,76 @@
             var patientPhone = patientInfo.patientPhone || '';
             var patientSource = patientInfo.patientSource || 'registered';
             var condition = (document.getElementById('mr-condition')?.value || '').trim();
-            var medication = (document.getElementById('mr-medication')?.value || '').trim();
-            var dosage = (document.getElementById('mr-dosage')?.value || '').trim();
-            var quantity = parseInt(document.getElementById('mr-quantity')?.value) || 0;
-            var frequency = document.getElementById('mr-frequency')?.value || 'Monthly';
-            var lastRefillDate = document.getElementById('mr-last-refill')?.value || '';
-            var nextRefillDate = document.getElementById('mr-next-refill')?.value || '';
-            var reminderDays = parseInt(document.getElementById('mr-reminder-days')?.value) || 3;
-            var doctor = (document.getElementById('mr-doctor')?.value || '').trim();
-            var notes = (document.getElementById('mr-notes')?.value || '').trim();
+            var medResult = this._getMedicationRowsForSave();
 
-            if (!patientName || !condition || !medication || !dosage || !lastRefillDate) {
-                this.showToast('Please fill all required fields', 'error');
+            if (medResult.error) {
+                this.showToast(medResult.error, 'error');
                 return;
             }
 
-            if (!nextRefillDate) {
-                nextRefillDate = this.calcNextRefill(lastRefillDate, frequency);
+            if (!patientName || !condition) {
+                this.showToast('Please fill all required patient and condition fields', 'error');
+                return;
             }
 
-            var refillId = this.generateId();
             var btn = document.getElementById('mr-save-btn');
             if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...'; }
 
-            var data = {
-                refillId: refillId,
-                patientId: patientId,
-                patientName: patientName,
-                patientPhone: patientPhone,
-                patientSource: patientSource,
-                condition: condition,
-                medication: medication,
-                dosage: dosage,
-                quantityPerRefill: quantity,
-                frequency: frequency,
-                lastRefillDate: lastRefillDate,
-                nextRefillDate: nextRefillDate,
-                reminderDays: reminderDays,
-                doctor: doctor,
-                notes: notes,
-                status: 'Active',
-                refillCount: 0,
-                createdBy: this.getCurrentUser(),
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString()
-            };
-
             try {
                 var ref = PharmaFlow.getBusinessCollection(businessId, 'medication_refills');
-                await ref.doc(refillId).set(data);
+                var batch = window.db.batch();
+                var createdAt = new Date().toISOString();
+                var createdBy = this.getCurrentUser();
+                var created = medResult.medications.map(function (med) {
+                    var refillId = MedicationRefill.generateId();
+                    var data = Object.assign({
+                        refillId: refillId,
+                        patientId: patientId,
+                        patientName: patientName,
+                        patientPhone: patientPhone,
+                        patientSource: patientSource,
+                        condition: condition,
+                        status: 'Active',
+                        refillCount: 0,
+                        createdBy: createdBy,
+                        createdAt: createdAt,
+                        updatedAt: createdAt
+                    }, med);
+                    batch.set(ref.doc(refillId), data);
+                    return data;
+                });
+                await batch.commit();
 
                 // Log activity
                 if (PharmaFlow.ActivityLog) {
                     PharmaFlow.ActivityLog.log({
-                        title: 'Refill Schedule Created',
-                        description: 'Scheduled ' + medication + ' (' + dosage + ') for ' + patientName + ' — ' + frequency,
+                        title: created.length > 1 ? 'Refill Schedules Created' : 'Refill Schedule Created',
+                        description: 'Scheduled ' + created.length + ' refill medication' + (created.length !== 1 ? 's' : '') + ' for ' + patientName,
                         category: 'Refill',
                         status: 'COMPLETED',
-                        metadata: { refillId: refillId, patientId: patientId, medication: medication, frequency: frequency }
+                        metadata: {
+                            patientId: patientId,
+                            patientName: patientName,
+                            refillIds: created.map(function (x) { return x.refillId; }),
+                            medications: created.map(function (x) { return x.medication; })
+                        }
                     });
                 }
 
-                this.showToast('Refill schedule saved for ' + patientName + '!');
+                this.showToast(created.length + ' refill schedule' + (created.length !== 1 ? 's' : '') + ' saved for ' + patientName + '!');
                 document.getElementById('mr-add-form')?.reset();
                 this._clearAddPatientSelection();
                 this._setAddPatientMode('registered');
-                var lastEl = document.getElementById('mr-last-refill');
-                var nextEl = document.getElementById('mr-next-refill');
-                var freqEl = document.getElementById('mr-frequency');
-                if (lastEl) lastEl.value = this.toISODate(new Date());
-                if (nextEl && lastEl && freqEl) {
-                    nextEl.value = this.calcNextRefill(lastEl.value, freqEl.value);
+                var list = document.getElementById('mr-medication-list');
+                if (list) {
+                    list.innerHTML = this._renderMedicationRow(0, true);
+                    this._bindMedicationRows();
                 }
             } catch (err) {
                 console.error('Save refill error:', err);
                 this.showToast('Failed to save: ' + err.message, 'error');
             } finally {
-                if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-save"></i> Save Refill Schedule'; }
+                if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-save"></i> Save Refill Schedule(s)'; }
             }
         },
 
@@ -1104,6 +1258,9 @@
             var urgency = this.getRefillUrgency(r.nextRefillDate);
             var urgencyLabel = urgency === 'overdue' ? 'OVERDUE' : urgency === 'urgent' ? 'URGENT' : urgency === 'upcoming' ? 'UPCOMING' : 'SCHEDULED';
             var urgencyClass = urgency === 'overdue' ? 'mr-badge--danger' : urgency === 'urgent' ? 'mr-badge--warning' : urgency === 'upcoming' ? 'mr-badge--info' : 'mr-badge--muted';
+            var reminderMessage = this.buildReminderMessage(r, { overdue: urgency === 'overdue' });
+            var phoneText = r.patientPhone ? this.escapeHtml(r.patientPhone) : '—';
+            var phoneHref = r.patientPhone ? 'tel:+' + this.normalizePhoneForMessage(r.patientPhone) : '#';
 
             var existing = document.getElementById('mr-view-modal');
             if (existing) existing.remove();
@@ -1118,9 +1275,18 @@
                         <button class="mr-modal-close" id="mr-view-close"><i class="fas fa-times"></i></button>
                     </div>
                     <div class="mr-modal-body">
+                        <div class="mr-view-contact">
+                            <div class="mr-view-contact-icon"><i class="fas fa-user"></i></div>
+                            <div class="mr-view-contact-main">
+                                <span>Client</span>
+                                <strong>${self.escapeHtml(r.patientName || 'Unknown')}</strong>
+                                ${r.patientPhone ? '<a href="' + phoneHref + '"><i class="fas fa-phone"></i> ' + phoneText + '</a>' : '<em><i class="fas fa-phone-slash"></i> No phone number</em>'}
+                            </div>
+                            <span class="mr-badge ${urgencyClass}">${urgencyLabel}</span>
+                        </div>
                         <div class="mr-detail-grid">
                             <div class="mr-detail-item"><label>Refill ID</label><span>${self.escapeHtml(r.refillId || r.id)}</span></div>
-                            <div class="mr-detail-item"><label>Patient</label><span>${self.escapeHtml(r.patientName || 'Unknown')}</span></div>
+                            <div class="mr-detail-item"><label>Contact Phone</label><span>${phoneText}</span></div>
                             <div class="mr-detail-item"><label>Condition</label><span>${self.escapeHtml(r.condition || '—')}</span></div>
                             <div class="mr-detail-item"><label>Medication</label><span>${self.escapeHtml(r.medication)}</span></div>
                             <div class="mr-detail-item"><label>Dosage</label><span>${self.escapeHtml(r.dosage)}</span></div>
@@ -1135,6 +1301,24 @@
                             <div class="mr-detail-item"><label>Created</label><span>${self.formatDate(r.createdAt)} by ${self.escapeHtml(r.createdBy || '—')}</span></div>
                         </div>
                         ${r.notes ? '<div class="mr-detail-notes"><label>Notes</label><p>' + self.escapeHtml(r.notes) + '</p></div>' : ''}
+                        <div class="mr-reminder-compose">
+                            <div class="mr-reminder-compose-head">
+                                <div>
+                                    <span>Message</span>
+                                    <strong>Reminder to client</strong>
+                                </div>
+                                <i class="fas fa-comment-medical"></i>
+                            </div>
+                            <textarea id="mr-reminder-message" class="mr-input mr-textarea" rows="4">${self.escapeHtml(reminderMessage)}</textarea>
+                            <div class="mr-reminder-compose-actions">
+                                <button type="button" class="mr-btn mr-btn--success" id="mr-send-whatsapp">
+                                    <i class="fab fa-whatsapp"></i> Send WhatsApp
+                                </button>
+                                <button type="button" class="mr-btn mr-btn--outline" id="mr-send-sms">
+                                    <i class="fas fa-sms"></i> SMS Draft
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             `;
@@ -1142,6 +1326,14 @@
             document.body.appendChild(modal);
             modal.querySelector('#mr-view-close').addEventListener('click', function () { modal.remove(); });
             modal.addEventListener('click', function (e) { if (e.target === modal) modal.remove(); });
+            modal.querySelector('#mr-send-whatsapp')?.addEventListener('click', function () {
+                var message = (document.getElementById('mr-reminder-message')?.value || '').trim();
+                self.openWhatsAppReminder(r, message);
+            });
+            modal.querySelector('#mr-send-sms')?.addEventListener('click', function () {
+                var message = (document.getElementById('mr-reminder-message')?.value || '').trim();
+                self.openSmsReminder(r, message);
+            });
         },
 
         /* ── Edit Modal ── */
@@ -1286,6 +1478,38 @@
             });
         },
 
+        _renderReminderActions: function (refill, includeComplete) {
+            var id = this.escapeHtml(refill.id || '');
+            return '<div class="mr-reminder-actions">' +
+                (includeComplete ? '<button class="mr-btn mr-btn--sm mr-btn--success" data-reminder-action="complete" data-id="' + id + '"><i class="fas fa-check"></i> Complete Refill</button>' : '') +
+                '<button class="mr-btn mr-btn--sm mr-btn--outline mr-btn--whatsapp" data-reminder-action="whatsapp" data-id="' + id + '"><i class="fab fa-whatsapp"></i> WhatsApp</button>' +
+                '<button class="mr-btn mr-btn--sm mr-btn--outline" data-reminder-action="sms" data-id="' + id + '"><i class="fas fa-sms"></i> SMS</button>' +
+            '</div>';
+        },
+
+        _bindReminderActions: function (container) {
+            if (!container) return;
+            var self = this;
+            container.querySelectorAll('[data-reminder-action]').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    var refill = mrAllRefills.find(function (x) { return x.id === btn.dataset.id; });
+                    if (!refill) return;
+                    var action = btn.dataset.reminderAction;
+                    if (action === 'complete') self._completeRefill(refill.id);
+                    if (action === 'whatsapp') {
+                        self.openWhatsAppReminder(refill, self.buildReminderMessage(refill, {
+                            overdue: self.getRefillUrgency(refill.nextRefillDate) === 'overdue'
+                        }));
+                    }
+                    if (action === 'sms') {
+                        self.openSmsReminder(refill, self.buildReminderMessage(refill, {
+                            overdue: self.getRefillUrgency(refill.nextRefillDate) === 'overdue'
+                        }));
+                    }
+                });
+            });
+        },
+
         /* ══════════════════════════════════════════
          * 4) REFILL REMINDERS
          * ══════════════════════════════════════════ */
@@ -1389,28 +1613,12 @@
                                 '<span><i class="fas fa-calendar"></i> Due: ' + self.formatDate(r.nextRefillDate) + '</span>' +
                                 '<span><i class="fas fa-repeat"></i> ' + self.escapeHtml(r.frequency) + '</span>' +
                             '</div>' +
-                            '<div class="mr-reminder-actions">' +
-                                '<button class="mr-btn mr-btn--sm mr-btn--success" data-action="complete" data-id="' + r.id + '"><i class="fas fa-check"></i> Complete Refill</button>' +
-                                (r.patientName ? '<button class="mr-btn mr-btn--sm mr-btn--outline" data-action="contact" data-phone="' + self.escapeHtml(r.patientPhone || '') + '" data-name="' + self.escapeHtml(r.patientName) + '"><i class="fas fa-phone"></i> Contact</button>' : '') +
-                            '</div>' +
+                            self._renderReminderActions(r, true) +
                         '</div>';
                     });
                     html += '</div>';
                     overdueSection.innerHTML = html;
-
-                    overdueSection.querySelectorAll('[data-action="complete"]').forEach(function (btn) {
-                        btn.addEventListener('click', function () { self._completeRefill(btn.dataset.id); });
-                    });
-                    overdueSection.querySelectorAll('[data-action="contact"]').forEach(function (btn) {
-                        btn.addEventListener('click', function () {
-                            var phone = btn.dataset.phone;
-                            if (phone) {
-                                self.showToast('Patient phone: ' + phone);
-                            } else {
-                                self.showToast('No phone number on file', 'error');
-                            }
-                        });
-                    });
+                    self._bindReminderActions(overdueSection);
                 }
             }
 
@@ -1438,10 +1646,12 @@
                                 '<span><i class="fas fa-repeat"></i> ' + self.escapeHtml(r.frequency) + '</span>' +
                                 (r.doctor ? '<span><i class="fas fa-user-md"></i> ' + self.escapeHtml(r.doctor) + '</span>' : '') +
                             '</div>' +
+                            self._renderReminderActions(r, false) +
                         '</div>';
                     });
                     html += '</div>';
                     upcomingSection.innerHTML = html;
+                    self._bindReminderActions(upcomingSection);
                 }
             }
         }
