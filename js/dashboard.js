@@ -886,6 +886,10 @@
                         const payBtn = (a.showPayButton && a.type === 'payment_due')
                             ? `<button class="dash-alert-paynow" data-alert-id="${this.escapeHtml(a.id)}"><i class="fas fa-credit-card"></i> Pay Now</button>`
                             : '';
+                        const canUserDismiss = a.allowUserDismiss !== false;
+                        const dismissControl = canUserDismiss
+                            ? `<button class="dash-alert-dismiss" data-alert-id="${this.escapeHtml(a.id)}" title="Dismiss"><i class="fas fa-times"></i></button>`
+                            : `<span class="dash-alert-locked" title="Only an admin can dismiss this alert"><i class="fas fa-lock"></i> Admin only</span>`;
                         return `
                             <div class="dash-alert-banner-item">
                                 <div class="dash-alert-banner-msg">
@@ -894,7 +898,7 @@
                                 </div>
                                 <div style="display:flex;gap:8px;align-items:center">
                                     ${payBtn}
-                                    <button class="dash-alert-dismiss" data-alert-id="${this.escapeHtml(a.id)}" title="Dismiss"><i class="fas fa-times"></i></button>
+                                    ${dismissControl}
                                 </div>
                             </div>
                         `;

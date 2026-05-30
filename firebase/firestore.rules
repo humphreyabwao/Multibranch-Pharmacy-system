@@ -298,8 +298,15 @@ service cloud.firestore {
       allow read: if isAuthenticated();
       // Admins+ can create and delete alerts
       allow create, delete: if isAdminOrAbove();
-      // Any authenticated user can update (dismiss/acknowledge from dashboard)
-      allow update: if isAuthenticated();
+      // Admins+ can update alert state; branch users can only dismiss alerts explicitly marked dismissible.
+      allow update: if isAdminOrAbove()
+        || (
+          isAuthenticated()
+          && belongsToBusiness(resource.data.businessId)
+          && resource.data.allowUserDismiss != false
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+          && request.resource.data.status == 'dismissed'
+        );
     }
 
     // ===== CENTRAL SUPPORT TICKET COPIES =====

@@ -22,9 +22,11 @@
     let analyticsListener = null;
     let alertsListener = null;
     let ticketsListener = null;
+    let moduleTagsListener = null;
     let allUsers = [];
     let allBusinesses = [];
     let allTickets = [];
+    let moduleTagsState = {};
     let bizNameCache = {};
     let filteredUsers = [];
     let filteredBusinesses = [];
@@ -48,6 +50,38 @@
             section: mod.section || '',
             children: (mod.children || []).map(c => ({ id: c.id, label: c.label, icon: c.icon }))
         }));
+    }
+
+    function buildModuleTagRows() {
+        const navConfig = PharmaFlow.NAV_CONFIG || [];
+        const settingsNav = PharmaFlow.SETTINGS_NAV ? [PharmaFlow.SETTINGS_NAV] : [];
+        const rows = [];
+
+        navConfig.concat(settingsNav).forEach(mod => {
+            rows.push({
+                key: mod.id,
+                label: mod.label,
+                icon: mod.icon,
+                section: mod.section || 'General',
+                parentLabel: '',
+                type: 'Module',
+                level: 0
+            });
+
+            (mod.children || []).forEach(child => {
+                rows.push({
+                    key: mod.id + ':' + child.id,
+                    label: child.label,
+                    icon: child.icon,
+                    section: mod.section || 'General',
+                    parentLabel: mod.label,
+                    type: 'Sub-module',
+                    level: 1
+                });
+            });
+        });
+
+        return rows;
     }
 
     const AdminPanel = {
@@ -116,9 +150,11 @@
             if (analyticsListener) { analyticsListener(); analyticsListener = null; }
             if (alertsListener) { alertsListener(); alertsListener = null; }
             if (ticketsListener) { ticketsListener(); ticketsListener = null; }
+            if (moduleTagsListener) { moduleTagsListener(); moduleTagsListener = null; }
             allUsers = [];
             allBusinesses = [];
             allTickets = [];
+            moduleTagsState = {};
             filteredUsers = [];
             filteredBusinesses = [];
             filteredTickets = [];
@@ -2500,6 +2536,16 @@
                                             <input type="number" id="fal-auto-amount" placeholder="e.g., 5000" min="0">
                                         </div>
                                     </div>
+                                    <div class="fal-dismiss-setting fal-dismiss-setting--auto">
+                                        <label class="fal-toggle" title="Allow franchise users to dismiss automated reminders">
+                                            <input type="checkbox" id="fal-auto-user-dismiss" checked>
+                                            <span class="fal-toggle-slider"></span>
+                                        </label>
+                                        <div>
+                                            <strong>Allow users to dismiss automated reminders</strong>
+                                            <p>Turn this off when monthly reminders should stay visible until a superadmin or admin clears them.</p>
+                                        </div>
+                                    </div>
                                 </div>
                                 <div class="fal-auto-actions">
                                     <button class="dda-btn dda-btn--primary" id="fal-save-auto"><i class="fas fa-save"></i> Save Auto-Reminder Settings</button>
@@ -2538,12 +2584,13 @@
                                             <th>Message</th>
                                             <th>Amount</th>
                                             <th>Status</th>
+                                            <th>Dismissal</th>
                                             <th>Created</th>
                                             <th>Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody id="fal-alerts-tbody">
-                                        <tr><td colspan="8" class="dda-loading"><i class="fas fa-spinner fa-spin"></i> Loading alerts...</td></tr>
+                                        <tr><td colspan="9" class="dda-loading"><i class="fas fa-spinner fa-spin"></i> Loading alerts...</td></tr>
                                     </tbody>
                                 </table>
                             </div>
@@ -2597,6 +2644,16 @@
                                     <span>Show "Pay Now" button on dashboard</span>
                                 </label>
                             </div>
+                            <div class="fal-dismiss-setting">
+                                <label class="fal-toggle" title="Allow franchise users to dismiss this alert">
+                                    <input type="checkbox" id="fal-alert-user-dismiss" checked>
+                                    <span class="fal-toggle-slider"></span>
+                                </label>
+                                <div>
+                                    <strong>Allow users to dismiss this alert</strong>
+                                    <p>Turn this off for important alerts that should stay visible until a superadmin or admin dismisses them.</p>
+                                </div>
+                            </div>
                             <input type="hidden" id="fal-alert-edit-id">
                         </div>
                         <div class="dda-modal-footer">
@@ -2640,6 +2697,7 @@
             document.getElementById('fal-alert-amount').value = isEdit ? (alert.amount || '') : '';
             document.getElementById('fal-alert-due-date').value = isEdit ? (alert.dueDate || '') : '';
             document.getElementById('fal-alert-show-pay').checked = isEdit ? (alert.showPayButton !== false) : true;
+            document.getElementById('fal-alert-user-dismiss').checked = isEdit ? (alert.allowUserDismiss !== false) : true;
 
             // Load franchises into dropdown
             const select = document.getElementById('fal-target-biz');
@@ -2668,6 +2726,7 @@
             const amount = parseFloat(document.getElementById('fal-alert-amount')?.value) || 0;
             const dueDate = document.getElementById('fal-alert-due-date')?.value || '';
             const showPayButton = document.getElementById('fal-alert-show-pay')?.checked || false;
+            const allowUserDismiss = document.getElementById('fal-alert-user-dismiss')?.checked !== false;
             const editId = document.getElementById('fal-alert-edit-id')?.value;
 
             if (!message) { this.showToast('Please enter a message.', 'error'); return; }
@@ -2679,7 +2738,7 @@
                 if (editId) {
                     // Update existing alert
                     await window.db.collection('franchise_alerts').doc(editId).update({
-                        type, message, amount, dueDate, showPayButton,
+                        type, message, amount, dueDate, showPayButton, allowUserDismiss,
                         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
                     });
                     this.showToast('Alert updated!');
@@ -2693,7 +2752,7 @@
                         batch.set(ref, {
                             businessId: biz.id,
                             businessName: biz.data().name || biz.id,
-                            type, message, amount, dueDate, showPayButton,
+                            type, message, amount, dueDate, showPayButton, allowUserDismiss,
                             status: 'active',
                             source: 'manual',
                             createdAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -2708,7 +2767,7 @@
                     await window.db.collection('franchise_alerts').add({
                         businessId: targetBiz,
                         businessName: bizDoc.exists ? (bizDoc.data().name || targetBiz) : targetBiz,
-                        type, message, amount, dueDate, showPayButton,
+                        type, message, amount, dueDate, showPayButton, allowUserDismiss,
                         status: 'active',
                         source: 'manual',
                         createdAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -2741,6 +2800,261 @@
                 }, err => {
                     console.error('Alerts subscribe error:', err);
                 });
+        },
+
+        // ═══════════════════════════════════════════════
+        //  MODULE TAGS
+        // ═══════════════════════════════════════════════
+
+        renderModuleTags: function (container) {
+            this.cleanup();
+
+            container.innerHTML = `
+                <div class="dda-module adm-module-tags-page">
+                    <div class="page-header">
+                        <div>
+                            <h2><i class="fas fa-tag"></i> Module Tags</h2>
+                            <div class="breadcrumb">
+                                <a href="#" data-nav="dashboard">Home</a>
+                                <span>/</span><span>Admin Panel</span>
+                                <span>/</span><span>Module Tags</span>
+                            </div>
+                        </div>
+                        <div class="adm-module-tag-actions">
+                            <button class="dda-btn dda-btn--cancel" id="adm-module-tags-clear">
+                                <i class="fas fa-eraser"></i> Clear All
+                            </button>
+                            <button class="dda-btn dda-btn--primary" id="adm-module-tags-save">
+                                <i class="fas fa-save"></i> Save Tags
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="adm-module-tags-hero">
+                        <div class="adm-module-tags-hero__icon">
+                            <i class="fas fa-tags"></i>
+                        </div>
+                        <div class="adm-module-tags-hero__copy">
+                            <span>Sidebar release labels</span>
+                            <h3>Keep users aware of what is new and what changed.</h3>
+                            <p>Choose a short-lived label for any module or sub-module. The selected tag appears beside that item in the sidebar for signed-in users.</p>
+                        </div>
+                        <div class="adm-module-tags-preview" aria-label="Tag preview">
+                            <span class="adm-module-tag-badge adm-module-tag-badge--new">New</span>
+                            <span class="adm-module-tag-badge adm-module-tag-badge--updated">Updated</span>
+                            <span class="adm-module-tag-badge adm-module-tag-badge--none">No tag</span>
+                        </div>
+                    </div>
+
+                    <div class="dda-stats adm-module-tags-stats">
+                        <div class="dda-stat-card">
+                            <div class="dda-stat-icon"><i class="fas fa-layer-group"></i></div>
+                            <div class="dda-stat-info">
+                                <span class="dda-stat-value" id="adm-tags-total">0</span>
+                                <span class="dda-stat-label">Taggable Items</span>
+                            </div>
+                        </div>
+                        <div class="dda-stat-card">
+                            <div class="dda-stat-icon dda-stat-icon--value"><i class="fas fa-star"></i></div>
+                            <div class="dda-stat-info">
+                                <span class="dda-stat-value" id="adm-tags-new">0</span>
+                                <span class="dda-stat-label">New Tags</span>
+                            </div>
+                        </div>
+                        <div class="dda-stat-card">
+                            <div class="dda-stat-icon" style="background:#dbeafe;color:#2563eb"><i class="fas fa-rotate"></i></div>
+                            <div class="dda-stat-info">
+                                <span class="dda-stat-value" id="adm-tags-updated">0</span>
+                                <span class="dda-stat-label">Updated Tags</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="dda-toolbar">
+                        <div class="dda-search-box">
+                            <i class="fas fa-search"></i>
+                            <input type="text" id="adm-module-tag-search" placeholder="Search modules and sub-modules...">
+                        </div>
+                        <div class="dda-toolbar-actions">
+                            <select id="adm-module-tag-filter">
+                                <option value="">All Tags</option>
+                                <option value="new">New</option>
+                                <option value="updated">Updated</option>
+                                <option value="none">No Tag</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="dda-table-wrap">
+                        <table class="dda-table adm-module-tags-table">
+                            <thead>
+                                <tr>
+                                    <th>Module</th>
+                                    <th>Type</th>
+                                    <th>Current Tag</th>
+                                    <th>Set Tag</th>
+                                </tr>
+                            </thead>
+                            <tbody id="adm-module-tags-tbody">
+                                <tr><td colspan="4" class="dda-loading"><i class="fas fa-spinner fa-spin"></i> Loading module tags...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+
+            const dashLink = container.querySelector('[data-nav="dashboard"]');
+            if (dashLink) dashLink.addEventListener('click', (e) => { e.preventDefault(); PharmaFlow.Sidebar.setActive('dashboard', null); });
+
+            document.getElementById('adm-module-tag-search')?.addEventListener('input', () => this.renderModuleTagsTable());
+            document.getElementById('adm-module-tag-filter')?.addEventListener('change', () => this.renderModuleTagsTable());
+            document.getElementById('adm-module-tags-save')?.addEventListener('click', () => this.saveModuleTags());
+            document.getElementById('adm-module-tags-clear')?.addEventListener('click', () => this.clearModuleTags());
+
+            this.subscribeModuleTags();
+        },
+
+        subscribeModuleTags: function () {
+            if (moduleTagsListener) moduleTagsListener();
+
+            moduleTagsListener = window.db.collection('system_config').doc('module_tags')
+                .onSnapshot(doc => {
+                    const data = doc.exists ? doc.data() : {};
+                    moduleTagsState = data.tags || {};
+                    this.renderModuleTagStats();
+                    this.renderModuleTagsTable();
+                }, err => {
+                    console.error('Module tags subscribe error:', err);
+                    this.showToast('Failed to load module tags.', 'error');
+                });
+        },
+
+        renderModuleTagStats: function () {
+            const rows = buildModuleTagRows();
+            const values = Object.values(moduleTagsState || {});
+            const setText = (id, value) => {
+                const el = document.getElementById(id);
+                if (el) el.textContent = value;
+            };
+
+            setText('adm-tags-total', rows.length);
+            setText('adm-tags-new', values.filter(v => v === 'new').length);
+            setText('adm-tags-updated', values.filter(v => v === 'updated').length);
+        },
+
+        getModuleTagBadge: function (tag) {
+            if (tag === 'new') return '<span class="adm-module-tag-badge adm-module-tag-badge--new">New</span>';
+            if (tag === 'updated') return '<span class="adm-module-tag-badge adm-module-tag-badge--updated">Updated</span>';
+            return '<span class="adm-module-tag-badge adm-module-tag-badge--none">No tag</span>';
+        },
+
+        renderModuleTagsTable: function () {
+            const tbody = document.getElementById('adm-module-tags-tbody');
+            if (!tbody) return;
+
+            const query = (document.getElementById('adm-module-tag-search')?.value || '').toLowerCase();
+            const filter = document.getElementById('adm-module-tag-filter')?.value || '';
+            const rows = buildModuleTagRows().filter(row => {
+                const tag = moduleTagsState[row.key] || 'none';
+                if (filter && tag !== filter) return false;
+                if (!query) return true;
+                const haystack = (row.label + ' ' + row.parentLabel + ' ' + row.type + ' ' + row.section).toLowerCase();
+                return haystack.includes(query);
+            });
+
+            if (rows.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" class="dda-loading"><i class="fas fa-inbox"></i> No modules found</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = rows.map(row => {
+                const tag = moduleTagsState[row.key] || 'none';
+                return `
+                    <tr>
+                        <td>
+                            <div class="adm-module-tag-cell ${row.level ? 'adm-module-tag-cell--child' : ''}">
+                                <i class="${row.icon || 'fas fa-circle'}"></i>
+                                <div>
+                                    <strong>${this.escapeHtml(row.label)}</strong>
+                                    ${row.parentLabel ? '<small>' + this.escapeHtml(row.parentLabel) + '</small>' : '<small>' + this.escapeHtml(row.section) + '</small>'}
+                                </div>
+                            </div>
+                        </td>
+                        <td>${this.escapeHtml(row.type)}</td>
+                        <td data-tag-current>${this.getModuleTagBadge(tag)}</td>
+                        <td>
+                            <select class="adm-module-tag-select adm-module-tag-select--${tag}" data-module-key="${this.escapeHtml(row.key)}">
+                                <option value="none"${tag === 'none' ? ' selected' : ''}>No Tag</option>
+                                <option value="new"${tag === 'new' ? ' selected' : ''}>New</option>
+                                <option value="updated"${tag === 'updated' ? ' selected' : ''}>Updated</option>
+                            </select>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+
+            tbody.querySelectorAll('.adm-module-tag-select').forEach(select => {
+                select.addEventListener('change', () => {
+                    const key = select.dataset.moduleKey;
+                    const value = select.value;
+                    if (value === 'none') {
+                        delete moduleTagsState[key];
+                    } else {
+                        moduleTagsState[key] = value;
+                    }
+                    select.className = 'adm-module-tag-select adm-module-tag-select--' + value;
+                    const row = select.closest('tr');
+                    const badgeCell = row ? row.querySelector('[data-tag-current]') : null;
+                    if (badgeCell) badgeCell.innerHTML = this.getModuleTagBadge(value);
+                    this.renderModuleTagStats();
+                });
+            });
+        },
+
+        saveModuleTags: async function () {
+            const nextTags = {};
+
+            buildModuleTagRows().forEach(row => {
+                const select = document.querySelector('.adm-module-tag-select[data-module-key="' + row.key + '"]');
+                const value = select ? select.value : (moduleTagsState[row.key] || 'none');
+                if (value === 'new' || value === 'updated') {
+                    nextTags[row.key] = value;
+                }
+            });
+
+            const btn = document.getElementById('adm-module-tags-save');
+            if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...'; }
+
+            try {
+                await window.db.collection('system_config').doc('module_tags').set({
+                    tags: nextTags,
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    updatedBy: PharmaFlow.Auth.userProfile ? (PharmaFlow.Auth.userProfile.displayName || PharmaFlow.Auth.userProfile.email) : 'Unknown'
+                }, { merge: true });
+
+                moduleTagsState = nextTags;
+                if (PharmaFlow.Sidebar) {
+                    PharmaFlow.Sidebar._moduleTags = nextTags;
+                    PharmaFlow.Sidebar.render(PharmaFlow.Sidebar._currentRole);
+                    PharmaFlow.Sidebar.renderSettings();
+                    PharmaFlow.Sidebar.updateActiveState();
+                }
+                this.renderModuleTagStats();
+                this.renderModuleTagsTable();
+                this.showToast('Module tags saved successfully!');
+            } catch (err) {
+                console.error('Save module tags error:', err);
+                this.showToast('Failed to save module tags: ' + err.message, 'error');
+            } finally {
+                if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-save"></i> Save Tags'; }
+            }
+        },
+
+        clearModuleTags: async function () {
+            if (!(await PharmaFlow.confirm('Clear all module tags from the sidebar?', { title: 'Clear Module Tags', confirmText: 'Clear Tags', danger: true }))) return;
+            moduleTagsState = {};
+            document.querySelectorAll('.adm-module-tag-select').forEach(select => { select.value = 'none'; });
+            await this.saveModuleTags();
         },
 
         renderPricingPage: function (container) {
@@ -2887,7 +3201,7 @@
             if (!tbody) return;
 
             if (alerts.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="8" class="dda-loading"><i class="fas fa-inbox"></i> No alerts found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="9" class="dda-loading"><i class="fas fa-inbox"></i> No alerts found</td></tr>';
                 return;
             }
 
@@ -2903,6 +3217,9 @@
 
             tbody.innerHTML = alerts.map((a, i) => {
                 const created = a.createdAt ? (a.createdAt.toDate ? a.createdAt.toDate().toLocaleDateString() : new Date(a.createdAt).toLocaleDateString()) : '—';
+                const dismissalBadge = a.allowUserDismiss === false
+                    ? '<span class="fal-dismiss-badge fal-dismiss-badge--admin"><i class="fas fa-lock"></i> Admin only</span>'
+                    : '<span class="fal-dismiss-badge fal-dismiss-badge--user"><i class="fas fa-user-check"></i> User allowed</span>';
                 return `<tr>
                     <td>${i + 1}</td>
                     <td><strong>${this.escapeHtml(a.businessName || '—')}</strong></td>
@@ -2910,6 +3227,7 @@
                     <td style="max-width:250px;white-space:normal">${this.escapeHtml(a.message || '—')}</td>
                     <td>${a.amount && a.type === 'payment_due' ? getCurrency() + ' ' + Number(a.amount).toLocaleString() : '—'}</td>
                     <td>${statusBadges[a.status] || '<span class="ord-status-badge">' + (a.status || 'unknown') + '</span>'}</td>
+                    <td>${dismissalBadge}</td>
                     <td>${created}</td>
                     <td>
                         <div class="adm-actions-cell">
@@ -2969,11 +3287,13 @@
                     const typeEl = document.getElementById('fal-auto-type');
                     const msgEl = document.getElementById('fal-auto-message');
                     const amtEl = document.getElementById('fal-auto-amount');
+                    const dismissEl = document.getElementById('fal-auto-user-dismiss');
                     if (enabledEl) enabledEl.checked = cfg.enabled === true;
                     if (dayEl) dayEl.value = cfg.reminderDay || 5;
                     if (typeEl) typeEl.value = cfg.reminderType || 'payment_due';
                     if (msgEl && cfg.message) msgEl.value = cfg.message;
                     if (amtEl && cfg.amount) amtEl.value = cfg.amount;
+                    if (dismissEl) dismissEl.checked = cfg.allowUserDismiss !== false;
                 }
             } catch (err) {
                 console.error('Load auto-reminder config error:', err);
@@ -2986,10 +3306,11 @@
             const reminderType = document.getElementById('fal-auto-type')?.value || 'payment_due';
             const message = document.getElementById('fal-auto-message')?.value?.trim() || 'Scheduled reminder from administration.';
             const amount = parseFloat(document.getElementById('fal-auto-amount')?.value) || 0;
+            const allowUserDismiss = document.getElementById('fal-auto-user-dismiss')?.checked !== false;
 
             try {
                 await window.db.collection('system_config').doc('auto_reminders').set({
-                    enabled, reminderDay, reminderType, message, amount,
+                    enabled, reminderDay, reminderType, message, amount, allowUserDismiss,
                     updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
                     updatedBy: PharmaFlow.Auth.userProfile ? (PharmaFlow.Auth.userProfile.displayName || PharmaFlow.Auth.userProfile.email) : 'System'
                 }, { merge: true });
@@ -3005,6 +3326,7 @@
             const reminderType = document.getElementById('fal-auto-type')?.value || 'payment_due';
             const message = document.getElementById('fal-auto-message')?.value?.trim() || 'Scheduled reminder from administration.';
             const amount = parseFloat(document.getElementById('fal-auto-amount')?.value) || 0;
+            const allowUserDismiss = document.getElementById('fal-auto-user-dismiss')?.checked !== false;
             const isPayment = reminderType === 'payment_due';
 
             try {
@@ -3021,6 +3343,7 @@
                         amount: isPayment ? amount : 0,
                         dueDate: '',
                         showPayButton: isPayment,
+                        allowUserDismiss: allowUserDismiss,
                         status: 'active',
                         source: 'auto',
                         createdAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -3053,6 +3376,7 @@
                 // Send reminders
                 const rType = cfg.reminderType || 'payment_due';
                 const isPayment = rType === 'payment_due';
+                const allowUserDismiss = cfg.allowUserDismiss !== false;
                 const bizSnap = await window.db.collection('businesses').get();
                 const activeBiz = bizSnap.docs.filter(d => d.data().isActive !== false);
                 const batch = window.db.batch();
@@ -3066,6 +3390,7 @@
                         amount: isPayment ? (cfg.amount || 0) : 0,
                         dueDate: '',
                         showPayButton: isPayment,
+                        allowUserDismiss: allowUserDismiss,
                         status: 'active',
                         source: 'auto',
                         createdAt: firebase.firestore.FieldValue.serverTimestamp(),

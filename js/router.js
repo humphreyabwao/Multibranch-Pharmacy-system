@@ -416,6 +416,10 @@
                     PharmaFlow.AdminPanel.renderTickets(contentBody);
                     return;
                 }
+                if (subId === 'module-tags') {
+                    PharmaFlow.AdminPanel.renderModuleTags(contentBody);
+                    return;
+                }
             }
 
             const pageName = subModule ? subModule.label : moduleConfig.label;

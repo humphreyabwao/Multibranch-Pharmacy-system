@@ -194,6 +194,7 @@
                 { id: 'admin-analytics', label: 'Analytics', icon: 'fas fa-chart-pie', roles: ['superadmin'] },
                 { id: 'franchise-alerts', label: 'Franchise Alerts', icon: 'fas fa-bell-concierge', roles: ['superadmin'] },
                 { id: 'admin-tickets', label: 'Tickets', icon: 'fas fa-ticket', roles: ['superadmin'] },
+                { id: 'module-tags', label: 'Module Tags', icon: 'fas fa-tag', roles: ['superadmin'] },
                 { id: 'pricing-page', label: 'Pricing Page', icon: 'fas fa-tags', roles: ['superadmin'] }
             ]
         }
@@ -220,6 +221,8 @@
         expandedModules: new Set(),
         isCollapsed: false,
         _currentRole: null,
+        _moduleTags: {},
+        _moduleTagsListener: null,
 
         /**
          * Initialize sidebar
@@ -276,6 +279,7 @@
                 }
 
                 const hasChildren = visibleChildren.length > 0;
+                const moduleTagHtml = this.getModuleTagHtml(item.id);
 
                 // Nav item
                 const navItem = document.createElement('div');
@@ -284,6 +288,7 @@
                 navItem.innerHTML = `
                     <i class="${item.icon}"></i>
                     <span class="nav-item-text">${item.label}</span>
+                    ${moduleTagHtml}
                     ${hasChildren ? '<i class="fas fa-chevron-right nav-item-arrow' + (this.expandedModules.has(item.id) ? ' rotated' : '') + '"></i>' : ''}
                 `;
 
@@ -306,6 +311,7 @@
                     subNav.dataset.parentId = item.id;
 
                     visibleChildren.forEach(child => {
+                        const childTagHtml = this.getModuleTagHtml(item.id + ':' + child.id);
                         const subItem = document.createElement('div');
                         subItem.className = 'nav-item' + (this.activeSubModuleId === child.id ? ' active' : '');
                         subItem.dataset.moduleId = item.id;
@@ -313,6 +319,7 @@
                         subItem.innerHTML = `
                             <i class="${child.icon}"></i>
                             <span class="nav-item-text">${child.label}</span>
+                            ${childTagHtml}
                         `;
 
                         subItem.addEventListener('click', (e) => {
@@ -336,6 +343,7 @@
             if (!footerNav) return;
 
             footerNav.innerHTML = '';
+            const settingsTagHtml = this.getModuleTagHtml(SETTINGS_NAV.id);
 
             const navItem = document.createElement('div');
             navItem.className = 'nav-item' + (this.activeModuleId === SETTINGS_NAV.id ? ' active' : '');
@@ -343,6 +351,7 @@
             navItem.innerHTML = `
                 <i class="${SETTINGS_NAV.icon}"></i>
                 <span class="nav-item-text">${SETTINGS_NAV.label}</span>
+                ${settingsTagHtml}
             `;
 
             navItem.addEventListener('click', () => {
@@ -481,6 +490,32 @@
             return NAV_CONFIG;
         },
 
+        getModuleTag: function (key) {
+            return this._moduleTags && this._moduleTags[key] ? this._moduleTags[key] : '';
+        },
+
+        getModuleTagHtml: function (key) {
+            const tag = this.getModuleTag(key);
+            if (tag !== 'new' && tag !== 'updated') return '';
+            const label = tag === 'new' ? 'New' : 'Updated';
+            return '<span class="nav-module-tag nav-module-tag--' + tag + '">' + label + '</span>';
+        },
+
+        subscribeModuleTags: function () {
+            if (this._moduleTagsListener || !window.db) return;
+
+            this._moduleTagsListener = window.db.collection('system_config').doc('module_tags')
+                .onSnapshot(doc => {
+                    const data = doc.exists ? doc.data() : {};
+                    this._moduleTags = data.tags || {};
+                    this.render(this._currentRole);
+                    this.renderSettings();
+                    this.updateActiveState();
+                }, err => {
+                    console.warn('Module tags listener error:', err);
+                });
+        },
+
         /**
          * Save sidebar state to localStorage
          */
@@ -539,6 +574,7 @@
          */
         updateForRole: function (role) {
             this._currentRole = role;
+            this.subscribeModuleTags();
 
             this.render(role);
             this.renderSettings();
