@@ -2022,6 +2022,15 @@ input, select, textarea {
     gap: 12px;
 }
 
+.page-header-right .inv-refresh-btn {
+    min-width: 104px;
+}
+
+.inv-refresh-btn.is-loading {
+    pointer-events: none;
+    opacity: 0.78;
+}
+
 /* Quick Access Grid — solid-colored dashboard actions */
 .quick-access-grid {
     display: grid;
@@ -2301,6 +2310,27 @@ input, select, textarea {
 /* ===================================================
    INVENTORY MODULE STYLES
    =================================================== */
+
+.inv-live-sync {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 34px;
+    margin: -6px 0 18px;
+    padding: 7px 12px;
+    border: 1px solid rgba(16, 185, 129, 0.22);
+    border-radius: var(--radius-md);
+    background: rgba(16, 185, 129, 0.08);
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    font-weight: 600;
+}
+
+.inv-live-sync .inv-live-dot {
+    width: 8px;
+    height: 8px;
+    flex: 0 0 8px;
+}
 
 /* Toolbar: search + filters */
 .inv-toolbar {

@@ -321,6 +321,9 @@
                             </div>
                         </div>
                         <div class="page-header-right">
+                            <button class="btn btn-sm btn-outline inv-refresh-btn" id="inv-refresh-btn" title="Force refresh inventory from server">
+                                <i class="fas fa-arrows-rotate"></i> Refresh
+                            </button>
                             <button class="btn btn-sm btn-outline" id="inv-export-btn">
                                 <i class="fas fa-file-export"></i> Export
                             </button>
@@ -331,6 +334,11 @@
                                 <i class="fas fa-plus"></i> Add Product
                             </button>
                         </div>
+                    </div>
+
+                    <div class="inv-live-sync" id="inv-live-sync">
+                        <span class="inv-live-dot"></span>
+                        <span id="inv-live-sync-text">Live inventory sync active</span>
                     </div>
 
                     <!-- Stats Row -->
@@ -493,6 +501,11 @@
                 exportBtn.addEventListener('click', () => this.showExportMenu(exportBtn));
             }
 
+            const refreshBtn = document.getElementById('inv-refresh-btn');
+            if (refreshBtn) {
+                refreshBtn.addEventListener('click', () => this.refreshInventoryData(businessId, { forceServer: true }));
+            }
+
             // Page size
             const pageSizeSelect = document.getElementById('inv-page-size');
             if (pageSizeSelect) {
@@ -520,6 +533,67 @@
             if (sortFilter) sortFilter.addEventListener('change', () => this.applyFilters());
         },
 
+        setRefreshState: function (state, message) {
+            const btn = document.getElementById('inv-refresh-btn');
+            const text = document.getElementById('inv-live-sync-text');
+            const icon = btn ? btn.querySelector('i') : null;
+
+            if (text && message) text.textContent = message;
+
+            if (!btn || !icon) return;
+            const isLoading = state === 'loading';
+            btn.disabled = isLoading;
+            btn.classList.toggle('is-loading', isLoading);
+            icon.className = isLoading ? 'fas fa-spinner fa-spin' : 'fas fa-arrows-rotate';
+        },
+
+        applyInventorySnapshot: function (snapshot) {
+            const products = [];
+            if (snapshot && typeof snapshot.forEach === 'function') {
+                snapshot.forEach(doc => {
+                    products.push({ id: doc.id, ...doc.data() });
+                });
+            } else if (snapshot && Array.isArray(snapshot.docs)) {
+                snapshot.docs.forEach(doc => {
+                    products.push({ id: doc.id, ...doc.data() });
+                });
+            }
+
+            allProducts = products;
+            this.updateStats();
+            this.populateCategories();
+            this.applyFilters();
+            return products.length;
+        },
+
+        refreshInventoryData: async function (businessId, options) {
+            if (!businessId) return;
+            const colRef = getBusinessCollection(businessId, 'inventory');
+            if (!colRef || typeof colRef.get !== 'function') return;
+
+            const forceServer = options && options.forceServer;
+            this.setRefreshState('loading', 'Refreshing inventory from server...');
+
+            try {
+                let snapshot;
+                try {
+                    snapshot = forceServer ? await colRef.get({ source: 'server' }) : await colRef.get();
+                } catch (err) {
+                    if (!forceServer) throw err;
+                    snapshot = await colRef.get();
+                }
+
+                const count = this.applyInventorySnapshot(snapshot);
+                const time = new Date().toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
+                this.setRefreshState('ready', 'Inventory refreshed at ' + time + ' • ' + count + ' products loaded');
+                this.showToast('Inventory refreshed.');
+            } catch (err) {
+                console.error('Inventory refresh error:', err);
+                this.setRefreshState('error', 'Refresh failed. Live sync is still active.');
+                this.showToast('Failed to refresh inventory.', 'error');
+            }
+        },
+
         subscribeToInventory: function (businessId) {
             // Clean up previous listener
             if (unsubInventory) {
@@ -535,10 +609,7 @@
                     // Use docChanges for incremental updates (much faster)
                     if (allProducts.length === 0) {
                         // First load — build array directly
-                        allProducts = [];
-                        snapshot.forEach(doc => {
-                            allProducts.push({ id: doc.id, ...doc.data() });
-                        });
+                        this.applyInventorySnapshot(snapshot);
                     } else {
                         // Incremental update
                         snapshot.docChanges().forEach(change => {
@@ -553,10 +624,15 @@
                                 allProducts = allProducts.filter(p => p.id !== change.doc.id);
                             }
                         });
+                        this.updateStats();
+                        this.populateCategories();
+                        this.applyFilters();
                     }
-                    this.updateStats();
-                    this.populateCategories();
-                    this.applyFilters();
+                    const text = document.getElementById('inv-live-sync-text');
+                    if (text) {
+                        const time = new Date().toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
+                        text.textContent = 'Live inventory sync active • updated ' + time;
+                    }
                 },
                 (err) => {
                     console.error('Inventory listener error:', err);

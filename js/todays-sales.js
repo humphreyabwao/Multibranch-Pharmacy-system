@@ -343,56 +343,52 @@
         },
 
         cancelSale: async function (saleId) {
-            if (!(await PharmaFlow.confirm('Cancel this sale? It will be excluded from revenue calculations.', { title: 'Cancel Sale', confirmText: 'Yes, Cancel', danger: true }))) return;
+            if (!(await PharmaFlow.confirm('Cancel this sale? Sold item quantities will be returned to inventory and it will be excluded from revenue calculations.', { title: 'Cancel Sale', confirmText: 'Yes, Cancel', danger: true }))) return;
             const businessId = this.getBusinessId();
             if (!businessId) return;
             try {
-                const saleDoc = todaySalesData.find(s => s.id === saleId);
-                await getBusinessCollection(businessId, 'sales').doc(saleId).update({
-                    status: 'cancelled',
-                    previousStatus: saleDoc?.status || 'completed',
-                    cancelledBy: PharmaFlow.Auth?.userProfile?.displayName || PharmaFlow.Auth?.userProfile?.email || 'Unknown',
-                    cancelledAt: firebase.firestore.FieldValue.serverTimestamp()
-                });
-                this.showToast('Sale cancelled.');
+                if (!PharmaFlow.AllSales || !PharmaFlow.AllSales.updateSaleInventoryStatus) {
+                    throw new Error('Inventory adjustment service is not ready. Please refresh and try again.');
+                }
+                const result = await PharmaFlow.AllSales.updateSaleInventoryStatus(businessId, saleId, 'cancel');
+                this.showToast(result?.inventoryAdjusted ? 'Sale cancelled and items returned to inventory.' : 'Sale cancelled.');
                 if (PharmaFlow.ActivityLog) {
                     PharmaFlow.ActivityLog.log({
                         title: 'Sale Cancelled',
-                        description: 'Sale ' + saleId + ' cancelled',
+                        description: 'Sale ' + saleId + (result?.inventoryAdjusted ? ' cancelled and inventory restored' : ' cancelled'),
                         category: 'Pharmacy',
                         status: 'WARNING'
                     });
                 }
             } catch (err) {
                 console.error('Cancel sale error:', err);
-                this.showToast('Failed to cancel sale.', 'error');
+                this.showToast(err?.message || 'Failed to cancel sale.', 'error');
             }
         },
 
         restoreSale: async function (saleId) {
-            if (!(await PharmaFlow.confirm('Restore this cancelled sale? It will be added back to revenue calculations.', { title: 'Restore Sale', confirmText: 'Yes, Restore' }))) return;
+            if (!(await PharmaFlow.confirm('Restore this cancelled sale? Item quantities will be removed from inventory again and it will be added back to revenue calculations.', { title: 'Restore Sale', confirmText: 'Yes, Restore' }))) return;
             const businessId = this.getBusinessId();
             if (!businessId) return;
             try {
+                if (!PharmaFlow.AllSales || !PharmaFlow.AllSales.updateSaleInventoryStatus) {
+                    throw new Error('Inventory adjustment service is not ready. Please refresh and try again.');
+                }
                 const saleDoc = todaySalesData.find(s => s.id === saleId);
-                const restoreTo = saleDoc?.previousStatus || 'completed';
-                await getBusinessCollection(businessId, 'sales').doc(saleId).update({
-                    status: restoreTo,
-                    restoredBy: PharmaFlow.Auth?.userProfile?.displayName || PharmaFlow.Auth?.userProfile?.email || 'Unknown',
-                    restoredAt: firebase.firestore.FieldValue.serverTimestamp()
-                });
-                this.showToast('Sale restored.');
+                const result = await PharmaFlow.AllSales.updateSaleInventoryStatus(businessId, saleId, 'restore', saleDoc?.previousStatus);
+                const restoredStatus = result?.status || saleDoc?.previousStatus || 'completed';
+                this.showToast('Sale restored to ' + restoredStatus + (result?.inventoryAdjusted ? ' and inventory updated.' : '.'));
                 if (PharmaFlow.ActivityLog) {
                     PharmaFlow.ActivityLog.log({
                         title: 'Sale Restored',
-                        description: 'Sale ' + saleId + ' restored to ' + restoreTo,
+                        description: 'Sale ' + saleId + ' restored to ' + restoredStatus + (result?.inventoryAdjusted ? ' and inventory reduced' : ''),
                         category: 'Pharmacy',
                         status: 'INFO'
                     });
                 }
             } catch (err) {
                 console.error('Restore sale error:', err);
-                this.showToast('Failed to restore sale.', 'error');
+                this.showToast(err?.message || 'Failed to restore sale.', 'error');
             }
         },
 

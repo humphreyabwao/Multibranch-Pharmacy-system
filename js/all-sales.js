@@ -66,6 +66,248 @@
             return PharmaFlow.roundMoney ? PharmaFlow.roundMoney(amount) : Math.round((parseFloat(amount) || 0) * 100) / 100;
         },
 
+        getBatchDateValue: function (value) {
+            if (!value) return Number.POSITIVE_INFINITY;
+            const date = value.toDate ? value.toDate() : new Date(value);
+            return date && !isNaN(date.getTime()) ? date.getTime() : Number.POSITIVE_INFINITY;
+        },
+
+        getSaleItemQuantity: function (item) {
+            return Math.max(0, parseInt(item?.quantity ?? item?.qty, 10) || 0);
+        },
+
+        getAdjustableSaleItems: function (sale) {
+            return (Array.isArray(sale?.items) ? sale.items : [])
+                .filter(item => item && item.productId && this.getSaleItemQuantity(item) > 0);
+        },
+
+        getProductStockBatches: function (product) {
+            if (!product) return [];
+            const productQty = Math.max(0, parseInt(product.quantity, 10) || 0);
+            let batches = [];
+
+            if (Array.isArray(product.stockBatches) && product.stockBatches.length) {
+                batches = product.stockBatches
+                    .map(batch => ({ ...batch, quantity: Math.max(0, parseInt(batch.quantity, 10) || 0) }))
+                    .filter(batch => batch.quantity > 0);
+            } else if (productQty > 0 || product.expiryDate || product.batchNumber) {
+                batches = [{
+                    batchNumber: product.batchNumber || '',
+                    quantity: productQty,
+                    expiryDate: product.expiryDate || null,
+                    addedAt: product.createdAt || product.updatedAt || null,
+                    legacy: true
+                }];
+            }
+
+            if (!productQty) return [];
+
+            batches.sort((a, b) => this.getBatchDateValue(a.expiryDate) - this.getBatchDateValue(b.expiryDate));
+
+            const normalized = [];
+            let assigned = 0;
+            batches.forEach(batch => {
+                if (assigned >= productQty) return;
+                const available = Math.max(0, parseInt(batch.quantity, 10) || 0);
+                const qty = Math.min(available, productQty - assigned);
+                if (qty > 0) {
+                    normalized.push({ ...batch, quantity: qty });
+                    assigned += qty;
+                }
+            });
+
+            if (assigned < productQty) {
+                normalized.push({
+                    batchNumber: product.batchNumber || '',
+                    quantity: productQty - assigned,
+                    expiryDate: product.expiryDate || null,
+                    addedAt: product.updatedAt || product.createdAt || null,
+                    reconciled: true
+                });
+            }
+
+            return normalized;
+        },
+
+        getPrimaryBatchAfterAdjustment: function (batches) {
+            const sorted = (batches || [])
+                .filter(batch => (parseInt(batch.quantity, 10) || 0) > 0)
+                .sort((a, b) => this.getBatchDateValue(a.expiryDate) - this.getBatchDateValue(b.expiryDate));
+            if (!sorted.length) return { batchNumber: '', expiryDate: null };
+            return {
+                batchNumber: sorted[0].batchNumber || '',
+                expiryDate: sorted[0].expiryDate || null
+            };
+        },
+
+        reduceStockBatches: function (product, qty, itemName) {
+            let remaining = Math.max(0, parseInt(qty, 10) || 0);
+            const sortedBatches = this.getProductStockBatches(product)
+                .sort((a, b) => this.getBatchDateValue(a.expiryDate) - this.getBatchDateValue(b.expiryDate));
+
+            const updatedBatches = sortedBatches.map(batch => {
+                const available = Math.max(0, parseInt(batch.quantity, 10) || 0);
+                const used = Math.min(available, remaining);
+                remaining -= used;
+                return { ...batch, quantity: available - used };
+            }).filter(batch => (parseInt(batch.quantity, 10) || 0) > 0);
+
+            if (remaining > 0) {
+                throw new Error('Insufficient stock for ' + (product?.name || itemName || 'selected product'));
+            }
+
+            return updatedBatches;
+        },
+
+        addBackToStockBatches: function (product, qty, saleItem, saleId) {
+            const addQty = Math.max(0, parseInt(qty, 10) || 0);
+            const batches = this.getProductStockBatches(product);
+            const preferredBatch = saleItem?.batchNumber || saleItem?.stockBatchNumber || product?.batchNumber || '';
+            const batchIndex = preferredBatch
+                ? batches.findIndex(batch => (batch.batchNumber || '') === preferredBatch)
+                : -1;
+
+            if (batchIndex >= 0) {
+                batches[batchIndex] = {
+                    ...batches[batchIndex],
+                    quantity: (parseInt(batches[batchIndex].quantity, 10) || 0) + addQty
+                };
+            } else if (batches.length) {
+                batches[0] = {
+                    ...batches[0],
+                    quantity: (parseInt(batches[0].quantity, 10) || 0) + addQty
+                };
+            } else {
+                batches.push({
+                    batchNumber: preferredBatch || product?.sku || saleItem?.sku || saleItem?.productId || '',
+                    quantity: addQty,
+                    expiryDate: product?.expiryDate || null,
+                    addedAt: new Date().toISOString(),
+                    source: 'sale_cancel',
+                    saleId: saleId
+                });
+            }
+
+            return batches.sort((a, b) => this.getBatchDateValue(a.expiryDate) - this.getBatchDateValue(b.expiryDate));
+        },
+
+        updateSaleInventoryStatus: async function (businessId, saleId, mode, restoreTo) {
+            const inventoryCol = getBusinessCollection(businessId, 'inventory');
+            const salesCol = getBusinessCollection(businessId, 'sales');
+            const saleRef = salesCol.doc(saleId);
+            const actor = PharmaFlow.Auth?.userProfile?.displayName || PharmaFlow.Auth?.userProfile?.email || 'Unknown';
+
+            return window.db.runTransaction(async (transaction) => {
+                const saleSnapshot = await transaction.get(saleRef);
+                if (!saleSnapshot.exists) {
+                    throw new Error('Sale not found.');
+                }
+
+                const sale = saleSnapshot.data() || {};
+                const saleStatus = sale.status || 'completed';
+                const saleItems = this.getAdjustableSaleItems(sale);
+                const stockUpdates = [];
+                let resultingStatus = saleStatus;
+                let inventoryAdjusted = false;
+
+                if (mode === 'cancel') {
+                    if (saleStatus === 'cancelled') {
+                        throw new Error('This sale is already cancelled.');
+                    }
+
+                    for (const item of saleItems) {
+                        const itemQty = this.getSaleItemQuantity(item);
+                        const ref = inventoryCol.doc(item.productId);
+                        const snapshot = await transaction.get(ref);
+                        if (!snapshot.exists) {
+                            throw new Error('Inventory item not found: ' + (item.name || item.productId));
+                        }
+
+                        const product = snapshot.data() || {};
+                        const currentQty = Math.max(0, parseInt(product.quantity, 10) || 0);
+                        const nextQty = currentQty + itemQty;
+                        const nextBatches = this.addBackToStockBatches(product, itemQty, item, saleId);
+                        const primaryBatch = this.getPrimaryBatchAfterAdjustment(nextBatches);
+
+                        stockUpdates.push({
+                            ref: ref,
+                            data: {
+                                quantity: nextQty,
+                                stockBatches: nextBatches,
+                                batchNumber: primaryBatch.batchNumber || '',
+                                expiryDate: primaryBatch.expiryDate || null,
+                                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                            }
+                        });
+                    }
+
+                    inventoryAdjusted = saleItems.length > 0;
+                    transaction.update(saleRef, {
+                        status: 'cancelled',
+                        previousStatus: saleStatus,
+                        cancelledBy: actor,
+                        cancelledAt: firebase.firestore.FieldValue.serverTimestamp(),
+                        inventoryAdjustedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                        inventoryAdjusted: inventoryAdjusted,
+                        inventoryAdjustment: inventoryAdjusted ? 'returned_to_inventory' : 'no_inventory_items'
+                    });
+                    resultingStatus = 'cancelled';
+                } else if (mode === 'restore') {
+                    if (saleStatus !== 'cancelled') {
+                        throw new Error('Only cancelled sales can be restored.');
+                    }
+
+                    const shouldAdjustInventory = sale.inventoryAdjustment === 'returned_to_inventory' || sale.inventoryAdjusted === true;
+                    if (shouldAdjustInventory) {
+                        for (const item of saleItems) {
+                            const itemQty = this.getSaleItemQuantity(item);
+                            const ref = inventoryCol.doc(item.productId);
+                            const snapshot = await transaction.get(ref);
+                            if (!snapshot.exists) {
+                                throw new Error('Inventory item not found: ' + (item.name || item.productId));
+                            }
+
+                            const product = snapshot.data() || {};
+                            const currentQty = Math.max(0, parseInt(product.quantity, 10) || 0);
+                            if (currentQty < itemQty) {
+                                throw new Error('Only ' + currentQty + ' left in stock for ' + (product.name || item.name || 'selected product'));
+                            }
+
+                            const nextQty = currentQty - itemQty;
+                            const nextBatches = this.reduceStockBatches(product, itemQty, item.name);
+                            const primaryBatch = this.getPrimaryBatchAfterAdjustment(nextBatches);
+
+                            stockUpdates.push({
+                                ref: ref,
+                                data: {
+                                    quantity: nextQty,
+                                    stockBatches: nextBatches,
+                                    batchNumber: primaryBatch.batchNumber || '',
+                                    expiryDate: primaryBatch.expiryDate || null,
+                                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                                }
+                            });
+                        }
+                    }
+
+                    const nextStatus = sale.previousStatus || restoreTo || 'completed';
+                    transaction.update(saleRef, {
+                        status: nextStatus,
+                        restoredBy: actor,
+                        restoredAt: firebase.firestore.FieldValue.serverTimestamp(),
+                        inventoryAdjustedAt: shouldAdjustInventory ? firebase.firestore.FieldValue.serverTimestamp() : (sale.inventoryAdjustedAt || null),
+                        inventoryAdjusted: false,
+                        inventoryAdjustment: shouldAdjustInventory ? 'removed_from_inventory' : 'not_adjusted_on_restore'
+                    });
+                    resultingStatus = nextStatus;
+                    inventoryAdjusted = shouldAdjustInventory;
+                }
+
+                stockUpdates.forEach(update => transaction.update(update.ref, update.data));
+                return { status: resultingStatus, inventoryAdjusted: inventoryAdjusted };
+            });
+        },
+
         getProductVatTotal: function (sale) {
             return PharmaFlow.getProductVatTotal ? PharmaFlow.getProductVatTotal(sale) : 0;
         },
@@ -543,56 +785,46 @@
         },
 
         cancelSale: async function (saleId) {
-            if (!(await PharmaFlow.confirm('Cancel this sale? This will mark it as cancelled and exclude it from revenue calculations.', { title: 'Cancel Sale', confirmText: 'Yes, Cancel', danger: true }))) return;
+            if (!(await PharmaFlow.confirm('Cancel this sale? Sold item quantities will be returned to inventory and the sale will be excluded from revenue calculations.', { title: 'Cancel Sale', confirmText: 'Yes, Cancel', danger: true }))) return;
             const businessId = this.getBusinessId();
             if (!businessId) return;
             try {
-                const saleDoc = allSalesData.find(s => s.id === saleId);
-                await getBusinessCollection(businessId, 'sales').doc(saleId).update({
-                    status: 'cancelled',
-                    previousStatus: saleDoc?.status || 'completed',
-                    cancelledBy: PharmaFlow.Auth?.userProfile?.displayName || PharmaFlow.Auth?.userProfile?.email || 'Unknown',
-                    cancelledAt: firebase.firestore.FieldValue.serverTimestamp()
-                });
-                this.showToast('Sale cancelled.');
+                const result = await this.updateSaleInventoryStatus(businessId, saleId, 'cancel');
+                this.showToast(result?.inventoryAdjusted ? 'Sale cancelled and items returned to inventory.' : 'Sale cancelled.');
                 if (PharmaFlow.ActivityLog) {
                     PharmaFlow.ActivityLog.log({
                         title: 'Sale Cancelled',
-                        description: 'Sale ' + saleId + ' cancelled',
+                        description: 'Sale ' + saleId + (result?.inventoryAdjusted ? ' cancelled and inventory restored' : ' cancelled'),
                         category: 'Pharmacy',
                         status: 'WARNING'
                     });
                 }
             } catch (err) {
                 console.error('Cancel sale error:', err);
-                this.showToast('Failed to cancel sale.', 'error');
+                this.showToast(err?.message || 'Failed to cancel sale.', 'error');
             }
         },
 
         restoreSale: async function (saleId) {
-            if (!(await PharmaFlow.confirm('Restore this cancelled sale? It will be added back to revenue calculations.', { title: 'Restore Sale', confirmText: 'Yes, Restore' }))) return;
+            if (!(await PharmaFlow.confirm('Restore this cancelled sale? Item quantities will be removed from inventory again and the sale will be added back to revenue calculations.', { title: 'Restore Sale', confirmText: 'Yes, Restore' }))) return;
             const businessId = this.getBusinessId();
             if (!businessId) return;
             try {
                 const saleDoc = allSalesData.find(s => s.id === saleId);
-                const restoreTo = saleDoc?.previousStatus || 'completed';
-                await getBusinessCollection(businessId, 'sales').doc(saleId).update({
-                    status: restoreTo,
-                    restoredBy: PharmaFlow.Auth?.userProfile?.displayName || PharmaFlow.Auth?.userProfile?.email || 'Unknown',
-                    restoredAt: firebase.firestore.FieldValue.serverTimestamp()
-                });
-                this.showToast('Sale restored to ' + restoreTo + '.');
+                const result = await this.updateSaleInventoryStatus(businessId, saleId, 'restore', saleDoc?.previousStatus);
+                const restoredStatus = result?.status || saleDoc?.previousStatus || 'completed';
+                this.showToast('Sale restored to ' + restoredStatus + (result?.inventoryAdjusted ? ' and inventory updated.' : '.'));
                 if (PharmaFlow.ActivityLog) {
                     PharmaFlow.ActivityLog.log({
                         title: 'Sale Restored',
-                        description: 'Sale ' + saleId + ' restored to ' + restoreTo,
+                        description: 'Sale ' + saleId + ' restored to ' + restoredStatus + (result?.inventoryAdjusted ? ' and inventory reduced' : ''),
                         category: 'Pharmacy',
                         status: 'INFO'
                     });
                 }
             } catch (err) {
                 console.error('Restore sale error:', err);
-                this.showToast('Failed to restore sale.', 'error');
+                this.showToast(err?.message || 'Failed to restore sale.', 'error');
             }
         },
 
