@@ -9215,6 +9215,276 @@ textarea.tkt-input {
     margin-top: 14px;
 }
 
+[data-theme="dark"] .tkt-card,
+[data-theme="dark"] .adm-ticket-stat-card,
+[data-theme="dark"] .adm-ticket-queue,
+[data-theme="dark"] .adm-ticket-modal {
+    background: linear-gradient(180deg, rgba(30, 41, 59, 0.98), rgba(15, 23, 42, 0.94));
+    border-color: rgba(71, 85, 105, 0.82);
+    box-shadow: 0 18px 42px rgba(0, 0, 0, 0.34);
+}
+
+[data-theme="dark"] .tkt-primary-panel {
+    border-top-color: #60a5fa;
+}
+
+[data-theme="dark"] .tkt-card-head {
+    background: linear-gradient(180deg, rgba(51, 65, 85, 0.72), rgba(30, 41, 59, 0.18));
+    border-bottom-color: rgba(71, 85, 105, 0.78);
+}
+
+[data-theme="dark"] .tkt-head-icon {
+    background: rgba(96, 165, 250, 0.14);
+    color: #93c5fd;
+    box-shadow: inset 0 0 0 1px rgba(147, 197, 253, 0.16);
+}
+
+[data-theme="dark"] .tkt-chip {
+    background: rgba(20, 184, 166, 0.14);
+    color: #5eead4;
+    border-color: rgba(94, 234, 212, 0.28);
+}
+
+[data-theme="dark"] .tkt-input,
+[data-theme="dark"] .adm-ticket-select,
+[data-theme="dark"] .tkt-search input,
+[data-theme="dark"] .adm-ticket-search input,
+[data-theme="dark"] #adm-ticket-note {
+    background: rgba(15, 23, 42, 0.68);
+    border-color: rgba(71, 85, 105, 0.95);
+    color: #e2e8f0;
+}
+
+[data-theme="dark"] .tkt-input::placeholder,
+[data-theme="dark"] .tkt-search input::placeholder,
+[data-theme="dark"] .adm-ticket-search input::placeholder,
+[data-theme="dark"] #adm-ticket-note::placeholder {
+    color: #64748b;
+}
+
+[data-theme="dark"] .tkt-input:focus,
+[data-theme="dark"] .adm-ticket-select:focus,
+[data-theme="dark"] .tkt-search input:focus,
+[data-theme="dark"] .adm-ticket-search input:focus,
+[data-theme="dark"] #adm-ticket-note:focus {
+    border-color: #60a5fa;
+    box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.18);
+    background: rgba(15, 23, 42, 0.88);
+}
+
+[data-theme="dark"] .tkt-info-card {
+    background:
+        linear-gradient(160deg, rgba(14, 165, 233, 0.11), rgba(20, 184, 166, 0.06)),
+        rgba(30, 41, 59, 0.96);
+}
+
+[data-theme="dark"] .tkt-info-icon {
+    background: rgba(251, 191, 36, 0.14);
+    color: #fbbf24;
+    box-shadow: inset 0 0 0 1px rgba(251, 191, 36, 0.18);
+}
+
+[data-theme="dark"] .tkt-info-list span {
+    background: rgba(15, 23, 42, 0.58);
+    border: 1px solid rgba(71, 85, 105, 0.62);
+    color: #cbd5e1;
+}
+
+[data-theme="dark"] .tkt-info-list i {
+    color: #67e8f9;
+}
+
+[data-theme="dark"] .tkt-toolbar,
+[data-theme="dark"] .adm-ticket-toolbar {
+    background: rgba(30, 41, 59, 0.86);
+    border-color: rgba(71, 85, 105, 0.82);
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
+}
+
+[data-theme="dark"] .tkt-table th,
+[data-theme="dark"] .adm-ticket-table th {
+    background: rgba(15, 23, 42, 0.96);
+    color: #cbd5e1;
+    border-bottom-color: rgba(71, 85, 105, 0.9);
+}
+
+[data-theme="dark"] .tkt-table td,
+[data-theme="dark"] .adm-ticket-table td {
+    border-bottom-color: rgba(71, 85, 105, 0.54);
+    color: #cbd5e1;
+}
+
+[data-theme="dark"] .tkt-table tbody tr:hover,
+[data-theme="dark"] .adm-ticket-table tbody tr:hover {
+    background: rgba(96, 165, 250, 0.08);
+}
+
+[data-theme="dark"] .tkt-table code,
+[data-theme="dark"] .adm-ticket-table code {
+    background: rgba(96, 165, 250, 0.14);
+    color: #93c5fd;
+    border: 1px solid rgba(147, 197, 253, 0.18);
+}
+
+[data-theme="dark"] .tkt-badge--ok,
+[data-theme="dark"] .adm-ticket-badge--ok {
+    background: rgba(34, 197, 94, 0.15);
+    color: #86efac;
+    border-color: rgba(134, 239, 172, 0.35);
+}
+
+[data-theme="dark"] .tkt-badge--warn,
+[data-theme="dark"] .adm-ticket-badge--warn {
+    background: rgba(245, 158, 11, 0.16);
+    color: #fbbf24;
+    border-color: rgba(251, 191, 36, 0.34);
+}
+
+[data-theme="dark"] .tkt-badge--info,
+[data-theme="dark"] .adm-ticket-badge--info {
+    background: rgba(59, 130, 246, 0.17);
+    color: #93c5fd;
+    border-color: rgba(147, 197, 253, 0.34);
+}
+
+[data-theme="dark"] .tkt-badge--danger,
+[data-theme="dark"] .adm-ticket-badge--danger {
+    background: rgba(248, 113, 113, 0.15);
+    color: #fca5a5;
+    border-color: rgba(252, 165, 165, 0.34);
+}
+
+[data-theme="dark"] .tkt-badge--muted,
+[data-theme="dark"] .adm-ticket-badge--muted {
+    background: rgba(100, 116, 139, 0.18);
+    color: #cbd5e1;
+    border-color: rgba(148, 163, 184, 0.26);
+}
+
+[data-theme="dark"] .tkt-toast {
+    background: rgba(20, 83, 45, 0.98);
+    color: #dcfce7;
+    border-color: rgba(134, 239, 172, 0.32);
+}
+
+[data-theme="dark"] .tkt-toast--error {
+    background: rgba(127, 29, 29, 0.98);
+    color: #fee2e2;
+    border-color: rgba(252, 165, 165, 0.32);
+}
+
+[data-theme="dark"] .adm-ticket-stat-icon--total {
+    background: rgba(99, 102, 241, 0.15);
+    color: #a5b4fc;
+}
+
+[data-theme="dark"] .adm-ticket-stat-icon--open {
+    background: rgba(245, 158, 11, 0.15);
+    color: #fbbf24;
+}
+
+[data-theme="dark"] .adm-ticket-stat-icon--progress {
+    background: rgba(59, 130, 246, 0.16);
+    color: #93c5fd;
+}
+
+[data-theme="dark"] .adm-ticket-stat-icon--done {
+    background: rgba(34, 197, 94, 0.15);
+    color: #86efac;
+}
+
+[data-theme="dark"] .adm-ticket-live {
+    background: rgba(59, 130, 246, 0.14);
+    color: #93c5fd;
+    border-color: rgba(147, 197, 253, 0.32);
+}
+
+[data-theme="dark"] .adm-ticket-live--live {
+    background: rgba(34, 197, 94, 0.14);
+    color: #86efac;
+    border-color: rgba(134, 239, 172, 0.32);
+}
+
+[data-theme="dark"] .adm-ticket-live--syncing {
+    background: rgba(245, 158, 11, 0.15);
+    color: #fbbf24;
+    border-color: rgba(251, 191, 36, 0.32);
+}
+
+[data-theme="dark"] .adm-ticket-live--error {
+    background: rgba(248, 113, 113, 0.15);
+    color: #fca5a5;
+    border-color: rgba(252, 165, 165, 0.32);
+}
+
+[data-theme="dark"] .adm-ticket-queue-note,
+[data-theme="dark"] .adm-ticket-pagination {
+    background: rgba(15, 23, 42, 0.66);
+    border-color: rgba(71, 85, 105, 0.72);
+}
+
+[data-theme="dark"] .adm-ticket-action--progress {
+    background: rgba(59, 130, 246, 0.16);
+    color: #93c5fd;
+}
+
+[data-theme="dark"] .adm-ticket-action--progress:hover:not(:disabled) {
+    background: rgba(59, 130, 246, 0.26);
+}
+
+[data-theme="dark"] .adm-ticket-action--resolve {
+    background: rgba(34, 197, 94, 0.15);
+    color: #86efac;
+}
+
+[data-theme="dark"] .adm-ticket-action--resolve:hover:not(:disabled) {
+    background: rgba(34, 197, 94, 0.25);
+}
+
+[data-theme="dark"] .adm-ticket-action--close {
+    background: rgba(100, 116, 139, 0.18);
+    color: #cbd5e1;
+}
+
+[data-theme="dark"] .adm-ticket-action--close:hover:not(:disabled) {
+    background: rgba(148, 163, 184, 0.24);
+}
+
+[data-theme="dark"] .adm-ticket-modal-overlay {
+    background: rgba(2, 6, 23, 0.72);
+    backdrop-filter: blur(3px);
+}
+
+[data-theme="dark"] .adm-ticket-modal-header {
+    background: rgba(15, 23, 42, 0.48);
+}
+
+[data-theme="dark"] .adm-ticket-close {
+    background: rgba(15, 23, 42, 0.68);
+    color: #cbd5e1;
+}
+
+[data-theme="dark"] .adm-ticket-close:hover {
+    color: #fca5a5;
+    border-color: rgba(252, 165, 165, 0.32);
+    background: rgba(127, 29, 29, 0.2);
+}
+
+[data-theme="dark"] .adm-ticket-detail div,
+[data-theme="dark"] .adm-ticket-message {
+    background: rgba(15, 23, 42, 0.56);
+    border-color: rgba(71, 85, 105, 0.74);
+}
+
+[data-theme="dark"] .adm-ticket-message {
+    background: rgba(15, 23, 42, 0.38);
+}
+
+[data-theme="dark"] .adm-ticket-detail span,
+[data-theme="dark"] .adm-ticket-message p {
+    color: #cbd5e1;
+}
+
 /* Responsive admin panel */
 @media (max-width: 768px) {
     .adm-quick-actions {
