@@ -64,7 +64,7 @@
         },
 
         formatCurrency: function (val) {
-            return 'KSH ' + new Intl.NumberFormat('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(val || 0);
+            return PharmaFlow.Settings && PharmaFlow.Settings.formatCurrency ? PharmaFlow.Settings.formatCurrency(val) : 'KSH ' + new Intl.NumberFormat('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(val || 0);
         },
 
         escapeHtml: function (str) {
@@ -86,6 +86,7 @@
         },
 
         formatDate: function (ts) {
+            if (PharmaFlow.Settings && PharmaFlow.Settings.formatDate) return PharmaFlow.Settings.formatDate(ts);
             if (!ts) return '—';
             const d = ts.toDate ? ts.toDate() : new Date(ts);
             return d.toLocaleDateString('en-KE', { year: 'numeric', month: 'short', day: 'numeric' });

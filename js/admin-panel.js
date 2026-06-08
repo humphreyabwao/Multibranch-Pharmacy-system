@@ -3799,10 +3799,10 @@
                 dismissed: '<span class="ord-status-badge ord-status--cancelled">Dismissed</span>',
                 paid: '<span class="ord-status-badge ord-status--approved">Paid</span>'
             };
-            const getCurrency = () => PharmaFlow.Settings ? PharmaFlow.Settings.getCurrency() : 'KSH';
+            const formatCurrency = (amount) => PharmaFlow.Settings && PharmaFlow.Settings.formatCurrency ? PharmaFlow.Settings.formatCurrency(amount) : 'KSH ' + Number(amount || 0).toLocaleString();
 
             tbody.innerHTML = alerts.map((a, i) => {
-                const created = a.createdAt ? (a.createdAt.toDate ? a.createdAt.toDate().toLocaleDateString() : new Date(a.createdAt).toLocaleDateString()) : '—';
+                const created = PharmaFlow.Settings && PharmaFlow.Settings.formatDate ? PharmaFlow.Settings.formatDate(a.createdAt) : (a.createdAt ? (a.createdAt.toDate ? a.createdAt.toDate().toLocaleDateString() : new Date(a.createdAt).toLocaleDateString()) : '-');
                 const dismissalBadge = a.allowUserDismiss === false
                     ? '<span class="fal-dismiss-badge fal-dismiss-badge--admin"><i class="fas fa-lock"></i> Admin only</span>'
                     : '<span class="fal-dismiss-badge fal-dismiss-badge--user"><i class="fas fa-user-check"></i> User allowed</span>';
@@ -3811,7 +3811,7 @@
                     <td><strong>${this.escapeHtml(a.businessName || '—')}</strong></td>
                     <td><span style="color:${typeColors[a.type] || '#6b7280'};font-weight:600"><i class="fas ${a.type === 'payment_due' ? 'fa-money-bill' : a.type === 'warning' ? 'fa-exclamation-triangle' : a.type === 'downtime' ? 'fa-power-off' : a.type === 'security' ? 'fa-shield-halved' : a.type === 'maintenance' ? 'fa-wrench' : 'fa-info-circle'}"></i> ${typeLabels[a.type] || a.type}</span></td>
                     <td style="max-width:250px;white-space:normal">${this.escapeHtml(a.message || '—')}</td>
-                    <td>${a.amount && a.type === 'payment_due' ? getCurrency() + ' ' + Number(a.amount).toLocaleString() : '—'}</td>
+                    <td>${a.amount && a.type === 'payment_due' ? formatCurrency(a.amount) : '—'}</td>
                     <td>${statusBadges[a.status] || '<span class="ord-status-badge">' + (a.status || 'unknown') + '</span>'}</td>
                     <td>${dismissalBadge}</td>
                     <td>${created}</td>

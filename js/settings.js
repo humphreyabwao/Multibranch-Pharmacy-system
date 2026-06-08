@@ -155,7 +155,10 @@
                             whatsappCallMeBotApiKey: d.whatsappCallMeBotApiKey || ''
                         };
                         Settings.applyBranding();
+                        Settings.applyRegionalSettings();
+                        Settings.syncRegionalSettingsForm();
                         Settings.persistBrandToLocal();
+                        Settings.broadcastSettingsUpdate();
                     }
                 });
         },
@@ -184,6 +187,48 @@
                 if (PharmaFlow.BrandingSync && PharmaFlow.BrandingSync.persistBranchSnapshot) {
                     PharmaFlow.BrandingSync.persistBranchSnapshot(bid, this.business);
                 }
+            } catch (e) { /* ignore */ }
+        },
+
+        applyRegionalSettings: function () {
+            try {
+                document.documentElement.lang = this.business.locale || DEFAULT_SETTINGS.locale;
+                localStorage.setItem('pf_currency', this.business.currency || DEFAULT_SETTINGS.currency);
+                localStorage.setItem('pf_locale', this.business.locale || DEFAULT_SETTINGS.locale);
+                localStorage.setItem('pf_date_format', this.business.dateFormat || DEFAULT_SETTINGS.dateFormat);
+                localStorage.setItem('pf_timezone', this.business.timezone || DEFAULT_SETTINGS.timezone);
+            } catch (e) { /* ignore */ }
+        },
+
+        syncRegionalSettingsForm: function () {
+            var map = {
+                'st-currency': this.business.currency || DEFAULT_SETTINGS.currency,
+                'st-locale': this.business.locale || DEFAULT_SETTINGS.locale,
+                'st-date-format': this.business.dateFormat || DEFAULT_SETTINGS.dateFormat,
+                'st-timezone': this.business.timezone || DEFAULT_SETTINGS.timezone
+            };
+            Object.keys(map).forEach(function (id) {
+                var el = document.getElementById(id);
+                if (el && el.value !== map[id]) el.value = map[id];
+            });
+
+            var badge = document.getElementById('st-regional-live-badge');
+            if (badge) {
+                badge.textContent = 'Live sync active';
+                badge.classList.add('is-synced');
+            }
+        },
+
+        broadcastSettingsUpdate: function () {
+            try {
+                window.dispatchEvent(new CustomEvent('regional-settings-updated', {
+                    detail: {
+                        currency: this.business.currency,
+                        locale: this.business.locale,
+                        dateFormat: this.business.dateFormat,
+                        timezone: this.business.timezone
+                    }
+                }));
             } catch (e) { /* ignore */ }
         },
 
@@ -232,6 +277,53 @@
         getCompanyLogoUrl: function () { return this.business.companyLogoUrl; },
         getCurrency: function () { return this.business.currency; },
         getLocale: function () { return this.business.locale; },
+        getDateFormat: function () { return this.business.dateFormat; },
+        getTimezone: function () { return this.business.timezone; },
+        formatCurrency: function (amount) {
+            var currency = this.business.currency || DEFAULT_SETTINGS.currency;
+            var locale = this.business.locale || DEFAULT_SETTINGS.locale;
+            return currency + ' ' + new Intl.NumberFormat(locale, {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            }).format(Number(amount || 0));
+        },
+        formatDate: function (value, options) {
+            if (!value) return '—';
+            var d = value.toDate ? value.toDate() : (value.seconds ? new Date(value.seconds * 1000) : new Date(value));
+            if (isNaN(d.getTime())) return '—';
+            var locale = this.business.locale || DEFAULT_SETTINGS.locale;
+            var dateFormat = this.business.dateFormat || DEFAULT_SETTINGS.dateFormat;
+            var timezone = this.business.timezone || DEFAULT_SETTINGS.timezone;
+            var opts = options || {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                timeZone: timezone
+            };
+            var parts = {};
+            try {
+                new Intl.DateTimeFormat(locale, opts).formatToParts(d).forEach(function (part) {
+                    parts[part.type] = part.value;
+                });
+            } catch (e) {
+                return d.toLocaleDateString(locale);
+            }
+            if (dateFormat === 'YYYY-MM-DD') return parts.year + '-' + parts.month + '-' + parts.day;
+            if (dateFormat === 'MM/DD/YYYY') return parts.month + '/' + parts.day + '/' + parts.year;
+            return parts.day + '/' + parts.month + '/' + parts.year;
+        },
+        formatDateTime: function (value) {
+            if (!value) return '—';
+            var d = value.toDate ? value.toDate() : (value.seconds ? new Date(value.seconds * 1000) : new Date(value));
+            if (isNaN(d.getTime())) return '—';
+            var locale = this.business.locale || DEFAULT_SETTINGS.locale;
+            var timezone = this.business.timezone || DEFAULT_SETTINGS.timezone;
+            return this.formatDate(d) + ' ' + d.toLocaleTimeString(locale, {
+                hour: '2-digit',
+                minute: '2-digit',
+                timeZone: timezone
+            });
+        },
         getMessagingIntegrations: function () {
             return {
                 provider: this.business.messagingProvider || 'mixed',
@@ -1784,7 +1876,11 @@
                 '</div>' +
 
                 '<div class="card st-form-card">' +
-                '  <h3 class="st-section-title"><i class="fas fa-globe"></i> Regional Settings</h3>' +
+                '  <div class="st-section-title-row">' +
+                '    <h3 class="st-section-title"><i class="fas fa-globe"></i> Regional Settings</h3>' +
+                '    <span class="st-live-badge" id="st-regional-live-badge"><i class="fas fa-satellite-dish"></i> Live sync</span>' +
+                '  </div>' +
+                '  <p class="st-section-desc">Currency, locale, date format, and timezone update in realtime for this branch.</p>' +
                 '  <form id="st-system-form" class="st-form">' +
                 '    <div class="st-form-row">' +
                 '      <div class="form-group">' +

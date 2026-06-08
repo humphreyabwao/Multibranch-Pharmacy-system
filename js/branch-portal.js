@@ -48,11 +48,13 @@
         },
 
         money: function (amount, currency) {
+            if (PharmaFlow.Settings && PharmaFlow.Settings.formatCurrency) return PharmaFlow.Settings.formatCurrency(amount);
             const n = Number(amount || 0);
             return (currency || 'KES') + ' ' + n.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         },
 
         formatDate: function (value) {
+            if (PharmaFlow.Settings && PharmaFlow.Settings.formatDate) return PharmaFlow.Settings.formatDate(value);
             if (!value) return 'Not set';
             const d = value.toDate ? value.toDate() : (value.seconds ? new Date(value.seconds * 1000) : new Date(value));
             if (isNaN(d.getTime())) return 'Not set';

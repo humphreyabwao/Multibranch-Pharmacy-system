@@ -73,6 +73,7 @@
         },
 
         formatDate: function (val) {
+            if (PharmaFlow.Settings && PharmaFlow.Settings.formatDate) return PharmaFlow.Settings.formatDate(val);
             if (!val) return '—';
             let d;
             if (val.toDate) d = val.toDate();

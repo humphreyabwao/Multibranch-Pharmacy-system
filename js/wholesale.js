@@ -49,10 +49,7 @@
         },
 
         formatCurrency: function (amount) {
-            return 'KSH ' + new Intl.NumberFormat('en-KE', {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2
-            }).format(amount || 0);
+            return PharmaFlow.Settings && PharmaFlow.Settings.formatCurrency ? PharmaFlow.Settings.formatCurrency(amount) : 'KSH ' + new Intl.NumberFormat('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount || 0);
         },
 
         escapeHtml: function (str) {

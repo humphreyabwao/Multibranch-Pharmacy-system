@@ -18,7 +18,11 @@
 
     const Accounts = {
         /* ─── Helpers ─── */
-        _fc(a) { return 'KSH ' + new Intl.NumberFormat('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(a || 0); },
+        _fc(a) {
+            return PharmaFlow.Settings && PharmaFlow.Settings.formatCurrency
+                ? PharmaFlow.Settings.formatCurrency(a)
+                : 'KSH ' + new Intl.NumberFormat('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(a || 0);
+        },
         _esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; },
         _bid() { return PharmaFlow.Auth && PharmaFlow.Auth.getBusinessId ? PharmaFlow.Auth.getBusinessId() : null; },
         _dateObj(d) {

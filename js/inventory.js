@@ -34,19 +34,18 @@
         },
 
         formatCurrency: function (amount) {
-            return 'KSH ' + new Intl.NumberFormat('en-KE', {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2
-            }).format(amount);
+            return PharmaFlow.Settings && PharmaFlow.Settings.formatCurrency ? PharmaFlow.Settings.formatCurrency(amount) : 'KSH ' + new Intl.NumberFormat('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount || 0);
         },
 
         formatDate: function (ts) {
+            if (PharmaFlow.Settings && PharmaFlow.Settings.formatDate) return PharmaFlow.Settings.formatDate(ts);
             if (!ts) return '—';
             const d = ts.toDate ? ts.toDate() : new Date(ts);
             return d.toLocaleDateString('en-KE', { year: 'numeric', month: 'short', day: 'numeric' });
         },
 
         formatDateTime: function (val) {
+            if (PharmaFlow.Settings && PharmaFlow.Settings.formatDateTime) return PharmaFlow.Settings.formatDateTime(val);
             if (!val) return '—';
             const d = val.toDate ? val.toDate() : (val.seconds ? new Date(val.seconds * 1000) : new Date(val));
             if (isNaN(d.getTime())) return '—';

@@ -19,6 +19,7 @@
         _franchiseListenerBound: false,
         _messagePreviewItems: [],
         _businessStatusListener: null,
+        _regionalRefreshTimer: null,
 
         /**
          * Initialize the application
@@ -31,6 +32,7 @@
             this.initRouter();
             this.initSidebar();
             this.listenAuthReady();
+            this.listenRegionalSettingsUpdates();
         },
 
         /**
@@ -122,6 +124,22 @@
                         }
                     }
                 }, err => console.error('Business status listener error:', err));
+        },
+
+        listenRegionalSettingsUpdates: function () {
+            window.addEventListener('regional-settings-updated', () => {
+                clearTimeout(this._regionalRefreshTimer);
+                this._regionalRefreshTimer = setTimeout(() => {
+                    if (!PharmaFlow.Router || !PharmaFlow.Router.currentModuleId) return;
+                    if (PharmaFlow.Router.currentModuleId === 'settings' && PharmaFlow.Router.currentSubModuleId === 'system-settings') {
+                        return;
+                    }
+                    PharmaFlow.Router.navigateTo(
+                        PharmaFlow.Router.currentModuleId,
+                        PharmaFlow.Router.currentSubModuleId
+                    );
+                }, 120);
+            });
         },
 
         /**
@@ -1251,7 +1269,9 @@
     };
 
     window.PharmaFlow.formatKshAmount = function (amount) {
-        return 'KSH ' + new Intl.NumberFormat('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount || 0);
+        return PharmaFlow.Settings && PharmaFlow.Settings.formatCurrency
+            ? PharmaFlow.Settings.formatCurrency(amount)
+            : 'KSH ' + new Intl.NumberFormat('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount || 0);
     };
 
     window.PharmaFlow.getProductVatTaxableBase = function (sale) {

@@ -25,7 +25,9 @@
     const Reports = {
         /* ─── Helpers ─── */
         _fc(amount) {
-            return 'KSH ' + new Intl.NumberFormat('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount || 0);
+            return PharmaFlow.Settings && PharmaFlow.Settings.formatCurrency
+                ? PharmaFlow.Settings.formatCurrency(amount)
+                : 'KSH ' + new Intl.NumberFormat('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount || 0);
         },
         _esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; },
         _bid() {

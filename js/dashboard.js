@@ -868,7 +868,7 @@
                         container.innerHTML = '';
                         return;
                     }
-                    const getCurrency = () => PharmaFlow.Settings ? PharmaFlow.Settings.getCurrency() : 'KSH';
+                    const formatCurrency = (amount) => PharmaFlow.Settings && PharmaFlow.Settings.formatCurrency ? PharmaFlow.Settings.formatCurrency(amount) : 'KSH ' + Number(amount || 0).toLocaleString();
                     const typeIcons = {
                         payment_due: 'fas fa-money-bill-wave',
                         warning: 'fas fa-exclamation-triangle',
@@ -881,7 +881,7 @@
 
                     container.innerHTML = alerts.map(a => {
                         const icon = typeIcons[a.type] || 'fas fa-bell';
-                        const amountStr = a.amount ? ` — <strong>${getCurrency()} ${Number(a.amount).toLocaleString()}</strong>` : '';
+                        const amountStr = a.amount ? ` — <strong>${formatCurrency(a.amount)}</strong>` : '';
                         const dueStr = a.dueDate ? ` (Due: ${a.dueDate})` : '';
                         const payBtn = (a.showPayButton && a.type === 'payment_due')
                             ? `<button class="dash-alert-paynow" data-alert-id="${this.escapeHtml(a.id)}"><i class="fas fa-credit-card"></i> Pay Now</button>`
@@ -928,11 +928,10 @@
                         btn.addEventListener('click', () => {
                             const alertId = btn.dataset.alertId;
                             const alertData = alerts.find(a => a.id === alertId);
-                            const amount = alertData && alertData.amount ? Number(alertData.amount).toLocaleString() : '';
-                            const currency = getCurrency();
+                            const amount = alertData && alertData.amount ? formatCurrency(alertData.amount) : '';
                             PharmaFlow.alert(
                                 'Please contact the system administrator to complete your payment.'
-                                + (amount ? '<br><br><span style="font-size:1.2rem;font-weight:700">' + currency + ' ' + amount + '</span>' : ''),
+                                + (amount ? '<br><br><span style="font-size:1.2rem;font-weight:700">' + amount + '</span>' : ''),
                                 { title: 'Payment Required' }
                             );
                         });
@@ -1280,10 +1279,7 @@
          * ============================================================== */
 
         formatCurrency: function (amount) {
-            return 'KSH ' + new Intl.NumberFormat('en-KE', {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2
-            }).format(amount);
+            return PharmaFlow.Settings && PharmaFlow.Settings.formatCurrency ? PharmaFlow.Settings.formatCurrency(amount) : 'KSH ' + new Intl.NumberFormat('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount || 0);
         },
 
         formatTime: function (isoString) {
@@ -1296,6 +1292,7 @@
         },
 
         formatDate: function (isoString) {
+            if (PharmaFlow.Settings && PharmaFlow.Settings.formatDate) return PharmaFlow.Settings.formatDate(isoString);
             try {
                 const date = new Date(isoString);
                 return date.toLocaleDateString('en-KE', { day: '2-digit', month: 'short', year: 'numeric' });

@@ -87,6 +87,7 @@
         },
 
         formatDate: function (val) {
+            if (PharmaFlow.Settings && PharmaFlow.Settings.formatDate) return PharmaFlow.Settings.formatDate(val);
             if (!val) return '—';
             let d;
             if (val.toDate) d = val.toDate();
@@ -107,16 +108,15 @@
         },
 
         formatDateTime: function (val) {
+            if (PharmaFlow.Settings && PharmaFlow.Settings.formatDateTime) return PharmaFlow.Settings.formatDateTime(val);
             const dt = this.formatDate(val);
             const tm = this.formatTime(val);
             return tm ? dt + ' ' + tm : dt;
         },
 
         formatCurrency: function (amount) {
-            if (amount == null || amount === '' || amount === '-') return '—';
-            return 'KSH ' + new Intl.NumberFormat('en-KE', {
-                minimumFractionDigits: 2, maximumFractionDigits: 2
-            }).format(amount || 0);
+            if (amount == null || amount === '' || amount === '-') return '�';
+            return PharmaFlow.Settings && PharmaFlow.Settings.formatCurrency ? PharmaFlow.Settings.formatCurrency(amount) : 'KSH ' + new Intl.NumberFormat('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount || 0);
         },
 
         toISODate: function (d) {

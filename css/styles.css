@@ -1889,6 +1889,29 @@ input, select, textarea {
 .adm-billing-badge--oneoff { background: rgba(245, 158, 11, 0.14); color: #b45309; }
 
 /* Settings release/version notes */
+.st-section-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+.st-live-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border-radius: 999px;
+    background: rgba(37, 99, 235, .1);
+    color: var(--primary, #2563eb);
+    font-size: .74rem;
+    font-weight: 800;
+}
+.st-live-badge.is-synced {
+    background: rgba(22, 163, 74, .12);
+    color: #15803d;
+}
+
 .st-release-layout {
     display: grid;
     grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
