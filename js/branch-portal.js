@@ -510,7 +510,11 @@
             if (!file) throw new Error('No file selected.');
             const safeName = Date.now() + '-' + file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
             if (PharmaFlow.CloudinaryUpload && PharmaFlow.CloudinaryUpload.isActive()) {
-                return PharmaFlow.CloudinaryUpload.uploadFile(file, { folder: 'pharmaflow/' + folder + '/' + businessId });
+                const publicId = safeName.replace(/\.[^/.]+$/, '');
+                return PharmaFlow.CloudinaryUpload.uploadFile(file, {
+                    folder: 'pharmaflow/' + folder + '/' + businessId,
+                    publicId: publicId
+                });
             }
             const ref = window.storage.ref('businesses/' + businessId + '/' + folder + '/' + safeName);
             const snap = await ref.put(file);

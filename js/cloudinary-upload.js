@@ -22,7 +22,12 @@
     function resourceTypeForFile(file) {
         var mime = (file && file.type) || '';
         var name = (file && file.name) || '';
-        if (mime === 'application/pdf' || /\.pdf$/i.test(name)) return 'raw';
+        if (
+            mime === 'application/pdf' ||
+            mime === 'application/msword' ||
+            mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+            /\.(pdf|doc|docx)$/i.test(name)
+        ) return 'raw';
         return 'image';
     }
 
@@ -33,7 +38,7 @@
 
     /**
      * @param {File} file
-     * @param {{ publicId?: string }} [options]
+     * @param {{ publicId?: string, folder?: string, resourceType?: string }} [options]
      * @returns {Promise<string>} secure_url
      */
     async function uploadFile(file, options) {
@@ -42,7 +47,7 @@
             throw new Error('Cloudinary is not configured');
         }
         options = options || {};
-        var rType = resourceTypeForFile(file);
+        var rType = options.resourceType || resourceTypeForFile(file);
         var preset = presetForResourceType(cfg, rType);
         if (!preset) throw new Error('Missing upload preset for resource type');
 
@@ -50,6 +55,7 @@
         fd.append('file', file);
         fd.append('upload_preset', preset);
         if (options.publicId) fd.append('public_id', options.publicId);
+        if (options.folder) fd.append('folder', options.folder);
 
         var url = 'https://api.cloudinary.com/v1_1/' + encodeURIComponent(cfg.cloudName) + '/' + rType + '/upload';
         var res = await fetch(url, { method: 'POST', body: fd });
