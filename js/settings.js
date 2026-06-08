@@ -9,6 +9,7 @@
     window.PharmaFlow = window.PharmaFlow || {};
 
     let unsubBusiness = null;
+    let unsubReleases = null;
 
     const DEFAULT_SETTINGS = {
         name: 'PharmaFlow',
@@ -255,6 +256,11 @@
         _isAdmin: function () {
             var role = PharmaFlow.Auth && PharmaFlow.Auth.userProfile ? PharmaFlow.Auth.userProfile.role : null;
             return role === 'superadmin' || role === 'admin';
+        },
+
+        _isSuperAdmin: function () {
+            var role = PharmaFlow.Auth && PharmaFlow.Auth.userProfile ? PharmaFlow.Auth.userProfile.role : null;
+            return role === 'superadmin';
         },
 
         _escapeHtml: function (text) {
@@ -1274,6 +1280,217 @@
         //  TAB 4 — NOTIFICATIONS
         // ═══════════════════════════════════════════════════
 
+        renderVersions: function (container) {
+            var self = this;
+            var canPublish = self._isSuperAdmin();
+
+            container.innerHTML =
+                '<div class="page-header">' +
+                '  <div><h2>Versions</h2>' +
+                '    <div class="breadcrumb">' +
+                '      <a href="#" data-nav="dashboard">Home</a><span>/</span>' +
+                '      <span>Settings</span><span>/</span><span>Versions</span>' +
+                '    </div>' +
+                '  </div>' +
+                '</div>' +
+                '<div class="st-release-layout' + (canPublish ? '' : ' st-release-layout--single') + '">' +
+                (canPublish ? (
+                    '<div class="card st-form-card st-release-publish-card">' +
+                    '  <h3 class="st-section-title"><i class="fas fa-rocket"></i> Publish Release</h3>' +
+                    '  <p class="st-section-desc">Update the current system version and broadcast release notes to every active branch.</p>' +
+                    '  <form id="st-release-form" class="st-form">' +
+                    '    <div class="st-form-row">' +
+                    '      <div class="form-group"><label for="st-release-version">Version</label><select id="st-release-version" required>' +
+                    '        <option value="1.0.0">Version 1.0.0</option>' +
+                    '        <option value="1.5.0">Version 1.5.0</option>' +
+                    '        <option value="2.0.0">Version 2.0.0</option>' +
+                    '        <option value="2.5.0">Version 2.5.0</option>' +
+                    '        <option value="3.0.0">Version 3.0.0</option>' +
+                    '        <option value="3.5.0">Version 3.5.0</option>' +
+                    '      </select></div>' +
+                    '      <div class="form-group"><label for="st-release-date">Release Date</label><input id="st-release-date" type="date" required></div>' +
+                    '    </div>' +
+                    '    <div class="form-group"><label for="st-release-type">Release Type</label><select id="st-release-type" required>' +
+                    '      <option value="Feature Update">Feature Update</option>' +
+                    '      <option value="Bug Fix">Bug Fix</option>' +
+                    '      <option value="Security Patch">Security Patch</option>' +
+                    '      <option value="Maintenance">Maintenance</option>' +
+                    '      <option value="Billing Update">Billing Update</option>' +
+                    '      <option value="Contracts Update">Contracts Update</option>' +
+                    '      <option value="UI Improvement">UI Improvement</option>' +
+                    '      <option value="Performance Update">Performance Update</option>' +
+                    '    </select></div>' +
+                    '    <div class="form-group"><label for="st-release-title">Release Title</label><input id="st-release-title" type="text" placeholder="e.g. Billing and Contracts Update" required></div>' +
+                    '    <div class="form-group"><label for="st-release-notes">Release Notes</label><textarea id="st-release-notes" rows="8" placeholder="Write clear notes. Use one item per line for easier reading." required></textarea></div>' +
+                    '    <label class="st-release-check"><input type="checkbox" id="st-release-broadcast" checked><span>Broadcast this release to all active branches</span></label>' +
+                    '    <div class="st-form-actions"><button type="submit" class="btn btn-primary"><i class="fas fa-bullhorn"></i> Publish Version</button></div>' +
+                    '  </form>' +
+                    '</div>'
+                ) : '') +
+                '<div class="card st-form-card st-release-current-card">' +
+                '  <h3 class="st-section-title"><i class="fas fa-code-branch"></i> Current Release</h3>' +
+                '  <div id="st-release-current" class="st-release-current"><div class="st-release-empty"><i class="fas fa-spinner fa-spin"></i> Loading release information...</div></div>' +
+                '</div>' +
+                '<div class="card st-form-card st-release-history-card">' +
+                '  <h3 class="st-section-title"><i class="fas fa-clock-rotate-left"></i> Release History</h3>' +
+                '  <div id="st-release-history" class="st-release-history"><div class="st-release-empty"><i class="fas fa-spinner fa-spin"></i> Loading release history...</div></div>' +
+                '</div>' +
+                '</div>';
+
+            self._bindBreadcrumb(container);
+            if (canPublish) self._bindReleaseForm(container);
+            self.listenReleaseNotes();
+        },
+
+        listenReleaseNotes: function () {
+            var self = this;
+            if (!window.db) return;
+            if (unsubReleases) unsubReleases();
+            unsubReleases = window.db.collection('system_config').doc('release_notes')
+                .onSnapshot(function (doc) {
+                    self.renderReleaseNotes(doc.exists ? (doc.data() || {}) : {});
+                }, function (err) {
+                    var msg = '<div class="st-release-empty st-release-empty--error"><i class="fas fa-triangle-exclamation"></i> Failed to load release notes: ' + self._escapeHtml(err.message || 'Unknown error') + '</div>';
+                    var current = document.getElementById('st-release-current');
+                    var history = document.getElementById('st-release-history');
+                    if (current) current.innerHTML = msg;
+                    if (history) history.innerHTML = msg;
+                });
+        },
+
+        renderReleaseNotes: function (data) {
+            var current = document.getElementById('st-release-current');
+            var history = document.getElementById('st-release-history');
+            if (!current || !history) return;
+            var latest = data.latest || null;
+            var releases = Array.isArray(data.releases) ? data.releases.slice() : [];
+            releases.sort(function (a, b) {
+                return new Date(b.publishedAt || b.releaseDate || 0) - new Date(a.publishedAt || a.releaseDate || 0);
+            });
+            if (!latest && releases.length) latest = releases[0];
+            current.innerHTML = latest ? this.releaseCardHtml(latest, true) : '<div class="st-release-empty"><i class="fas fa-code-branch"></i> No release has been published yet.</div>';
+            history.innerHTML = releases.length ? releases.map(function (release) {
+                return Settings.releaseCardHtml(release, false);
+            }).join('') : '<div class="st-release-empty"><i class="fas fa-folder-open"></i> No release history yet.</div>';
+        },
+
+        releaseCardHtml: function (release, featured) {
+            var notes = String(release.notes || '').split(/\r?\n/).map(function (line) { return line.trim(); }).filter(Boolean);
+            var notesHtml = notes.length
+                ? '<ul>' + notes.map(function (line) { return '<li>' + Settings._escapeHtml(line.replace(/^[-*]\s*/, '')) + '</li>'; }).join('') + '</ul>'
+                : '<p>' + this._escapeHtml(release.notes || 'No notes supplied.') + '</p>';
+            return '<article class="st-release-card' + (featured ? ' st-release-card--featured' : '') + '">' +
+                '<div class="st-release-card-top">' +
+                '<div><span class="st-release-version">v' + this._escapeHtml(release.version || '0.0.0') + '</span>' +
+                '<span class="st-release-type">' + this._escapeHtml(release.releaseType || 'Release') + '</span>' +
+                '<h4>' + this._escapeHtml(release.title || 'System release') + '</h4></div>' +
+                '<time>' + this._escapeHtml(this._formatReleaseDate(release.releaseDate || release.publishedAt)) + '</time>' +
+                '</div>' +
+                '<div class="st-release-notes">' + notesHtml + '</div>' +
+                '<div class="st-release-meta"><span>Published by ' + this._escapeHtml(release.publishedBy || 'Superadmin') + '</span>' + (release.broadcast ? '<span><i class="fas fa-bullhorn"></i> Broadcast sent</span>' : '') + '</div>' +
+                '</article>';
+        },
+
+        _bindReleaseForm: function (container) {
+            var form = container.querySelector('#st-release-form');
+            if (!form) return;
+            var self = this;
+            var dateEl = document.getElementById('st-release-date');
+            if (dateEl && !dateEl.value) dateEl.value = new Date().toISOString().slice(0, 10);
+            form.addEventListener('submit', async function (e) {
+                e.preventDefault();
+                var btn = form.querySelector('button[type="submit"]');
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Publishing...';
+                try {
+                    await self.publishReleaseNotes();
+                    form.reset();
+                    if (dateEl) dateEl.value = new Date().toISOString().slice(0, 10);
+                    self._showToast('Release version published', 'success');
+                } catch (err) {
+                    console.error('Publish release error:', err);
+                    self._showToast(err.message || 'Failed to publish release', 'error');
+                } finally {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-bullhorn"></i> Publish Version';
+                }
+            });
+        },
+
+        publishReleaseNotes: async function () {
+            if (!this._isSuperAdmin()) throw new Error('Only superadmin can publish releases.');
+            var version = document.getElementById('st-release-version').value.trim();
+            var releaseType = document.getElementById('st-release-type').value;
+            var title = document.getElementById('st-release-title').value.trim();
+            var notes = document.getElementById('st-release-notes').value.trim();
+            var releaseDate = document.getElementById('st-release-date').value || new Date().toISOString().slice(0, 10);
+            var broadcast = !!document.getElementById('st-release-broadcast')?.checked;
+            if (!version || !title || !notes) throw new Error('Version, title, and release notes are required.');
+            var profile = PharmaFlow.Auth ? PharmaFlow.Auth.userProfile : null;
+            var release = {
+                id: 'rel-' + Date.now(),
+                version: version,
+                releaseType: releaseType,
+                title: title,
+                notes: notes,
+                releaseDate: releaseDate,
+                broadcast: broadcast,
+                publishedAt: new Date().toISOString(),
+                publishedBy: profile ? (profile.displayName || profile.email || 'Superadmin') : 'Superadmin'
+            };
+            var ref = window.db.collection('system_config').doc('release_notes');
+            var snap = await ref.get();
+            var existing = snap.exists && Array.isArray(snap.data().releases) ? snap.data().releases : [];
+            var releases = [release].concat(existing.filter(function (r) { return r.version !== version; })).slice(0, 30);
+            await ref.set({ latest: release, releases: releases, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+            if (broadcast) await this.broadcastReleaseToBranches(release);
+        },
+
+        broadcastReleaseToBranches: async function (release) {
+            var bizSnap = await window.db.collection('businesses').get();
+            var active = bizSnap.docs.filter(function (doc) { return doc.data().isActive !== false; });
+            var message = 'New PharmaFlow version v' + release.version + ' is available (' + (release.releaseType || 'Release') + '): ' + release.title + '\n\n' + release.notes;
+            var now = new Date().toISOString();
+            var batches = [];
+            var batch = window.db.batch();
+            var opCount = 0;
+            function commitIfNeeded(force) {
+                if (opCount >= 450 || (force && opCount > 0)) {
+                    batches.push(batch.commit());
+                    batch = window.db.batch();
+                    opCount = 0;
+                }
+            }
+            active.forEach(function (bizDoc) {
+                var msgRef = window.db.collection('businesses').doc(bizDoc.id).collection('messages').doc();
+                batch.set(msgRef, {
+                    subject: 'New ' + (release.releaseType || 'Version') + ': v' + release.version,
+                    message: message,
+                    senderName: release.publishedBy || 'Superadmin',
+                    senderId: 'superadmin',
+                    recipientId: 'all',
+                    type: 'release-note',
+                    priority: 'normal',
+                    read: false,
+                    readBy: [],
+                    releaseId: release.id,
+                    releaseVersion: release.version,
+                    createdAt: now
+                });
+                opCount++;
+                commitIfNeeded(false);
+            });
+            commitIfNeeded(true);
+            await Promise.all(batches);
+        },
+
+        _formatReleaseDate: function (value) {
+            if (!value) return 'Not dated';
+            var d = value.toDate ? value.toDate() : (value.seconds ? new Date(value.seconds * 1000) : new Date(value));
+            if (isNaN(d.getTime())) return 'Not dated';
+            return d.toLocaleDateString('en-KE', { month: 'short', day: 'numeric', year: 'numeric' });
+        },
+
         renderNotifications: function (container) {
             var b = this.business;
             var self = this;
@@ -1667,6 +1884,10 @@
 
         cleanup: function () {
             // Business listener stays active for branding across the entire app
+            if (unsubReleases) {
+                unsubReleases();
+                unsubReleases = null;
+            }
         }
     };
 

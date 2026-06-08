@@ -1888,12 +1888,131 @@ input, select, textarea {
 .adm-billing-badge--daily { background: rgba(22, 163, 74, 0.12); color: #15803d; }
 .adm-billing-badge--oneoff { background: rgba(245, 158, 11, 0.14); color: #b45309; }
 
+/* Settings release/version notes */
+.st-release-layout {
+    display: grid;
+    grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+    gap: 18px;
+}
+.st-release-layout--single {
+    grid-template-columns: minmax(0, 1fr);
+}
+.st-release-history-card {
+    grid-column: 1 / -1;
+}
+.st-release-check {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+.st-release-check input {
+    width: 18px;
+    height: 18px;
+}
+.st-release-current,
+.st-release-history {
+    display: grid;
+    gap: 12px;
+}
+.st-release-card {
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    background: var(--bg-primary);
+    padding: 16px;
+}
+.st-release-card--featured {
+    border-color: rgba(37, 99, 235, .35);
+    background: linear-gradient(180deg, rgba(37, 99, 235, .06), var(--bg-primary));
+}
+.st-release-card-top {
+    display: flex;
+    justify-content: space-between;
+    gap: 14px;
+    align-items: flex-start;
+}
+.st-release-version {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 4px 9px;
+    background: var(--primary-light, #dbeafe);
+    color: var(--primary, #2563eb);
+    font-size: .72rem;
+    font-weight: 800;
+}
+.st-release-type {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 6px;
+    border-radius: 999px;
+    padding: 4px 9px;
+    background: rgba(20, 184, 166, .12);
+    color: #0f766e;
+    font-size: .72rem;
+    font-weight: 800;
+}
+.st-release-card h4 {
+    margin: 9px 0 0;
+    color: var(--text-primary);
+    font-size: 1rem;
+}
+.st-release-card time {
+    color: var(--text-tertiary);
+    font-size: .78rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+.st-release-notes {
+    margin-top: 12px;
+    color: var(--text-secondary);
+    font-size: .88rem;
+    line-height: 1.55;
+}
+.st-release-notes ul {
+    margin: 0;
+    padding-left: 20px;
+}
+.st-release-notes li + li {
+    margin-top: 6px;
+}
+.st-release-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color);
+    color: var(--text-tertiary);
+    font-size: .76rem;
+}
+.st-release-empty {
+    padding: 24px;
+    text-align: center;
+    color: var(--text-secondary);
+}
+.st-release-empty--error {
+    color: var(--danger);
+}
+
 @media (max-width: 1180px) {
     .adm-billing-controls,
     .adm-billing-form--record {
         grid-template-columns: repeat(3, minmax(0, 1fr));
     }
     .adm-billing-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 920px) {
+    .st-release-layout {
         grid-template-columns: 1fr;
     }
 }

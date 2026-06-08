@@ -393,6 +393,7 @@
                 if (subId === 'business-profile') { PharmaFlow.Settings.renderBusiness(contentBody); return; }
                 if (subId === 'receipts-invoices') { PharmaFlow.Settings.renderReceipts(contentBody); return; }
                 if (subId === 'notifications-settings') { PharmaFlow.Settings.renderNotifications(contentBody); return; }
+                if (subId === 'versions') { PharmaFlow.Settings.renderVersions(contentBody); return; }
                 if (subId === 'system-settings') { PharmaFlow.Settings.renderSystem(contentBody); return; }
             }
 

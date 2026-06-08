@@ -223,6 +223,7 @@
             { id: 'business-profile', label: 'Business Profile', icon: 'fas fa-building', roles: ['superadmin', 'admin'] },
             { id: 'receipts-invoices', label: 'Receipts & Invoices', icon: 'fas fa-file-invoice', roles: ['superadmin', 'admin'] },
             { id: 'notifications-settings', label: 'Notifications', icon: 'fas fa-bell' },
+            { id: 'versions', label: 'Versions', icon: 'fas fa-code-branch' },
             { id: 'system-settings', label: 'System', icon: 'fas fa-sliders-h', roles: ['superadmin', 'admin'] }
         ]
     };
