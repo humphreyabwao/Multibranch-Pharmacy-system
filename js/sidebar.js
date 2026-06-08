@@ -183,6 +183,17 @@
             ]
         },
         {
+            id: 'branch-portal',
+            label: 'Branch Portal',
+            icon: 'fas fa-file-contract',
+            roles: [],
+            children: [
+                { id: 'billing-documents', label: 'Invoices & Receipts', icon: 'fas fa-file-invoice-dollar' },
+                { id: 'branch-communications', label: 'Communications', icon: 'fas fa-comments' },
+                { id: 'branch-contracts', label: 'Contracts', icon: 'fas fa-file-signature' }
+            ]
+        },
+        {
             id: 'admin-panel',
             label: 'Admin Panel',
             icon: 'fas fa-shield-halved',
@@ -192,6 +203,7 @@
                 { id: 'manage-users', label: 'Manage Users', icon: 'fas fa-users-cog', roles: ['superadmin'] },
                 { id: 'manage-franchises', label: 'Manage Franchises', icon: 'fas fa-building', roles: ['superadmin'] },
                 { id: 'admin-analytics', label: 'Analytics', icon: 'fas fa-chart-pie', roles: ['superadmin'] },
+                { id: 'admin-billing', label: 'Billing', icon: 'fas fa-sack-dollar', roles: ['superadmin'] },
                 { id: 'franchise-alerts', label: 'Franchise Alerts', icon: 'fas fa-bell-concierge', roles: ['superadmin'] },
                 { id: 'admin-tickets', label: 'Tickets', icon: 'fas fa-ticket', roles: ['superadmin'] },
                 { id: 'module-tags', label: 'Module Tags', icon: 'fas fa-tag', roles: ['superadmin'] },

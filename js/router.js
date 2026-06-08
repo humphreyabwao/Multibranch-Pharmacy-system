@@ -48,6 +48,8 @@
                 case 'reports': if (PharmaFlow.Reports) PharmaFlow.Reports.cleanup(); break;
                 case 'accounts': if (PharmaFlow.Accounts) PharmaFlow.Accounts.cleanup(); break;
                 case 'activity-log': if (PharmaFlow.ActivityLog) PharmaFlow.ActivityLog.cleanup(); break;
+                case 'support-tickets': if (PharmaFlow.SupportTickets) PharmaFlow.SupportTickets.cleanup(); break;
+                case 'branch-portal': if (PharmaFlow.BranchPortal) PharmaFlow.BranchPortal.cleanup(); break;
                 case 'medication-refill': if (PharmaFlow.MedicationRefill) PharmaFlow.MedicationRefill.cleanup(); break;
                 case 'settings': if (PharmaFlow.Settings) PharmaFlow.Settings.cleanup(); break;
             }
@@ -360,6 +362,17 @@
                 return;
             }
 
+            // Branch Portal module
+            if (moduleConfig.id === 'branch-portal' && PharmaFlow.BranchPortal) {
+                const subId = subModule ? subModule.id : 'billing-documents';
+                PharmaFlow.BranchPortal.cleanup();
+
+                if (subId === 'branch-communications') { PharmaFlow.BranchPortal.renderCommunications(contentBody); return; }
+                if (subId === 'branch-contracts') { PharmaFlow.BranchPortal.renderContracts(contentBody); return; }
+                PharmaFlow.BranchPortal.renderBilling(contentBody);
+                return;
+            }
+
             // Medication Refill module
             if (moduleConfig.id === 'medication-refill' && PharmaFlow.MedicationRefill) {
                 const subId = subModule ? subModule.id : 'refill-overview';
@@ -402,6 +415,10 @@
                 }
                 if (subId === 'admin-analytics') {
                     PharmaFlow.AdminPanel.renderAnalytics(contentBody);
+                    return;
+                }
+                if (subId === 'admin-billing') {
+                    PharmaFlow.AdminPanel.renderBilling(contentBody);
                     return;
                 }
                 if (subId === 'franchise-alerts') {

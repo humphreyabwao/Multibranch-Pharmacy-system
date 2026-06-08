@@ -12,6 +12,7 @@
     const Auth = {
         currentUser: null,
         userProfile: null,
+        pendingLoginNoticeKey: 'pf_login_error',
 
         /**
          * Initialize auth state listener
@@ -35,7 +36,9 @@
                             this.showLoginError('Your account has been disabled. Please contact your administrator.');
                             this.onAuthRequired();
                         } else if (err.message === 'FRANCHISE_INACTIVE') {
-                            this.showLoginError('Your franchise has been deactivated. Please contact the system administrator.');
+                            const stored = localStorage.getItem(this.pendingLoginNoticeKey);
+                            if (stored) localStorage.removeItem(this.pendingLoginNoticeKey);
+                            this.showLoginError(stored || 'This branch has been suspended. Please contact the system administrator.');
                             this.onAuthRequired();
                         } else {
                             console.error('Profile load error:', err);
@@ -52,6 +55,7 @@
             this.bindLoginForm();
             this.bindForgotPasswordForm();
             this.bindPasswordToggle();
+            this.consumeStoredLoginNotice();
         },
 
         /**
@@ -103,7 +107,7 @@
                 for (let i = 0; i < localStorage.length; i++) {
                     const key = localStorage.key(i);
                     if (!key || !key.startsWith('pf_')) continue;
-                    if (key === 'pf_last_active_business_id') continue;
+                    if (key === 'pf_last_active_business_id' || key === this.pendingLoginNoticeKey) continue;
                     if (key.indexOf('pf_brand_snapshot_') === 0) continue;
                     if (key === 'pf_brand_name' || key === 'pf_brand_tagline' || key === 'pf_brand_icon' || key === 'pf_brand_company_logo') {
                         continue;
@@ -181,6 +185,8 @@
                     try {
                         const bizDoc = await window.db.collection('businesses').doc(this.userProfile.businessId).get();
                         if (bizDoc.exists && bizDoc.data().isActive === false) {
+                            const suspensionMessage = this.getSuspensionMessage(bizDoc.data());
+                            try { localStorage.setItem(this.pendingLoginNoticeKey, suspensionMessage); } catch (e) { /* ignore */ }
                             await window.auth.signOut();
                             this.currentUser = null;
                             this.userProfile = null;
@@ -307,6 +313,24 @@
             }
             this._setLoginAlertVisible('login-success', false);
             this.setLoginSubmitLoading(false);
+        },
+
+        getSuspensionMessage: function (businessData) {
+            const reason = businessData && (businessData.suspensionReason || businessData.inactiveReason || businessData.deactivationReason);
+            return reason
+                ? 'This branch has been suspended. Reason: ' + reason
+                : 'This branch has been suspended. Please contact the system administrator.';
+        },
+
+        consumeStoredLoginNotice: function () {
+            try {
+                const msg = localStorage.getItem(this.pendingLoginNoticeKey);
+                if (!msg) return;
+                localStorage.removeItem(this.pendingLoginNoticeKey);
+                this.showLoginError(msg);
+            } catch (err) {
+                console.warn('Failed to show stored login notice:', err);
+            }
         },
 
         /**

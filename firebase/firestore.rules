@@ -320,6 +320,45 @@ service cloud.firestore {
       allow delete: if isSuperAdmin();
     }
 
+    // ===== BRANCH PORTAL: BILLING DOCUMENTS =====
+    match /branch_finance_docs/{docId} {
+      allow read: if isSuperAdmin()
+        || (isAuthenticated() && belongsToBusiness(resource.data.businessId));
+      allow create, update, delete: if isSuperAdmin();
+    }
+
+    // ===== BRANCH PORTAL: COMMUNICATIONS =====
+    match /branch_communications/{messageId} {
+      allow read: if isSuperAdmin()
+        || (isAuthenticated() && belongsToBusiness(resource.data.businessId));
+      allow create: if isAuthenticated()
+        && request.resource.data.businessId is string
+        && (isSuperAdmin() || belongsToBusiness(request.resource.data.businessId));
+      allow update, delete: if isSuperAdmin();
+    }
+
+    // ===== BRANCH PORTAL: CONTRACTS =====
+    match /branch_contracts/{contractId} {
+      allow read: if isSuperAdmin()
+        || (isAuthenticated() && belongsToBusiness(resource.data.businessId));
+      allow create, delete: if isSuperAdmin();
+      allow update: if isSuperAdmin()
+        || (
+          isAuthenticated()
+          && belongsToBusiness(resource.data.businessId)
+          && request.resource.data.businessId == resource.data.businessId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'signedFileUrl',
+            'signedFileName',
+            'signatureDataUrl',
+            'signedBy',
+            'signedAt',
+            'status',
+            'updatedAt'
+          ])
+        );
+    }
+
     // Allow superadmin collection-group ticket queue reads.
     match /{path=**}/tickets/{ticketId} {
       allow read: if isSuperAdmin();

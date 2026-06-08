@@ -23,9 +23,12 @@
     let alertsListener = null;
     let ticketsListener = null;
     let moduleTagsListener = null;
+    let billingListener = null;
     let allUsers = [];
     let allBusinesses = [];
     let allTickets = [];
+    let allBillingDocs = [];
+    let filteredBillingDocs = [];
     let moduleTagsState = {};
     let bizNameCache = {};
     let filteredUsers = [];
@@ -151,9 +154,12 @@
             if (alertsListener) { alertsListener(); alertsListener = null; }
             if (ticketsListener) { ticketsListener(); ticketsListener = null; }
             if (moduleTagsListener) { moduleTagsListener(); moduleTagsListener = null; }
+            if (billingListener) { billingListener(); billingListener = null; }
             allUsers = [];
             allBusinesses = [];
             allTickets = [];
+            allBillingDocs = [];
+            filteredBillingDocs = [];
             moduleTagsState = {};
             filteredUsers = [];
             filteredBusinesses = [];
@@ -1638,12 +1644,29 @@
         toggleFranchiseStatus: async function (bizId, isCurrentlyActive) {
             const action = isCurrentlyActive ? 'deactivate' : 'activate';
             if (!(await PharmaFlow.confirm('Are you sure you want to ' + action + ' this franchise?', { title: action.charAt(0).toUpperCase() + action.slice(1) + ' Franchise', confirmText: 'Yes, ' + action.charAt(0).toUpperCase() + action.slice(1), danger: isCurrentlyActive }))) return;
+            let reason = '';
+            if (isCurrentlyActive) {
+                reason = window.prompt('Reason to show this branch on login:', 'Branch temporarily suspended by superadmin.');
+                if (!reason) return;
+            }
 
             try {
-                await window.db.collection('businesses').doc(bizId).update({
+                const updateData = {
                     isActive: !isCurrentlyActive,
                     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-                });
+                };
+                if (isCurrentlyActive) {
+                    updateData.billingStatus = 'suspended';
+                    updateData.suspensionReason = reason;
+                    updateData.suspendedAt = new Date().toISOString();
+                    updateData.suspendedBy = 'Superadmin';
+                } else {
+                    updateData.billingStatus = 'active';
+                    updateData.suspensionReason = firebase.firestore.FieldValue.delete();
+                    updateData.suspendedAt = firebase.firestore.FieldValue.delete();
+                    updateData.suspendedBy = firebase.firestore.FieldValue.delete();
+                }
+                await window.db.collection('businesses').doc(bizId).update(updateData);
                 this.showToast('Franchise ' + action + 'd!');
             } catch (err) {
                 console.error('Toggle franchise error:', err);
@@ -2440,6 +2463,546 @@
         // ═══════════════════════════════════════════════
         //  FRANCHISE ALERTS & BILLING REMINDERS
         // ═══════════════════════════════════════════════
+
+        renderBilling: function (container) {
+            this.cleanup();
+
+            if (!this.isSuperAdmin()) {
+                container.innerHTML = '<div class="card"><div class="page-placeholder"><i class="fas fa-lock"></i><h2>Restricted</h2><p>Billing analytics are available to superadmin only.</p></div></div>';
+                return;
+            }
+
+            container.innerHTML = `
+                <div class="dda-module adm-billing-module">
+                    <div class="page-header">
+                        <div>
+                            <h2><i class="fas fa-sack-dollar"></i> System Billing</h2>
+                            <div class="breadcrumb">
+                                <a href="#" data-nav="dashboard">Home</a>
+                                <span>/</span><span>Admin Panel</span>
+                                <span>/</span><span>Billing</span>
+                            </div>
+                            <p class="adm-billing-subtitle">Track system revenue by branch, payment mode, and period.</p>
+                        </div>
+                        <div class="page-header-right">
+                            <button class="dda-btn dda-btn--cancel" id="bill-export-csv"><i class="fas fa-file-csv"></i> Export CSV</button>
+                        </div>
+                    </div>
+
+                    <div class="dda-stats">
+                        <div class="dda-stat-card">
+                            <div class="dda-stat-icon dda-stat-icon--value"><i class="fas fa-coins"></i></div>
+                            <div class="dda-stat-info"><span class="dda-stat-value" id="bill-total-revenue">KES 0</span><span class="dda-stat-label">Collected Revenue</span></div>
+                        </div>
+                        <div class="dda-stat-card">
+                            <div class="dda-stat-icon"><i class="fas fa-repeat"></i></div>
+                            <div class="dda-stat-info"><span class="dda-stat-value" id="bill-recurring-revenue">KES 0</span><span class="dda-stat-label">Recurring Revenue</span></div>
+                        </div>
+                        <div class="dda-stat-card">
+                            <div class="dda-stat-icon dda-stat-icon--warn"><i class="fas fa-file-invoice"></i></div>
+                            <div class="dda-stat-info"><span class="dda-stat-value" id="bill-outstanding">KES 0</span><span class="dda-stat-label">Outstanding Invoices</span></div>
+                        </div>
+                        <div class="dda-stat-card">
+                            <div class="dda-stat-icon dda-stat-icon--danger"><i class="fas fa-clock"></i></div>
+                            <div class="dda-stat-info"><span class="dda-stat-value" id="bill-overdue-count">0</span><span class="dda-stat-label">Overdue Branches</span></div>
+                        </div>
+                    </div>
+
+                    <div class="adm-billing-controls">
+                        <div class="adm-billing-filter"><label>Period</label><select id="bill-period-filter"><option value="month">This Month</option><option value="today">Today</option><option value="week">This Week</option><option value="year">This Year</option><option value="all">All Time</option><option value="custom">Custom</option></select></div>
+                        <div class="adm-billing-filter"><label>From</label><input type="date" id="bill-from-date"></div>
+                        <div class="adm-billing-filter"><label>To</label><input type="date" id="bill-to-date"></div>
+                        <div class="adm-billing-filter"><label>Branch</label><select id="bill-branch-filter"><option value="">All branches</option></select></div>
+                        <div class="adm-billing-filter"><label>Payment Mode</label><select id="bill-mode-filter"><option value="">All modes</option><option value="monthly">Monthly</option><option value="weekly">Weekly</option><option value="daily">Daily</option><option value="one-off">One-off</option></select></div>
+                        <div class="adm-billing-filter"><label>Status</label><select id="bill-status-filter"><option value="">All statuses</option><option value="paid">Paid</option><option value="issued">Issued</option><option value="overdue">Overdue</option><option value="waived">Waived</option></select></div>
+                    </div>
+
+                    <div class="adm-billing-grid">
+                        <section class="ord-card">
+                            <div class="ord-card-header"><i class="fas fa-chart-pie"></i> Payment Mode Mix</div>
+                            <div class="ord-card-body"><div class="adm-billing-mode-grid" id="bill-mode-grid"></div></div>
+                        </section>
+                        <section class="ord-card">
+                            <div class="ord-card-header"><i class="fas fa-building"></i> Branch Billing Setup</div>
+                            <div class="ord-card-body">
+                                <form id="bill-branch-form" class="adm-billing-form">
+                                    <select id="bill-config-branch" required><option value="">Select branch</option></select>
+                                    <select id="bill-config-mode" required><option value="monthly">Monthly</option><option value="weekly">Weekly</option><option value="daily">Daily</option><option value="one-off">One-off</option></select>
+                                    <input type="number" id="bill-config-amount" min="0" step="0.01" placeholder="Amount" required>
+                                    <input type="text" id="bill-config-currency" value="KES" maxlength="5" required>
+                                    <input type="date" id="bill-config-next">
+                                    <select id="bill-config-status"><option value="active">Active</option><option value="trial">Trial</option><option value="overdue">Overdue</option><option value="suspended">Suspended</option><option value="cancelled">Cancelled</option></select>
+                                    <button class="dda-btn dda-btn--primary" type="submit"><i class="fas fa-save"></i> Save Setup</button>
+                                </form>
+                            </div>
+                        </section>
+                    </div>
+
+                    <section class="ord-card">
+                        <div class="ord-card-header"><i class="fas fa-plus-circle"></i> Record System Payment / Invoice</div>
+                        <div class="ord-card-body">
+                            <form id="bill-record-form" class="adm-billing-form adm-billing-form--record">
+                                <select id="bill-record-branch" required><option value="">Branch</option></select>
+                                <select id="bill-record-type" required><option value="receipt">Receipt / Payment</option><option value="invoice">Invoice</option></select>
+                                <select id="bill-record-mode"><option value="monthly">Monthly</option><option value="weekly">Weekly</option><option value="daily">Daily</option><option value="one-off">One-off</option></select>
+                                <input type="text" id="bill-record-month" placeholder="Billing period e.g. June 2026" required>
+                                <input type="number" id="bill-record-amount" min="0" step="0.01" placeholder="Amount" required>
+                                <input type="date" id="bill-record-due">
+                                <input type="text" id="bill-record-note" placeholder="Note">
+                                <button class="dda-btn dda-btn--primary" type="submit"><i class="fas fa-check"></i> Record</button>
+                            </form>
+                        </div>
+                    </section>
+
+                    <section class="ord-card">
+                        <div class="ord-card-header"><i class="fas fa-table"></i> Revenue Ledger</div>
+                        <div class="ord-card-body">
+                            <div class="dda-toolbar" style="margin-bottom:12px">
+                                <div class="dda-search-box"><i class="fas fa-search"></i><input id="bill-search" type="text" placeholder="Search branch, document, period, note..."></div>
+                                <div class="dda-toolbar-actions"><span class="adm-billing-count" id="bill-result-count">0 records</span></div>
+                            </div>
+                            <div class="dda-table-wrap">
+                                <table class="dda-table">
+                                    <thead><tr><th>Document</th><th>Branch</th><th>Mode</th><th>Period</th><th>Amount</th><th>Status</th><th>Created</th><th>Due</th><th>Actions</th></tr></thead>
+                                    <tbody id="bill-ledger-body"><tr><td colspan="9" class="dda-loading"><i class="fas fa-spinner fa-spin"></i> Loading billing data...</td></tr></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            `;
+
+            container.querySelector('[data-nav="dashboard"]')?.addEventListener('click', (e) => {
+                e.preventDefault();
+                PharmaFlow.Sidebar.setActive('dashboard', null);
+            });
+            document.getElementById('bill-branch-form')?.addEventListener('submit', (e) => this.saveBranchBillingSetup(e));
+            document.getElementById('bill-record-form')?.addEventListener('submit', (e) => this.recordBillingDocument(e));
+            document.getElementById('bill-config-branch')?.addEventListener('change', () => this.populateBranchBillingForm());
+            document.getElementById('bill-export-csv')?.addEventListener('click', () => this.exportBillingCsv());
+            ['bill-period-filter', 'bill-from-date', 'bill-to-date', 'bill-branch-filter', 'bill-mode-filter', 'bill-status-filter', 'bill-search'].forEach(id => {
+                document.getElementById(id)?.addEventListener('input', () => this.applyBillingFilters());
+                document.getElementById(id)?.addEventListener('change', () => this.applyBillingFilters());
+            });
+            this.loadBillingData();
+        },
+
+        loadBillingData: async function () {
+            try {
+                const bizSnap = await window.db.collection('businesses').get();
+                allBusinesses = bizSnap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+                this.populateBillingBranchSelects();
+                if (billingListener) billingListener();
+                billingListener = window.db.collection('branch_finance_docs').onSnapshot(snap => {
+                    allBillingDocs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    allBillingDocs.sort((a, b) => this.billingDateValue(b.createdAt) - this.billingDateValue(a.createdAt));
+                    this.applyBillingFilters();
+                }, err => {
+                    console.error('Billing listener error:', err);
+                    const body = document.getElementById('bill-ledger-body');
+                    if (body) body.innerHTML = '<tr><td colspan="9" class="dda-loading" style="color:#ef4444"><i class="fas fa-exclamation-circle"></i> Failed to load billing data: ' + this.escapeHtml(err.message) + '</td></tr>';
+                });
+            } catch (err) {
+                console.error('Load billing error:', err);
+                const body = document.getElementById('bill-ledger-body');
+                if (body) body.innerHTML = '<tr><td colspan="9" class="dda-loading" style="color:#ef4444"><i class="fas fa-exclamation-circle"></i> Failed to load branches: ' + this.escapeHtml(err.message) + '</td></tr>';
+            }
+        },
+
+        populateBillingBranchSelects: function () {
+            const options = '<option value="">All branches</option>' + allBusinesses.map(b => '<option value="' + this.escapeHtml(b.id) + '">' + this.escapeHtml(b.name || b.id) + '</option>').join('');
+            const requiredOptions = '<option value="">Select branch</option>' + allBusinesses.map(b => '<option value="' + this.escapeHtml(b.id) + '">' + this.escapeHtml(b.name || b.id) + '</option>').join('');
+            const filter = document.getElementById('bill-branch-filter');
+            if (filter) filter.innerHTML = options;
+            ['bill-config-branch', 'bill-record-branch'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.innerHTML = requiredOptions;
+            });
+        },
+
+        populateBranchBillingForm: function () {
+            const branchId = document.getElementById('bill-config-branch')?.value;
+            const branch = allBusinesses.find(b => b.id === branchId);
+            if (!branch) return;
+            const plan = branch.systemBilling || {};
+            const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val || ''; };
+            set('bill-config-mode', plan.paymentMode || branch.paymentMode || 'monthly');
+            set('bill-config-amount', plan.amount || branch.planAmount || '');
+            set('bill-config-currency', plan.currency || branch.currency || 'KES');
+            set('bill-config-next', plan.nextBillingDate || '');
+            set('bill-config-status', plan.status || branch.billingStatus || 'active');
+        },
+
+        saveBranchBillingSetup: async function (e) {
+            e.preventDefault();
+            const branchId = document.getElementById('bill-config-branch')?.value;
+            if (!branchId) return this.showToast('Select a branch first.', 'error');
+            const data = {
+                paymentMode: document.getElementById('bill-config-mode')?.value || 'monthly',
+                amount: Number(document.getElementById('bill-config-amount')?.value || 0),
+                currency: (document.getElementById('bill-config-currency')?.value || 'KES').toUpperCase(),
+                nextBillingDate: document.getElementById('bill-config-next')?.value || '',
+                status: document.getElementById('bill-config-status')?.value || 'active',
+                updatedAt: new Date().toISOString(),
+                updatedBy: 'Superadmin'
+            };
+            try {
+                await window.db.collection('businesses').doc(branchId).update({
+                    systemBilling: data,
+                    paymentMode: data.paymentMode,
+                    planAmount: data.amount,
+                    currency: data.currency,
+                    billingStatus: data.status
+                });
+                const idx = allBusinesses.findIndex(b => b.id === branchId);
+                if (idx !== -1) allBusinesses[idx] = { ...allBusinesses[idx], systemBilling: data, paymentMode: data.paymentMode, planAmount: data.amount, currency: data.currency, billingStatus: data.status };
+                this.applyBillingFilters();
+                this.showToast('Branch billing setup saved.');
+            } catch (err) {
+                console.error('Save billing setup error:', err);
+                this.showToast('Failed to save billing setup: ' + err.message, 'error');
+            }
+        },
+
+        recordBillingDocument: async function (e) {
+            e.preventDefault();
+            const branchId = document.getElementById('bill-record-branch')?.value;
+            const branch = allBusinesses.find(b => b.id === branchId);
+            if (!branch) return this.showToast('Select a branch.', 'error');
+            const type = document.getElementById('bill-record-type')?.value || 'receipt';
+            const amount = Number(document.getElementById('bill-record-amount')?.value || 0);
+            if (!amount) return this.showToast('Enter an amount.', 'error');
+            const docNumber = (type === 'receipt' ? 'RCT' : 'INV') + '-' + new Date().getFullYear() + String(Date.now()).slice(-6);
+            try {
+                await window.db.collection('branch_finance_docs').add({
+                    businessId: branchId,
+                    businessName: branch.name || branchId,
+                    type: type,
+                    docNumber: docNumber,
+                    paymentMode: document.getElementById('bill-record-mode')?.value || this.getBranchPaymentMode(branch),
+                    billingMonth: (document.getElementById('bill-record-month')?.value || '').trim(),
+                    amount: amount,
+                    currency: this.getBranchCurrency(branch),
+                    dueDate: document.getElementById('bill-record-due')?.value || '',
+                    note: (document.getElementById('bill-record-note')?.value || '').trim(),
+                    status: type === 'receipt' ? 'paid' : 'issued',
+                    createdBy: 'Superadmin',
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString()
+                });
+                e.target.reset();
+                this.showToast('Billing record saved.');
+            } catch (err) {
+                console.error('Record billing document error:', err);
+                this.showToast('Failed to record billing document: ' + err.message, 'error');
+            }
+        },
+
+        applyBillingFilters: function () {
+            const period = document.getElementById('bill-period-filter')?.value || 'month';
+            const branchId = document.getElementById('bill-branch-filter')?.value || '';
+            const mode = document.getElementById('bill-mode-filter')?.value || '';
+            const status = document.getElementById('bill-status-filter')?.value || '';
+            const q = (document.getElementById('bill-search')?.value || '').toLowerCase().trim();
+            const range = this.getBillingRange(period);
+
+            filteredBillingDocs = allBillingDocs.filter(doc => {
+                const branch = allBusinesses.find(b => b.id === doc.businessId);
+                const docMode = doc.paymentMode || this.getBranchPaymentMode(branch);
+                const docStatus = this.getBillingStatus(doc);
+                const date = this.billingToDate(doc.createdAt);
+                if (branchId && doc.businessId !== branchId) return false;
+                if (mode && docMode !== mode) return false;
+                if (status && docStatus !== status) return false;
+                if (range.from && date < range.from) return false;
+                if (range.to && date > range.to) return false;
+                if (q) {
+                    const haystack = [doc.docNumber, doc.businessName, branch?.name, doc.billingMonth, doc.note, doc.type, docMode, docStatus].join(' ').toLowerCase();
+                    if (!haystack.includes(q)) return false;
+                }
+                return true;
+            });
+
+            this.renderBillingSummary();
+            this.renderBillingModeGrid();
+            this.renderBillingLedger();
+        },
+
+        renderBillingSummary: function () {
+            const paidDocs = filteredBillingDocs.filter(doc => this.isCollectedBillingDoc(doc));
+            const totalRevenue = paidDocs.reduce((sum, doc) => sum + Number(doc.amount || 0), 0);
+            const recurringRevenue = paidDocs.filter(doc => {
+                const branch = allBusinesses.find(b => b.id === doc.businessId);
+                return ['monthly', 'weekly', 'daily'].includes(doc.paymentMode || this.getBranchPaymentMode(branch));
+            }).reduce((sum, doc) => sum + Number(doc.amount || 0), 0);
+            const outstanding = filteredBillingDocs.filter(doc => !this.isCollectedBillingDoc(doc) && this.getBillingStatus(doc) !== 'waived').reduce((sum, doc) => sum + Number(doc.amount || 0), 0);
+            const overdueBranches = allBusinesses.filter(b => this.getBranchBillingStatus(b) === 'overdue').length;
+            const currency = this.getDominantCurrency(filteredBillingDocs) || 'KES';
+            this.setText('bill-total-revenue', this.formatBillingMoney(totalRevenue, currency));
+            this.setText('bill-recurring-revenue', this.formatBillingMoney(recurringRevenue, currency));
+            this.setText('bill-outstanding', this.formatBillingMoney(outstanding, currency));
+            this.setText('bill-overdue-count', overdueBranches);
+            this.setText('bill-result-count', filteredBillingDocs.length + ' record' + (filteredBillingDocs.length === 1 ? '' : 's'));
+        },
+
+        renderBillingModeGrid: function () {
+            const grid = document.getElementById('bill-mode-grid');
+            if (!grid) return;
+            const modes = ['monthly', 'weekly', 'daily', 'one-off'];
+            grid.innerHTML = modes.map(mode => {
+                const branches = allBusinesses.filter(b => this.getBranchPaymentMode(b) === mode);
+                const revenue = filteredBillingDocs.filter(doc => {
+                    const branch = allBusinesses.find(b => b.id === doc.businessId);
+                    return this.isCollectedBillingDoc(doc) && (doc.paymentMode || this.getBranchPaymentMode(branch)) === mode;
+                }).reduce((sum, doc) => sum + Number(doc.amount || 0), 0);
+                const label = mode === 'one-off' ? 'One-off' : mode.charAt(0).toUpperCase() + mode.slice(1);
+                const icon = mode === 'monthly' ? 'fa-calendar-days' : mode === 'weekly' ? 'fa-calendar-week' : mode === 'daily' ? 'fa-sun' : 'fa-bolt';
+                return '<div class="adm-billing-mode-card adm-billing-mode-card--' + mode.replace('-', '') + '"><div class="adm-billing-mode-icon"><i class="fas ' + icon + '"></i></div><div><strong>' + label + '</strong><span>' + branches.length + ' branch' + (branches.length === 1 ? '' : 'es') + '</span><em>' + this.formatBillingMoney(revenue, this.getDominantCurrency(filteredBillingDocs) || 'KES') + '</em></div></div>';
+            }).join('');
+        },
+
+        renderBillingLedger: function () {
+            const body = document.getElementById('bill-ledger-body');
+            if (!body) return;
+            if (!filteredBillingDocs.length) {
+                body.innerHTML = '<tr><td colspan="9" class="dda-loading"><i class="fas fa-inbox"></i> No billing records match the selected filters</td></tr>';
+                return;
+            }
+            body.innerHTML = filteredBillingDocs.map(doc => {
+                const branch = allBusinesses.find(b => b.id === doc.businessId);
+                const mode = doc.paymentMode || this.getBranchPaymentMode(branch);
+                const status = this.getBillingStatus(doc);
+                return '<tr>' +
+                    '<td><strong>' + this.escapeHtml(doc.docNumber || doc.id) + '</strong><br><small>' + this.escapeHtml((doc.type || 'record').toUpperCase()) + '</small></td>' +
+                    '<td>' + this.escapeHtml(doc.businessName || branch?.name || doc.businessId || 'Branch') + '</td>' +
+                    '<td>' + this.billingModeBadge(mode) + '</td>' +
+                    '<td>' + this.escapeHtml(doc.billingMonth || '—') + '</td>' +
+                    '<td><strong>' + this.formatBillingMoney(doc.amount, doc.currency || this.getBranchCurrency(branch)) + '</strong></td>' +
+                    '<td>' + this.billingStatusBadge(status) + '</td>' +
+                    '<td>' + this.formatAdminDate(doc.createdAt) + '</td>' +
+                    '<td>' + (doc.dueDate ? this.formatAdminDate(doc.dueDate) : '<span class="text-muted">—</span>') + '</td>' +
+                    '<td><div class="adm-billing-actions">' +
+                        (this.isCollectedBillingDoc(doc) ? '' : '<button class="sales-action-btn bill-mark-paid" data-id="' + this.escapeHtml(doc.id) + '" title="Mark as paid" style="background:#dcfce7;color:#15803d"><i class="fas fa-check"></i></button>') +
+                        '<button class="sales-action-btn bill-send-reminder" data-id="' + this.escapeHtml(doc.id) + '" title="Send reminder" style="background:#e0f2fe;color:#0369a1"><i class="fas fa-paper-plane"></i></button>' +
+                        '<button class="sales-action-btn bill-suspend-branch" data-biz="' + this.escapeHtml(doc.businessId || '') + '" data-id="' + this.escapeHtml(doc.id) + '" title="Suspend branch" style="background:#fee2e2;color:#991b1b"><i class="fas fa-ban"></i></button>' +
+                    '</div></td>' +
+                '</tr>';
+            }).join('');
+
+            body.querySelectorAll('.bill-mark-paid').forEach(btn => {
+                btn.addEventListener('click', () => this.markBillingDocPaid(btn.dataset.id));
+            });
+            body.querySelectorAll('.bill-send-reminder').forEach(btn => {
+                btn.addEventListener('click', () => this.sendBillingReminder(btn.dataset.id));
+            });
+            body.querySelectorAll('.bill-suspend-branch').forEach(btn => {
+                btn.addEventListener('click', () => this.suspendBranchFromBilling(btn.dataset.biz, btn.dataset.id));
+            });
+        },
+
+        markBillingDocPaid: async function (docId) {
+            const doc = allBillingDocs.find(d => d.id === docId);
+            if (!doc) return;
+            if (!(await PharmaFlow.confirm('Mark ' + (doc.docNumber || 'this document') + ' as paid?', { title: 'Mark as Paid', confirmText: 'Mark Paid' }))) return;
+            try {
+                await window.db.collection('branch_finance_docs').doc(docId).update({
+                    type: 'receipt',
+                    status: 'paid',
+                    paidAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString(),
+                    paidBy: 'Superadmin'
+                });
+                this.showToast('Payment marked as paid.');
+            } catch (err) {
+                console.error('Mark paid error:', err);
+                this.showToast('Failed to mark payment as paid: ' + err.message, 'error');
+            }
+        },
+
+        sendBillingReminder: async function (docId) {
+            const doc = allBillingDocs.find(d => d.id === docId);
+            if (!doc || !doc.businessId) return;
+            const branch = allBusinesses.find(b => b.id === doc.businessId);
+            const amount = this.formatBillingMoney(doc.amount, doc.currency || this.getBranchCurrency(branch));
+            const message = 'Payment reminder: ' + (doc.docNumber || 'billing document') + ' for ' + (doc.billingMonth || 'your system subscription') + ' is pending. Amount: ' + amount + (doc.dueDate ? '. Due date: ' + this.billingToDate(doc.dueDate).toLocaleDateString('en-KE') : '.') + ' Please complete payment to keep your branch active.';
+            if (!(await PharmaFlow.confirm('Send a billing reminder to ' + (doc.businessName || branch?.name || 'this branch') + '?', { title: 'Send Reminder', confirmText: 'Send Reminder' }))) return;
+            try {
+                const now = new Date().toISOString();
+                const batch = window.db.batch();
+                const commRef = window.db.collection('branch_communications').doc();
+                batch.set(commRef, {
+                    businessId: doc.businessId,
+                    businessName: doc.businessName || branch?.name || doc.businessId,
+                    subject: 'Billing Reminder',
+                    message: message,
+                    priority: 'Important',
+                    senderRole: 'superadmin',
+                    senderName: 'Superadmin',
+                    billingDocId: docId,
+                    createdAt: now
+                });
+                const msgRef = window.db.collection('businesses').doc(doc.businessId).collection('messages').doc();
+                batch.set(msgRef, {
+                    subject: 'Billing Reminder',
+                    message: message,
+                    senderName: 'Superadmin',
+                    senderId: 'superadmin',
+                    recipientId: 'all',
+                    type: 'billing-reminder',
+                    priority: 'high',
+                    read: false,
+                    readBy: [],
+                    billingDocId: docId,
+                    createdAt: now
+                });
+                batch.update(window.db.collection('branch_finance_docs').doc(docId), {
+                    lastReminderAt: now,
+                    reminderCount: (Number(doc.reminderCount || 0) + 1),
+                    updatedAt: now
+                });
+                await batch.commit();
+                this.showToast('Reminder sent in real time.');
+            } catch (err) {
+                console.error('Send reminder error:', err);
+                this.showToast('Failed to send reminder: ' + err.message, 'error');
+            }
+        },
+
+        suspendBranchFromBilling: async function (businessId, docId) {
+            const doc = allBillingDocs.find(d => d.id === docId);
+            const branch = allBusinesses.find(b => b.id === businessId);
+            if (!businessId || !branch) return this.showToast('Branch not found.', 'error');
+            const defaultReason = 'Billing suspension for unpaid system subscription' + (doc && doc.docNumber ? ' (' + doc.docNumber + ')' : '') + '.';
+            const reason = window.prompt('Reason to show this branch on login:', defaultReason);
+            if (!reason) return;
+            if (!(await PharmaFlow.confirm('Suspend ' + (branch.name || businessId) + ' now? Logged-in users will be signed out and future logins blocked.', { title: 'Suspend Branch', confirmText: 'Suspend Branch', danger: true }))) return;
+            try {
+                const now = new Date().toISOString();
+                await window.db.collection('businesses').doc(businessId).update({
+                    isActive: false,
+                    billingStatus: 'suspended',
+                    suspensionReason: reason,
+                    suspendedAt: now,
+                    suspendedBy: 'Superadmin',
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                });
+                if (docId) {
+                    await window.db.collection('branch_finance_docs').doc(docId).update({
+                        status: 'overdue',
+                        suspensionReason: reason,
+                        updatedAt: now
+                    }).catch(() => {});
+                }
+                this.showToast('Branch suspended. Active users will be signed out automatically.');
+            } catch (err) {
+                console.error('Suspend branch error:', err);
+                this.showToast('Failed to suspend branch: ' + err.message, 'error');
+            }
+        },
+
+        exportBillingCsv: function () {
+            const rows = [['Document', 'Type', 'Branch', 'Payment Mode', 'Period', 'Amount', 'Currency', 'Status', 'Created', 'Due Date', 'Note']];
+            filteredBillingDocs.forEach(doc => {
+                const branch = allBusinesses.find(b => b.id === doc.businessId);
+                rows.push([doc.docNumber || doc.id, doc.type || '', doc.businessName || branch?.name || doc.businessId || '', doc.paymentMode || this.getBranchPaymentMode(branch), doc.billingMonth || '', doc.amount || 0, doc.currency || this.getBranchCurrency(branch), this.getBillingStatus(doc), this.billingToDate(doc.createdAt).toISOString(), doc.dueDate || '', doc.note || '']);
+            });
+            const csv = rows.map(row => row.map(cell => '"' + String(cell).replace(/"/g, '""') + '"').join(',')).join('\n');
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'pharmaflow-system-revenue.csv';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        },
+
+        getBillingRange: function (period) {
+            if (period === 'all') return { from: null, to: null };
+            if (period === 'custom') {
+                const fromVal = document.getElementById('bill-from-date')?.value;
+                const toVal = document.getElementById('bill-to-date')?.value;
+                return { from: fromVal ? new Date(fromVal + 'T00:00:00') : null, to: toVal ? new Date(toVal + 'T23:59:59') : null };
+            }
+            const now = new Date();
+            let from;
+            if (period === 'today') from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            else if (period === 'week') {
+                const day = now.getDay() || 7;
+                from = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 1);
+            } else if (period === 'year') from = new Date(now.getFullYear(), 0, 1);
+            else from = new Date(now.getFullYear(), now.getMonth(), 1);
+            return { from: from, to: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59) };
+        },
+
+        billingToDate: function (value) {
+            if (!value) return new Date(0);
+            const d = value.toDate ? value.toDate() : (value.seconds ? new Date(value.seconds * 1000) : new Date(value));
+            return isNaN(d.getTime()) ? new Date(0) : d;
+        },
+
+        billingDateValue: function (value) {
+            return this.billingToDate(value).getTime();
+        },
+
+        isCollectedBillingDoc: function (doc) {
+            const status = this.getBillingStatus(doc);
+            return doc.type === 'receipt' || status === 'paid' || status === 'completed';
+        },
+
+        getBillingStatus: function (doc) {
+            const status = (doc.status || '').toLowerCase();
+            if (status) return status;
+            if (doc.type === 'receipt') return 'paid';
+            if (doc.dueDate) {
+                const due = this.billingToDate(doc.dueDate);
+                if (due.getTime() && due < new Date()) return 'overdue';
+            }
+            return 'issued';
+        },
+
+        getBranchPaymentMode: function (branch) {
+            if (!branch) return 'monthly';
+            return (branch.systemBilling && branch.systemBilling.paymentMode) || branch.paymentMode || 'monthly';
+        },
+
+        getBranchCurrency: function (branch) {
+            if (!branch) return 'KES';
+            return (branch.systemBilling && branch.systemBilling.currency) || branch.currency || 'KES';
+        },
+
+        getBranchBillingStatus: function (branch) {
+            if (!branch) return 'active';
+            return (branch.systemBilling && branch.systemBilling.status) || branch.billingStatus || 'active';
+        },
+
+        getDominantCurrency: function (docs) {
+            const counts = {};
+            docs.forEach(doc => { counts[doc.currency || 'KES'] = (counts[doc.currency || 'KES'] || 0) + 1; });
+            return Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0] || 'KES';
+        },
+
+        formatBillingMoney: function (amount, currency) {
+            return (currency || 'KES') + ' ' + Number(amount || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        },
+
+        setText: function (id, value) {
+            const el = document.getElementById(id);
+            if (el) el.textContent = value;
+        },
+
+        billingModeBadge: function (mode) {
+            const m = mode || 'monthly';
+            const label = m === 'one-off' ? 'One-off' : m.charAt(0).toUpperCase() + m.slice(1);
+            return '<span class="adm-billing-badge adm-billing-badge--' + this.escapeHtml(m.replace('-', '')) + '">' + this.escapeHtml(label) + '</span>';
+        },
+
+        billingStatusBadge: function (status) {
+            const s = status || 'issued';
+            const cls = s === 'paid' || s === 'completed' ? 'ok' : s === 'overdue' ? 'danger' : s === 'waived' ? 'muted' : 'warn';
+            return '<span class="adm-ticket-badge adm-ticket-badge--' + cls + '">' + this.escapeHtml(s.charAt(0).toUpperCase() + s.slice(1)) + '</span>';
+        },
 
         renderFranchiseAlerts: function (container) {
             this.cleanup();

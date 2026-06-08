@@ -17,6 +17,8 @@
         _msgListeners: [],
         _authInitialized: false,
         _franchiseListenerBound: false,
+        _messagePreviewItems: [],
+        _businessStatusListener: null,
 
         /**
          * Initialize the application
@@ -75,6 +77,7 @@
                 if (activeBizId) {
                     this.startNotifications(activeBizId, user.uid);
                     this.startMessages(activeBizId, user.uid);
+                    this.startBusinessStatusWatcher(activeBizId);
 
                     // Run scheduled activity log cleanup
                     if (PharmaFlow.ActivityLog) PharmaFlow.ActivityLog.runScheduledCleanup();
@@ -90,8 +93,35 @@
                     const uid = PharmaFlow.Auth && PharmaFlow.Auth.currentUser ? PharmaFlow.Auth.currentUser.uid : null;
                     this.startNotifications(businessId, uid);
                     this.startMessages(businessId, uid);
+                    this.startBusinessStatusWatcher(businessId);
                 }
             });
+        },
+
+        startBusinessStatusWatcher: function (businessId) {
+            const profile = PharmaFlow.Auth ? PharmaFlow.Auth.userProfile : null;
+            if (!window.db || !businessId || !profile || profile.role === 'superadmin') return;
+            if (this._businessStatusListener) {
+                try { this._businessStatusListener(); } catch (e) { /* ignore */ }
+                this._businessStatusListener = null;
+            }
+
+            this._businessStatusListener = window.db.collection('businesses').doc(businessId)
+                .onSnapshot(doc => {
+                    if (!doc.exists) return;
+                    const data = doc.data() || {};
+                    if (data.isActive === false) {
+                        const reason = data.suspensionReason || data.inactiveReason || data.deactivationReason || 'Please contact the system administrator.';
+                        try {
+                            localStorage.setItem('pf_login_error', 'This branch has been suspended. Reason: ' + reason);
+                        } catch (e) { /* ignore */ }
+                        if (PharmaFlow.Auth) {
+                            PharmaFlow.Auth.signOut();
+                        } else if (window.auth) {
+                            window.auth.signOut().finally(() => window.location.replace('login.html'));
+                        }
+                    }
+                }, err => console.error('Business status listener error:', err));
         },
 
         /**
@@ -765,6 +795,7 @@
                 if (!b.time) return -1;
                 return new Date(b.time) - new Date(a.time);
             });
+            this._messagePreviewItems = items;
 
             // Render messages list
             if (items.length === 0) {
@@ -801,9 +832,10 @@
                 const isUnread = !item.read && !(item.readBy && item.readBy.includes(uid));
                 const readClass = isUnread ? 'panel-item--unread' : 'panel-item--read';
                 const initials = item.senderName.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
+                const priorityClass = item.priority === 'urgent' || item.priority === 'high' ? ' panel-item--high' : '';
 
                 html += `
-                    <div class="panel-item ${readClass}" data-msg-id="${this._escapeAttr(item.id)}">
+                    <button class="panel-item message-preview-trigger ${readClass}${priorityClass}" data-msg-id="${this._escapeAttr(item.id)}" type="button">
                         <div class="panel-item__avatar">${this._escapeHtml(initials)}</div>
                         <div class="panel-item__content">
                             <div class="panel-item__header-row">
@@ -813,9 +845,10 @@
                             <span class="panel-item__subject">${this._escapeHtml(item.subject || 'No Subject')}</span>
                             <span class="panel-item__msg">${this._escapeHtml(item.message).substring(0, 100)}${item.message.length > 100 ? '...' : ''}</span>
                         </div>
-                    </div>`;
+                    </button>`;
             });
             html += '</div>';
+            html += '<div class="message-preview-window" id="message-preview-window" aria-live="polite"></div>';
 
             listEl.innerHTML = html;
 
@@ -844,6 +877,48 @@
             const markAllBtn = document.getElementById('mark-all-msg-read');
             if (markAllBtn) {
                 markAllBtn.addEventListener('click', () => this.markMessagesRead());
+            }
+
+            listEl.querySelectorAll('.message-preview-trigger').forEach(item => {
+                item.addEventListener('click', () => this.openMessagePreview(item.dataset.msgId));
+            });
+        },
+
+        openMessagePreview: function (messageId) {
+            const item = (this._messagePreviewItems || []).find(msg => msg.id === messageId);
+            const previewEl = document.getElementById('message-preview-window');
+            if (!item || !previewEl) return;
+
+            const timeStr = item.time ? this._formatNotifTime(item.time) : '';
+            const priority = item.priority || 'normal';
+            previewEl.innerHTML = `
+                <div class="message-preview-card">
+                    <div class="message-preview-card__top">
+                        <div>
+                            <small>Message Preview</small>
+                            <h4>${this._escapeHtml(item.subject || 'No Subject')}</h4>
+                        </div>
+                        <button class="message-preview-card__close" id="message-preview-close" type="button" title="Close preview">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <div class="message-preview-card__meta">
+                        <span><i class="fas fa-user"></i> ${this._escapeHtml(item.senderName || 'Unknown')}</span>
+                        <span><i class="fas fa-clock"></i> ${this._escapeHtml(timeStr)}</span>
+                        <span class="message-preview-card__priority message-preview-card__priority--${this._escapeAttr(priority)}">${this._escapeHtml(priority)}</span>
+                    </div>
+                    <div class="message-preview-card__body">${this._escapeHtml(item.message || 'No message body.')}</div>
+                </div>
+            `;
+            previewEl.classList.add('show');
+            previewEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+
+            const closeBtn = document.getElementById('message-preview-close');
+            if (closeBtn) {
+                closeBtn.addEventListener('click', () => {
+                    previewEl.classList.remove('show');
+                    previewEl.innerHTML = '';
+                });
             }
         },
 
