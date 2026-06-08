@@ -9932,6 +9932,420 @@ textarea.tkt-input {
     color: #cbd5e1;
 }
 
+[data-theme="dark"] .tkt-module .page-header,
+[data-theme="dark"] .adm-ticket-module .page-header {
+    border-color: rgba(71, 85, 105, 0.72);
+}
+
+[data-theme="dark"] .tkt-card-head h3,
+[data-theme="dark"] .tkt-info-card h3,
+[data-theme="dark"] .adm-ticket-modal-header h3,
+[data-theme="dark"] .adm-ticket-message h4,
+[data-theme="dark"] .adm-ticket-title strong,
+[data-theme="dark"] .adm-ticket-branch strong,
+[data-theme="dark"] .tkt-table td strong {
+    color: #f8fafc;
+}
+
+[data-theme="dark"] .tkt-card-head small,
+[data-theme="dark"] .tkt-info-card p,
+[data-theme="dark"] .tkt-field label,
+[data-theme="dark"] .adm-ticket-detail label,
+[data-theme="dark"] .adm-ticket-message label,
+[data-theme="dark"] .adm-ticket-title small,
+[data-theme="dark"] .adm-ticket-branch small,
+[data-theme="dark"] .tkt-muted,
+[data-theme="dark"] .tkt-empty {
+    color: #94a3b8;
+}
+
+[data-theme="dark"] .tkt-list-card,
+[data-theme="dark"] .tkt-form-card {
+    background: rgba(30, 41, 59, 0.96);
+}
+
+[data-theme="dark"] .tkt-table-wrap,
+[data-theme="dark"] .adm-ticket-queue .dda-table-wrap {
+    background: rgba(15, 23, 42, 0.32);
+}
+
+[data-theme="dark"] .tkt-table tbody tr,
+[data-theme="dark"] .adm-ticket-table tbody tr {
+    background: transparent;
+}
+
+[data-theme="dark"] .tkt-search,
+[data-theme="dark"] .adm-ticket-search {
+    color: #94a3b8;
+}
+
+[data-theme="dark"] .tkt-search i,
+[data-theme="dark"] .adm-ticket-search i {
+    color: #64748b;
+}
+
+[data-theme="dark"] .adm-ticket-select option,
+[data-theme="dark"] .tkt-input option {
+    color: #e2e8f0;
+    background: #0f172a;
+}
+
+[data-theme="dark"] .adm-ticket-modal-actions,
+[data-theme="dark"] .adm-ticket-update-grid {
+    border-color: rgba(71, 85, 105, 0.72);
+}
+
+[data-theme="dark"] .adm-ticket-close:focus,
+[data-theme="dark"] .adm-ticket-action-btn:focus,
+[data-theme="dark"] .tkt-input:focus,
+[data-theme="dark"] .adm-ticket-select:focus {
+    outline: none;
+}
+
+/* Support tickets dark mode reset */
+[data-theme="dark"] .tkt-module,
+[data-theme="dark"] .adm-ticket-module {
+    color: #e2e8f0;
+}
+
+[data-theme="dark"] .tkt-module *,
+[data-theme="dark"] .adm-ticket-module *,
+[data-theme="dark"] .adm-ticket-modal-overlay * {
+    scrollbar-color: #475569 #0f172a;
+}
+
+[data-theme="dark"] .tkt-module .page-header,
+[data-theme="dark"] .adm-ticket-module .page-header {
+    background: transparent;
+}
+
+[data-theme="dark"] .tkt-module .breadcrumb,
+[data-theme="dark"] .adm-ticket-module .breadcrumb,
+[data-theme="dark"] .tkt-module .breadcrumb span,
+[data-theme="dark"] .adm-ticket-module .breadcrumb span {
+    color: #94a3b8;
+}
+
+[data-theme="dark"] .tkt-module .breadcrumb a,
+[data-theme="dark"] .adm-ticket-module .breadcrumb a {
+    color: #93c5fd;
+}
+
+[data-theme="dark"] .tkt-card,
+[data-theme="dark"] .tkt-info-card,
+[data-theme="dark"] .tkt-list-card,
+[data-theme="dark"] .tkt-form-card,
+[data-theme="dark"] .adm-ticket-stat-card,
+[data-theme="dark"] .adm-ticket-queue,
+[data-theme="dark"] .adm-ticket-modal {
+    background: #1e293b;
+    border: 1px solid #334155;
+    box-shadow: 0 18px 42px rgba(0, 0, 0, 0.34);
+}
+
+[data-theme="dark"] .tkt-primary-panel {
+    background: #1e293b;
+    border-top-color: #3b82f6;
+}
+
+[data-theme="dark"] .tkt-card-head,
+[data-theme="dark"] .adm-ticket-modal-header,
+[data-theme="dark"] .adm-ticket-queue-header,
+[data-theme="dark"] .adm-ticket-module .ord-card-header {
+    background: #172033;
+    border-color: #334155;
+}
+
+[data-theme="dark"] .tkt-card-head h3,
+[data-theme="dark"] .tkt-info-card h3,
+[data-theme="dark"] .adm-ticket-module h2,
+[data-theme="dark"] .adm-ticket-modal-header h3,
+[data-theme="dark"] .adm-ticket-message h4,
+[data-theme="dark"] .adm-ticket-title strong,
+[data-theme="dark"] .adm-ticket-branch strong,
+[data-theme="dark"] .tkt-table td strong,
+[data-theme="dark"] .adm-ticket-module .dda-stat-value {
+    color: #f8fafc;
+}
+
+[data-theme="dark"] .tkt-card-head small,
+[data-theme="dark"] .tkt-info-card p,
+[data-theme="dark"] .tkt-field label,
+[data-theme="dark"] .adm-ticket-detail label,
+[data-theme="dark"] .adm-ticket-message label,
+[data-theme="dark"] .adm-ticket-title small,
+[data-theme="dark"] .adm-ticket-branch small,
+[data-theme="dark"] .tkt-muted,
+[data-theme="dark"] .tkt-empty,
+[data-theme="dark"] .adm-ticket-module .dda-stat-label,
+[data-theme="dark"] .adm-ticket-module .dda-loading {
+    color: #94a3b8;
+}
+
+[data-theme="dark"] .tkt-input,
+[data-theme="dark"] .tkt-search input,
+[data-theme="dark"] .adm-ticket-search input,
+[data-theme="dark"] .adm-ticket-select,
+[data-theme="dark"] #adm-ticket-edit-status,
+[data-theme="dark"] #adm-ticket-note {
+    background: #0f172a;
+    border-color: #475569;
+    color: #e2e8f0;
+    box-shadow: none;
+}
+
+[data-theme="dark"] .tkt-input:hover,
+[data-theme="dark"] .tkt-search input:hover,
+[data-theme="dark"] .adm-ticket-search input:hover,
+[data-theme="dark"] .adm-ticket-select:hover,
+[data-theme="dark"] #adm-ticket-edit-status:hover,
+[data-theme="dark"] #adm-ticket-note:hover {
+    border-color: #64748b;
+}
+
+[data-theme="dark"] .tkt-input:focus,
+[data-theme="dark"] .tkt-search input:focus,
+[data-theme="dark"] .adm-ticket-search input:focus,
+[data-theme="dark"] .adm-ticket-select:focus,
+[data-theme="dark"] #adm-ticket-edit-status:focus,
+[data-theme="dark"] #adm-ticket-note:focus {
+    background: #111827;
+    border-color: #60a5fa;
+    box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.18);
+}
+
+[data-theme="dark"] .tkt-input::placeholder,
+[data-theme="dark"] .tkt-search input::placeholder,
+[data-theme="dark"] .adm-ticket-search input::placeholder,
+[data-theme="dark"] #adm-ticket-note::placeholder {
+    color: #64748b;
+}
+
+[data-theme="dark"] .tkt-input option,
+[data-theme="dark"] .adm-ticket-select option,
+[data-theme="dark"] #adm-ticket-edit-status option {
+    background: #0f172a;
+    color: #e2e8f0;
+}
+
+[data-theme="dark"] .tkt-toolbar,
+[data-theme="dark"] .adm-ticket-toolbar,
+[data-theme="dark"] .tkt-search,
+[data-theme="dark"] .adm-ticket-search {
+    background: #1e293b;
+    border-color: #334155;
+}
+
+[data-theme="dark"] .tkt-search i,
+[data-theme="dark"] .adm-ticket-search i {
+    color: #94a3b8;
+}
+
+[data-theme="dark"] .tkt-info-top,
+[data-theme="dark"] .adm-ticket-pagination,
+[data-theme="dark"] .adm-ticket-queue-note,
+[data-theme="dark"] .adm-ticket-update-grid,
+[data-theme="dark"] .adm-ticket-modal-actions {
+    background: #172033;
+    border-color: #334155;
+}
+
+[data-theme="dark"] .tkt-info-list span,
+[data-theme="dark"] .adm-ticket-detail div,
+[data-theme="dark"] .adm-ticket-message {
+    background: #0f172a;
+    border-color: #334155;
+    color: #cbd5e1;
+}
+
+[data-theme="dark"] .tkt-table-wrap,
+[data-theme="dark"] .adm-ticket-queue .dda-table-wrap {
+    background: #111827;
+    border-color: #334155;
+}
+
+[data-theme="dark"] .tkt-table,
+[data-theme="dark"] .adm-ticket-table,
+[data-theme="dark"] .adm-ticket-module .dda-table {
+    background: #111827;
+    color: #cbd5e1;
+}
+
+[data-theme="dark"] .tkt-table th,
+[data-theme="dark"] .adm-ticket-table th,
+[data-theme="dark"] .adm-ticket-module .dda-table th {
+    background: #0f172a;
+    color: #cbd5e1;
+    border-color: #334155;
+}
+
+[data-theme="dark"] .tkt-table td,
+[data-theme="dark"] .adm-ticket-table td,
+[data-theme="dark"] .adm-ticket-module .dda-table td {
+    background: transparent;
+    color: #cbd5e1;
+    border-color: #334155;
+}
+
+[data-theme="dark"] .tkt-table tbody tr:hover,
+[data-theme="dark"] .adm-ticket-table tbody tr:hover,
+[data-theme="dark"] .adm-ticket-module .dda-table tbody tr:hover {
+    background: rgba(59, 130, 246, 0.1);
+}
+
+[data-theme="dark"] .tkt-table code,
+[data-theme="dark"] .adm-ticket-table code,
+[data-theme="dark"] .adm-ticket-title code {
+    background: rgba(59, 130, 246, 0.18);
+    border: 1px solid rgba(147, 197, 253, 0.24);
+    color: #bfdbfe;
+}
+
+[data-theme="dark"] .tkt-head-icon,
+[data-theme="dark"] .adm-ticket-stat-icon--total {
+    background: rgba(99, 102, 241, 0.2);
+    color: #c4b5fd;
+}
+
+[data-theme="dark"] .tkt-info-icon,
+[data-theme="dark"] .adm-ticket-stat-icon--open {
+    background: rgba(245, 158, 11, 0.18);
+    color: #fcd34d;
+}
+
+[data-theme="dark"] .adm-ticket-stat-icon--progress {
+    background: rgba(59, 130, 246, 0.2);
+    color: #93c5fd;
+}
+
+[data-theme="dark"] .adm-ticket-stat-icon--done {
+    background: rgba(34, 197, 94, 0.18);
+    color: #86efac;
+}
+
+[data-theme="dark"] .tkt-chip,
+[data-theme="dark"] .adm-ticket-live,
+[data-theme="dark"] .adm-ticket-live--syncing,
+[data-theme="dark"] .adm-ticket-live--live,
+[data-theme="dark"] .adm-ticket-live--error {
+    background: rgba(59, 130, 246, 0.16);
+    color: #bfdbfe;
+    border-color: rgba(147, 197, 253, 0.32);
+}
+
+[data-theme="dark"] .tkt-badge--ok,
+[data-theme="dark"] .adm-ticket-badge--ok,
+[data-theme="dark"] .adm-ticket-live--live {
+    background: rgba(34, 197, 94, 0.16);
+    color: #bbf7d0;
+    border-color: rgba(134, 239, 172, 0.34);
+}
+
+[data-theme="dark"] .tkt-badge--warn,
+[data-theme="dark"] .adm-ticket-badge--warn,
+[data-theme="dark"] .adm-ticket-live--syncing {
+    background: rgba(245, 158, 11, 0.18);
+    color: #fde68a;
+    border-color: rgba(251, 191, 36, 0.34);
+}
+
+[data-theme="dark"] .tkt-badge--info,
+[data-theme="dark"] .adm-ticket-badge--info {
+    background: rgba(59, 130, 246, 0.18);
+    color: #bfdbfe;
+    border-color: rgba(147, 197, 253, 0.34);
+}
+
+[data-theme="dark"] .tkt-badge--danger,
+[data-theme="dark"] .adm-ticket-badge--danger,
+[data-theme="dark"] .adm-ticket-live--error {
+    background: rgba(239, 68, 68, 0.16);
+    color: #fecaca;
+    border-color: rgba(252, 165, 165, 0.34);
+}
+
+[data-theme="dark"] .tkt-badge--muted,
+[data-theme="dark"] .adm-ticket-badge--muted {
+    background: rgba(100, 116, 139, 0.22);
+    color: #cbd5e1;
+    border-color: rgba(148, 163, 184, 0.3);
+}
+
+[data-theme="dark"] .adm-ticket-action--progress,
+[data-theme="dark"] .adm-ticket-action--resolve,
+[data-theme="dark"] .adm-ticket-action--close,
+[data-theme="dark"] .adm-ticket-view-btn {
+    border: 1px solid #334155;
+    box-shadow: none;
+}
+
+[data-theme="dark"] .adm-ticket-action--progress {
+    background: rgba(59, 130, 246, 0.2);
+    color: #bfdbfe;
+}
+
+[data-theme="dark"] .adm-ticket-action--resolve {
+    background: rgba(34, 197, 94, 0.18);
+    color: #bbf7d0;
+}
+
+[data-theme="dark"] .adm-ticket-action--close {
+    background: rgba(100, 116, 139, 0.22);
+    color: #cbd5e1;
+}
+
+[data-theme="dark"] .adm-ticket-action--progress:hover:not(:disabled),
+[data-theme="dark"] .adm-ticket-action--resolve:hover:not(:disabled),
+[data-theme="dark"] .adm-ticket-action--close:hover:not(:disabled),
+[data-theme="dark"] .adm-ticket-view-btn:hover {
+    filter: brightness(1.15);
+}
+
+[data-theme="dark"] .adm-ticket-modal-overlay {
+    background: rgba(2, 6, 23, 0.78);
+    backdrop-filter: blur(4px);
+}
+
+[data-theme="dark"] .adm-ticket-close {
+    background: #0f172a;
+    border-color: #334155;
+    color: #cbd5e1;
+}
+
+[data-theme="dark"] .adm-ticket-close:hover {
+    background: rgba(239, 68, 68, 0.14);
+    border-color: rgba(252, 165, 165, 0.34);
+    color: #fecaca;
+}
+
+[data-theme="dark"] .tkt-module .btn-outline,
+[data-theme="dark"] .adm-ticket-module .btn-outline,
+[data-theme="dark"] .adm-ticket-modal .btn-outline {
+    background: #0f172a;
+    border-color: #475569;
+    color: #e2e8f0;
+}
+
+[data-theme="dark"] .tkt-module .btn-outline:hover,
+[data-theme="dark"] .adm-ticket-module .btn-outline:hover,
+[data-theme="dark"] .adm-ticket-modal .btn-outline:hover {
+    background: #1e293b;
+    border-color: #60a5fa;
+    color: #bfdbfe;
+}
+
+[data-theme="dark"] .tkt-toast {
+    background: #14532d;
+    border-color: rgba(134, 239, 172, 0.35);
+    color: #dcfce7;
+}
+
+[data-theme="dark"] .tkt-toast--error {
+    background: #7f1d1d;
+    border-color: rgba(252, 165, 165, 0.35);
+    color: #fee2e2;
+}
+
 /* Responsive admin panel */
 @media (max-width: 768px) {
     .adm-quick-actions {
@@ -16149,6 +16563,179 @@ textarea.bp-input {
     border-radius: 8px;
     box-shadow: 0 20px 45px rgba(15, 23, 42, .25);
     overflow: hidden;
+}
+.bp-modal-panel--preview {
+    width: min(1100px, 96vw);
+    max-height: 94vh;
+    display: flex;
+    flex-direction: column;
+}
+.bp-contract-preview {
+    min-height: min(68vh, 720px);
+    padding: 14px;
+    background: #0f172a;
+}
+.bp-contract-preview-frame {
+    display: block;
+    width: 100%;
+    height: min(68vh, 720px);
+    border: 0;
+    border-radius: 8px;
+    background: #fff;
+}
+.bp-contract-preview-img {
+    display: block;
+    max-width: 100%;
+    max-height: min(68vh, 720px);
+    margin: 0 auto;
+    border-radius: 8px;
+    background: #fff;
+    object-fit: contain;
+}
+.bp-contract-pages {
+    display: grid;
+    gap: 18px;
+    max-height: min(68vh, 720px);
+    overflow-y: auto;
+    padding-right: 4px;
+}
+.bp-contract-page {
+    position: relative;
+    min-height: 180px;
+    display: grid;
+    place-items: center;
+}
+.bp-contract-page-loading {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    gap: 8px;
+    color: #cbd5e1;
+    font-size: .84rem;
+}
+.bp-contract-page-img {
+    display: none;
+    width: min(100%, 860px);
+    margin: 0 auto;
+    border-radius: 6px;
+    background: #fff;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, .25);
+}
+.bp-contract-page.is-loaded .bp-contract-page-img {
+    display: block;
+}
+.bp-contract-page.is-loaded .bp-contract-page-loading {
+    display: none;
+}
+.bp-preview-note {
+    margin-top: 10px;
+    color: #cbd5e1;
+    font-size: .84rem;
+    text-align: center;
+}
+.bp-preview-fallback {
+    min-height: 340px;
+    display: grid;
+    place-items: center;
+    align-content: center;
+    gap: 10px;
+    color: #e2e8f0;
+    text-align: center;
+}
+.bp-preview-fallback i {
+    font-size: 42px;
+    color: #93c5fd;
+}
+.bp-preview-fallback h4,
+.bp-preview-fallback p {
+    margin: 0;
+}
+.bp-preview-actions {
+    justify-content: flex-end;
+    padding: 14px 18px;
+    border-top: 1px solid var(--border-color, #e2e8f0);
+}
+[data-theme="dark"] .bp-card,
+[data-theme="dark"] .bp-modal-panel {
+    background: var(--card-bg, #1e293b);
+    border-color: var(--border-color, #334155);
+}
+[data-theme="dark"] .bp-table th {
+    background: rgba(15, 23, 42, .72);
+    color: var(--text-secondary, #94a3b8);
+}
+[data-theme="dark"] .bp-table td {
+    border-bottom-color: var(--border-color, #334155);
+}
+[data-theme="dark"] .bp-input,
+[data-theme="dark"] .bp-search {
+    background: var(--input-bg, #0f172a);
+    border-color: var(--border-color, #334155);
+    color: var(--text-primary, #e2e8f0);
+}
+[data-theme="dark"] .bp-message {
+    background: rgba(15, 23, 42, .62);
+    border-color: var(--border-color, #334155);
+}
+[data-theme="dark"] .bp-message--admin {
+    background: rgba(37, 99, 235, .13);
+}
+[data-theme="dark"] .bp-pill {
+    background: rgba(59, 130, 246, .18);
+    color: #93c5fd;
+}
+[data-theme="dark"] .bp-status--ok { background: rgba(34, 197, 94, .16); color: #86efac; }
+[data-theme="dark"] .bp-status--warn { background: rgba(245, 158, 11, .18); color: #fcd34d; }
+[data-theme="dark"] .bp-status--danger { background: rgba(239, 68, 68, .18); color: #fca5a5; }
+[data-theme="dark"] .bp-contract-preview {
+    background: #020617;
+}
+[data-theme="dark"] .bp-contract-page-loading,
+[data-theme="dark"] .bp-preview-note,
+[data-theme="dark"] .bp-preview-fallback {
+    color: #cbd5e1;
+}
+[data-theme="dark"] .bp-preview-fallback i {
+    color: #60a5fa;
+}
+[data-theme="dark"] #bp-sign-canvas {
+    border-color: #475569;
+}
+@media (max-width: 768px) {
+    .bp-grid {
+        grid-template-columns: 1fr;
+    }
+    .bp-form-grid {
+        grid-template-columns: 1fr;
+    }
+    .bp-modal {
+        padding: 10px;
+        align-items: stretch;
+    }
+    .bp-modal-panel,
+    .bp-modal-panel--preview {
+        width: 100%;
+        max-height: calc(100vh - 20px);
+    }
+    .bp-contract-preview,
+    .bp-contract-preview-frame,
+    .bp-contract-pages {
+        min-height: 0;
+        height: auto;
+        max-height: calc(100vh - 190px);
+    }
+    .bp-preview-actions {
+        justify-content: stretch;
+    }
+    .bp-preview-actions .btn {
+        flex: 1 1 160px;
+        justify-content: center;
+    }
+    .bp-row-actions .btn {
+        flex: 1 1 130px;
+        justify-content: center;
+    }
 }
 #bp-sign-canvas {
     display: block;

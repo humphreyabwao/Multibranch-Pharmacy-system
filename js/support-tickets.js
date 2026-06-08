@@ -50,6 +50,7 @@
         },
 
         formatDateTime: function (val) {
+            if (PharmaFlow.Settings && PharmaFlow.Settings.formatDateTime) return PharmaFlow.Settings.formatDateTime(val);
             if (!val) return '—';
             const d = val.toDate ? val.toDate() : (val.seconds ? new Date(val.seconds * 1000) : new Date(val));
             if (isNaN(d.getTime())) return '—';

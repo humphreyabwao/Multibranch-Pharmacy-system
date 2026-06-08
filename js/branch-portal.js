@@ -13,8 +13,10 @@
     let contracts = [];
     let businesses = [];
     let signingPad = null;
+    let editingContractId = null;
 
     const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    const CONTRACT_PAGE_LIMIT = 60;
 
     const BranchPortal = {
         cleanup: function () {
@@ -26,6 +28,7 @@
             communications = [];
             contracts = [];
             signingPad = null;
+            editingContractId = null;
         },
 
         isSuperAdmin: function () {
@@ -63,6 +66,58 @@
 
         nowIso: function () {
             return new Date().toISOString();
+        },
+
+        isPdfFile: function (url, name) {
+            const source = ((name || '') + ' ' + (url || '')).toLowerCase();
+            return source.includes('.pdf') || source.includes('/pdf') || source.includes('application/pdf');
+        },
+
+        isImageFile: function (url, name) {
+            const source = ((name || '') + ' ' + (url || '')).toLowerCase().split('?')[0];
+            return /\.(png|jpe?g|gif|webp|bmp)$/i.test(source);
+        },
+
+        isOfficeFile: function (url, name) {
+            const source = ((name || '') + ' ' + (url || '')).toLowerCase().split('?')[0];
+            return /\.(docx?|xlsx?|pptx?)$/i.test(source);
+        },
+
+        isCloudinaryUrl: function (url) {
+            return typeof url === 'string' && url.indexOf('res.cloudinary.com/') !== -1;
+        },
+
+        cloudinaryPdfPageUrl: function (url, page) {
+            if (!this.isCloudinaryUrl(url) || !this.isPdfFile(url)) return '';
+            const pageNo = page || 1;
+            if (url.indexOf('/image/upload/') !== -1) {
+                return url.replace('/image/upload/', '/image/upload/pg_' + pageNo + ',f_png,q_auto/');
+            }
+            if (url.indexOf('/raw/upload/') !== -1) {
+                return url.replace('/raw/upload/', '/image/upload/pg_' + pageNo + ',f_png,q_auto/');
+            }
+            return '';
+        },
+
+        displayUrl: function (url, name) {
+            if (!url) return '#';
+            if (this.isOfficeFile(url, name)) return 'https://view.officeapps.live.com/op/view.aspx?src=' + encodeURIComponent(url);
+            return url;
+        },
+
+        isBlockedRawPdf: function (url, name) {
+            return this.isCloudinaryUrl(url) && this.isPdfFile(url, name) && url.indexOf('/raw/upload/') !== -1;
+        },
+
+        openActionHtml: function (url, name, label, id, type) {
+            if (!url) return '';
+            if (this.isBlockedRawPdf(url, name)) {
+                return '<button class="btn btn-sm btn-outline" type="button" disabled title="Re-upload this PDF with Update to enable preview"><i class="fas fa-lock"></i> Re-upload to Preview</button>';
+            }
+            if (this.isCloudinaryUrl(url) && this.isPdfFile(url, name) && url.indexOf('/image/upload/') !== -1) {
+                return '<button class="btn btn-sm btn-outline" data-bp-preview="' + this.escapeHtml(id || '') + '" data-bp-preview-type="' + this.escapeHtml(type || 'original') + '" data-bp-preview-mode="full"><i class="fas fa-file-lines"></i> ' + this.escapeHtml(label || 'Open') + '</button>';
+            }
+            return '<a class="btn btn-sm btn-outline" href="' + this.escapeHtml(this.displayUrl(url, name)) + '" target="_blank" rel="noopener"><i class="fas fa-up-right-from-square"></i> ' + this.escapeHtml(label || 'Open') + '</a>';
         },
 
         showToast: function (message, type) {
@@ -722,24 +777,31 @@
                             </div>
                         </section>
                     </div>
+                    <div id="bp-contract-modal" class="bp-modal" aria-hidden="true"></div>
                     <div id="bp-sign-modal" class="bp-modal" aria-hidden="true"></div>
                 </div>
             `;
-            if (admin) document.getElementById('bp-contract-form')?.addEventListener('submit', e => this.createContract(e));
+            if (admin) {
+                document.getElementById('bp-contract-form')?.addEventListener('submit', e => this.saveContract(e));
+                document.getElementById('bp-contract-cancel')?.addEventListener('click', () => this.resetContractForm());
+            }
             this.subscribeContracts();
         },
 
         contractFormHtml: function () {
             return `
                 <form class="bp-card bp-form-card" id="bp-contract-form">
-                    <div class="bp-card-head"><div><h3>Upload Contract</h3><small>Send document to a branch</small></div><span class="bp-pill">PDF/DOC</span></div>
+                    <div class="bp-card-head"><div><h3 id="bp-contract-form-title">Upload Contract</h3><small id="bp-contract-form-subtitle">Send document to a branch</small></div><span class="bp-pill">PDF/DOC</span></div>
                     <div class="bp-form-grid">
                         <label>Branch<select id="bp-contract-business" class="bp-input" required><option value="">Select branch</option>${this.businessOptions('')}</select></label>
                         <label>Contract Title<input id="bp-contract-title" class="bp-input" placeholder="Service Agreement" required></label>
-                        <label class="bp-field-full">Contract File<input id="bp-contract-file" class="bp-input" type="file" accept=".pdf,.doc,.docx,image/*" required></label>
+                        <label class="bp-field-full">Contract File<input id="bp-contract-file" class="bp-input" type="file" accept=".pdf,.doc,.docx,image/*" required><small id="bp-contract-file-help">PDF previews open inside the portal. DOC files use a document viewer when supported.</small></label>
                         <label class="bp-field-full">Note<textarea id="bp-contract-note" class="bp-input" rows="4" placeholder="Signing instructions"></textarea></label>
                     </div>
-                    <div class="bp-actions"><button class="btn btn-primary" type="submit"><i class="fas fa-upload"></i> Upload Contract</button></div>
+                    <div class="bp-actions">
+                        <button class="btn btn-outline" type="button" id="bp-contract-cancel" style="display:none"><i class="fas fa-times"></i> Cancel Edit</button>
+                        <button class="btn btn-primary" type="submit" id="bp-contract-submit"><i class="fas fa-upload"></i> Upload Contract</button>
+                    </div>
                 </form>
             `;
         },
@@ -778,12 +840,22 @@
                     <td><span class="bp-status bp-status--${contract.status === 'signed' ? 'ok' : 'warn'}">${this.escapeHtml(contract.status || 'pending')}</span></td>
                     <td>${this.formatDate(contract.createdAt)}</td>
                     <td class="bp-row-actions">
-                        <a class="btn btn-sm btn-outline" href="${this.escapeHtml(contract.fileUrl || '#')}" target="_blank" rel="noopener"><i class="fas fa-download"></i> Original</a>
-                        ${contract.signedFileUrl ? `<a class="btn btn-sm btn-outline" href="${this.escapeHtml(contract.signedFileUrl)}" target="_blank" rel="noopener"><i class="fas fa-file-circle-check"></i> Signed</a>` : ''}
-                        ${!this.isSuperAdmin() ? `<label class="btn btn-sm btn-outline bp-upload-inline"><i class="fas fa-upload"></i> Upload<input type="file" data-bp-signed-upload="${this.escapeHtml(contract.id)}" accept=".pdf,.doc,.docx,image/*"></label><button class="btn btn-sm btn-primary" data-bp-sign="${this.escapeHtml(contract.id)}"><i class="fas fa-signature"></i> Sign</button>` : ''}
+                        <button class="btn btn-sm btn-outline" data-bp-preview="${this.escapeHtml(contract.id)}" data-bp-preview-type="original"><i class="fas fa-eye"></i> Preview</button>
+                        ${this.openActionHtml(contract.fileUrl, contract.fileName, 'Open', contract.id, 'original')}
+                        ${contract.signedFileUrl ? `<button class="btn btn-sm btn-outline" data-bp-preview="${this.escapeHtml(contract.id)}" data-bp-preview-type="signed"><i class="fas fa-file-lines"></i> Signed Preview</button>${this.openActionHtml(contract.signedFileUrl, contract.signedFileName, 'Signed', contract.id, 'signed')}` : ''}
+                        ${this.isSuperAdmin() ? `<button class="btn btn-sm btn-outline" data-bp-edit-contract="${this.escapeHtml(contract.id)}"><i class="fas fa-pen"></i> Update</button><button class="btn btn-sm btn-danger" data-bp-delete-contract="${this.escapeHtml(contract.id)}"><i class="fas fa-trash"></i> Delete</button>` : `<label class="btn btn-sm btn-outline bp-upload-inline"><i class="fas fa-upload"></i> Upload<input type="file" data-bp-signed-upload="${this.escapeHtml(contract.id)}" accept=".pdf,.doc,.docx,image/*"></label><button class="btn btn-sm btn-primary" data-bp-sign="${this.escapeHtml(contract.id)}"><i class="fas fa-signature"></i> Sign</button>`}
                     </td>
                 </tr>
             `).join('');
+            body.querySelectorAll('[data-bp-preview]').forEach(btn => {
+                btn.addEventListener('click', () => this.openContractPreview(btn.dataset.bpPreview, btn.dataset.bpPreviewType, btn.dataset.bpPreviewMode));
+            });
+            body.querySelectorAll('[data-bp-edit-contract]').forEach(btn => {
+                btn.addEventListener('click', () => this.editContract(btn.dataset.bpEditContract));
+            });
+            body.querySelectorAll('[data-bp-delete-contract]').forEach(btn => {
+                btn.addEventListener('click', () => this.deleteContract(btn.dataset.bpDeleteContract));
+            });
             body.querySelectorAll('[data-bp-signed-upload]').forEach(input => {
                 input.addEventListener('change', () => this.uploadSignedContract(input.dataset.bpSignedUpload, input.files[0]));
             });
@@ -797,9 +869,11 @@
             const safeName = Date.now() + '-' + file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
             if (PharmaFlow.CloudinaryUpload && PharmaFlow.CloudinaryUpload.isActive()) {
                 const publicId = safeName.replace(/\.[^/.]+$/, '');
+                const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '');
                 return PharmaFlow.CloudinaryUpload.uploadFile(file, {
                     folder: 'pharmaflow/' + folder + '/' + businessId,
-                    publicId: publicId
+                    publicId: publicId,
+                    resourceType: isPdf ? 'image' : undefined
                 });
             }
             const ref = window.storage.ref('businesses/' + businessId + '/' + folder + '/' + safeName);
@@ -807,33 +881,342 @@
             return snap.ref.getDownloadURL();
         },
 
-        createContract: async function (e) {
+        saveContract: async function (e) {
             e.preventDefault();
             const businessId = document.getElementById('bp-contract-business')?.value;
             const file = document.getElementById('bp-contract-file')?.files[0];
-            if (!businessId || !file) return this.showToast('Select a branch and contract file.', 'error');
+            if (!businessId || (!editingContractId && !file)) return this.showToast('Select a branch and contract file.', 'error');
             const btn = e.target.querySelector('button[type="submit"]');
-            if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading...'; }
+            if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...'; }
             try {
-                const fileUrl = await this.uploadFile(file, businessId, 'contracts');
-                await window.db.collection('branch_contracts').add({
+                const payload = {
                     businessId,
                     businessName: this.branchName(businessId),
                     title: (document.getElementById('bp-contract-title')?.value || '').trim(),
                     note: (document.getElementById('bp-contract-note')?.value || '').trim(),
-                    fileUrl,
-                    fileName: file.name,
-                    status: 'pending',
-                    createdBy: this.getUserName(),
-                    createdAt: this.nowIso(),
                     updatedAt: this.nowIso()
-                });
-                this.showToast('Contract uploaded.');
-                e.target.reset();
+                };
+                if (file) {
+                    payload.fileUrl = await this.uploadFile(file, businessId, 'contracts');
+                    payload.fileName = file.name;
+                    payload.status = 'pending';
+                    payload.signedFileUrl = firebase.firestore.FieldValue.delete();
+                    payload.signedFileName = firebase.firestore.FieldValue.delete();
+                    payload.signatureDataUrl = firebase.firestore.FieldValue.delete();
+                    payload.signedBy = firebase.firestore.FieldValue.delete();
+                    payload.signedAt = firebase.firestore.FieldValue.delete();
+                }
+                if (editingContractId) {
+                    payload.updatedBy = this.getUserName();
+                    await window.db.collection('branch_contracts').doc(editingContractId).update(payload);
+                    this.showToast('Contract updated.');
+                } else {
+                    payload.createdBy = this.getUserName();
+                    payload.createdAt = this.nowIso();
+                    payload.status = payload.status || 'pending';
+                    await window.db.collection('branch_contracts').add(payload);
+                    this.showToast('Contract uploaded.');
+                }
+                this.resetContractForm();
             } catch (err) {
-                this.showToast('Upload failed: ' + err.message, 'error');
+                this.showToast('Contract save failed: ' + err.message, 'error');
             } finally {
-                if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-upload"></i> Upload Contract'; }
+                if (btn) { btn.disabled = false; btn.innerHTML = editingContractId ? '<i class="fas fa-save"></i> Update Contract' : '<i class="fas fa-upload"></i> Upload Contract'; }
+            }
+        },
+
+        editContract: function (id) {
+            const contract = contracts.find(item => item.id === id);
+            if (!contract || !this.isSuperAdmin()) return;
+            editingContractId = id;
+            const form = document.getElementById('bp-contract-form');
+            document.getElementById('bp-contract-business').value = contract.businessId || '';
+            document.getElementById('bp-contract-title').value = contract.title || '';
+            document.getElementById('bp-contract-note').value = contract.note || '';
+            document.getElementById('bp-contract-file').required = false;
+            document.getElementById('bp-contract-file').value = '';
+            document.getElementById('bp-contract-file-help').textContent = 'Leave blank to keep the current file. Choose a new file to replace it and reset signing.';
+            document.getElementById('bp-contract-form-title').textContent = 'Update Contract';
+            document.getElementById('bp-contract-form-subtitle').textContent = 'Edit details or replace the document';
+            document.getElementById('bp-contract-submit').innerHTML = '<i class="fas fa-save"></i> Update Contract';
+            document.getElementById('bp-contract-cancel').style.display = '';
+            if (form) form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        },
+
+        resetContractForm: function () {
+            editingContractId = null;
+            const form = document.getElementById('bp-contract-form');
+            if (form) form.reset();
+            const file = document.getElementById('bp-contract-file');
+            if (file) file.required = true;
+            const help = document.getElementById('bp-contract-file-help');
+            if (help) help.textContent = 'PDF previews open inside the portal. DOC files use a document viewer when supported.';
+            const title = document.getElementById('bp-contract-form-title');
+            if (title) title.textContent = 'Upload Contract';
+            const subtitle = document.getElementById('bp-contract-form-subtitle');
+            if (subtitle) subtitle.textContent = 'Send document to a branch';
+            const submit = document.getElementById('bp-contract-submit');
+            if (submit) submit.innerHTML = '<i class="fas fa-upload"></i> Upload Contract';
+            const cancel = document.getElementById('bp-contract-cancel');
+            if (cancel) cancel.style.display = 'none';
+        },
+
+        deleteContract: async function (id) {
+            if (!this.isSuperAdmin()) return;
+            const contract = contracts.find(item => item.id === id);
+            if (!contract) return;
+            const ok = confirm('Delete "' + (contract.title || 'this contract') + '" from the branch portal? This removes the portal record for the branch.');
+            if (!ok) return;
+            try {
+                await window.db.collection('branch_contracts').doc(id).delete();
+                if (editingContractId === id) this.resetContractForm();
+                this.showToast('Contract deleted.');
+            } catch (err) {
+                this.showToast('Delete failed: ' + err.message, 'error');
+            }
+        },
+
+        openContractPreview: function (id, type, mode) {
+            const contract = contracts.find(item => item.id === id);
+            if (!contract) return;
+            const signed = type === 'signed';
+            const url = signed ? contract.signedFileUrl : contract.fileUrl;
+            const name = signed ? contract.signedFileName : contract.fileName;
+            const fullMode = mode === 'full';
+            if (!url) return this.showToast('No document is available to preview.', 'error');
+            const modal = document.getElementById('bp-contract-modal');
+            if (!modal) return;
+            modal.innerHTML = `
+                <div class="bp-modal-panel bp-modal-panel--preview">
+                    <div class="bp-card-head">
+                        <div><h3>${fullMode ? 'Full Contract Preview' : (signed ? 'Signed Contract Preview' : 'Contract Preview')}</h3><small>${this.escapeHtml(contract.title || name || 'Document')}</small></div>
+                        <button class="btn btn-sm btn-outline" id="bp-contract-preview-close"><i class="fas fa-times"></i></button>
+                    </div>
+                    <div class="bp-contract-preview">
+                        ${this.contractPreviewHtml(url, name, fullMode)}
+                    </div>
+                    <div class="bp-actions bp-preview-actions">
+                        ${this.fullDocumentActionHtml(url, name, id, type, fullMode)}
+                        ${this.downloadActionHtml(url, name)}
+                        ${this.printActionHtml(url, name)}
+                    </div>
+                </div>
+            `;
+            modal.classList.add('show');
+            modal.setAttribute('aria-hidden', 'false');
+            document.getElementById('bp-contract-preview-close')?.addEventListener('click', () => this.closeContractPreview());
+            document.getElementById('bp-contract-full-preview')?.addEventListener('click', () => this.openContractPreview(id, type, 'full'));
+            document.getElementById('bp-contract-first-page')?.addEventListener('click', () => this.openContractPreview(id, type, 'single'));
+            document.getElementById('bp-contract-download-full')?.addEventListener('click', () => this.downloadFullContract(url, name, contract.title));
+            document.getElementById('bp-contract-print')?.addEventListener('click', () => this.printContract(url, name, contract.title));
+            if (fullMode) this.bindContractPageLoader(modal);
+        },
+
+        fullDocumentActionHtml: function (url, name, id, type, fullMode) {
+            if (this.isCloudinaryUrl(url) && this.isPdfFile(url, name) && url.indexOf('/image/upload/') !== -1) {
+                return fullMode
+                    ? '<button class="btn btn-outline" id="bp-contract-first-page" type="button"><i class="fas fa-file"></i> Page 1 Preview</button>'
+                    : '<button class="btn btn-outline" id="bp-contract-full-preview" type="button"><i class="fas fa-file-lines"></i> View Full Document</button>';
+            }
+            return '<a class="btn btn-outline" href="' + this.escapeHtml(this.displayUrl(url, name)) + '" target="_blank" rel="noopener"><i class="fas fa-up-right-from-square"></i> Open Full Document</a>';
+        },
+
+        downloadActionHtml: function (url, name) {
+            if (this.isCloudinaryUrl(url) && this.isPdfFile(url, name) && url.indexOf('/image/upload/') !== -1) {
+                return '<button class="btn btn-primary" id="bp-contract-download-full" type="button"><i class="fas fa-download"></i> Download Full Document</button>';
+            }
+            return '<a class="btn btn-primary" href="' + this.escapeHtml(url) + '" target="_blank" rel="noopener"><i class="fas fa-download"></i> Download</a>';
+        },
+
+        printActionHtml: function (url, name) {
+            if (this.isPdfFile(url, name) || this.isImageFile(url, name) || this.isOfficeFile(url, name)) {
+                return '<button class="btn btn-outline" id="bp-contract-print" type="button"><i class="fas fa-print"></i> Print</button>';
+            }
+            return '';
+        },
+
+        contractPreviewHtml: function (url, name, fullMode) {
+            const safeUrl = this.escapeHtml(url);
+            const pdfPage = this.cloudinaryPdfPageUrl(url);
+            if (fullMode && pdfPage && url.indexOf('/image/upload/') !== -1) {
+                const pages = Array.from({ length: CONTRACT_PAGE_LIMIT }, (_, i) => {
+                    const pageUrl = this.cloudinaryPdfPageUrl(url, i + 1);
+                    return '<div class="bp-contract-page" data-page="' + (i + 1) + '"><div class="bp-contract-page-loading"><i class="fas fa-spinner fa-spin"></i> Loading page ' + (i + 1) + '</div><img class="bp-contract-page-img" src="' + this.escapeHtml(pageUrl) + '" alt="Contract page ' + (i + 1) + '" loading="lazy"></div>';
+                }).join('');
+                return '<div class="bp-contract-pages">' + pages + '</div><div class="bp-preview-note">Showing available pages from the PDF. Pages after the end of the document are skipped automatically.</div>';
+            }
+            if (pdfPage && url.indexOf('/image/upload/') !== -1) {
+                return '<img class="bp-contract-preview-img" src="' + this.escapeHtml(pdfPage) + '" alt="PDF contract preview"><div class="bp-preview-note">Showing page 1 preview. Open the full document to view every page.</div>';
+            }
+            if (pdfPage && url.indexOf('/raw/upload/') !== -1) {
+                return '<div class="bp-preview-fallback"><i class="fas fa-file-pdf"></i><h4>This PDF was uploaded with Cloudinary raw delivery</h4><p>Raw PDF files can be blocked from inline viewing. Click Update and re-upload the PDF to enable realtime preview.</p><a class="btn btn-outline" href="' + safeUrl + '" target="_blank" rel="noopener"><i class="fas fa-up-right-from-square"></i> Try Opening Original</a></div>';
+            }
+            if (this.isImageFile(url, name)) {
+                return '<img class="bp-contract-preview-img" src="' + safeUrl + '" alt="Contract preview">';
+            }
+            if (this.isPdfFile(url, name)) {
+                return '<iframe class="bp-contract-preview-frame" src="' + safeUrl + '#toolbar=1&navpanes=0" title="PDF contract preview"></iframe>';
+            }
+            if (this.isOfficeFile(url, name)) {
+                const viewer = 'https://view.officeapps.live.com/op/embed.aspx?src=' + encodeURIComponent(url);
+                return '<iframe class="bp-contract-preview-frame" src="' + this.escapeHtml(viewer) + '" title="Document contract preview"></iframe>';
+            }
+            return '<div class="bp-preview-fallback"><i class="fas fa-file-lines"></i><h4>Preview unavailable for this file type</h4><p>Open the document in a new tab to view or download it.</p></div>';
+        },
+
+        bindContractPageLoader: function (modal) {
+            const pages = Array.from(modal.querySelectorAll('.bp-contract-page'));
+            let hitEnd = false;
+            pages.forEach(page => {
+                const img = page.querySelector('img');
+                if (!img) return;
+                img.addEventListener('load', () => {
+                    page.classList.add('is-loaded');
+                    page.classList.remove('is-error');
+                });
+                img.addEventListener('error', () => {
+                    const pageNumber = Number(page.dataset.page || 0);
+                    page.remove();
+                    if (!hitEnd && pageNumber > 1) {
+                        hitEnd = true;
+                        pages.forEach(other => {
+                            if (Number(other.dataset.page || 0) > pageNumber) other.remove();
+                        });
+                    }
+                    const remaining = modal.querySelectorAll('.bp-contract-page').length;
+                    if (!remaining) {
+                        const wrap = modal.querySelector('.bp-contract-pages');
+                        if (wrap) wrap.innerHTML = '<div class="bp-preview-fallback"><i class="fas fa-file-circle-exclamation"></i><h4>No preview pages loaded</h4><p>The document provider blocked this preview. Try re-uploading the contract.</p></div>';
+                    }
+                });
+            });
+        },
+
+        loadContractPageData: async function (url, maxPages) {
+            const pages = [];
+            const limit = maxPages || CONTRACT_PAGE_LIMIT;
+            for (let page = 1; page <= limit; page++) {
+                const pageUrl = this.cloudinaryPdfPageUrl(url, page);
+                if (!pageUrl) break;
+                try {
+                    const res = await fetch(pageUrl);
+                    if (!res.ok) {
+                        if (page > 1) break;
+                        throw new Error('Preview page could not be loaded.');
+                    }
+                    const blob = await res.blob();
+                    const dataUrl = await new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = () => resolve(reader.result);
+                        reader.onerror = reject;
+                        reader.readAsDataURL(blob);
+                    });
+                    pages.push({ page, url: pageUrl, dataUrl });
+                } catch (err) {
+                    if (page > 1) break;
+                    throw err;
+                }
+            }
+            if (!pages.length) throw new Error('No document pages were available.');
+            return pages;
+        },
+
+        imageSize: function (dataUrl) {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                img.onload = () => resolve({ width: img.naturalWidth || img.width, height: img.naturalHeight || img.height });
+                img.onerror = reject;
+                img.src = dataUrl;
+            });
+        },
+
+        safeFileBase: function (name, fallback) {
+            return String(name || fallback || 'contract')
+                .replace(/\.[^.]+$/, '')
+                .replace(/[^a-zA-Z0-9_-]+/g, '_')
+                .replace(/^_+|_+$/g, '') || 'contract';
+        },
+
+        downloadFullContract: async function (url, name, title) {
+            if (!(this.isCloudinaryUrl(url) && this.isPdfFile(url, name) && url.indexOf('/image/upload/') !== -1)) {
+                window.open(url, '_blank', 'noopener');
+                return;
+            }
+            if (!window.jspdf || !window.jspdf.jsPDF) {
+                this.showToast('PDF library is not loaded. Use Print to save the full document.', 'error');
+                return;
+            }
+            const btn = document.getElementById('bp-contract-download-full');
+            const oldHtml = btn ? btn.innerHTML : '';
+            if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing...'; }
+            try {
+                const pages = await this.loadContractPageData(url, CONTRACT_PAGE_LIMIT);
+                const { jsPDF } = window.jspdf;
+                const pdf = new jsPDF('p', 'mm', 'a4');
+                const pageW = pdf.internal.pageSize.getWidth();
+                const pageH = pdf.internal.pageSize.getHeight();
+                for (let i = 0; i < pages.length; i++) {
+                    if (i > 0) pdf.addPage();
+                    const size = await this.imageSize(pages[i].dataUrl);
+                    const ratio = Math.min(pageW / size.width, pageH / size.height);
+                    const w = size.width * ratio;
+                    const h = size.height * ratio;
+                    pdf.addImage(pages[i].dataUrl, 'PNG', (pageW - w) / 2, (pageH - h) / 2, w, h);
+                }
+                pdf.save(this.safeFileBase(name, title) + '.pdf');
+                this.showToast('Full contract downloaded.');
+            } catch (err) {
+                this.showToast('Download failed: ' + (err.message || err), 'error');
+            } finally {
+                if (btn) { btn.disabled = false; btn.innerHTML = oldHtml || '<i class="fas fa-download"></i> Download Full Document'; }
+            }
+        },
+
+        printContract: async function (url, name, title) {
+            const win = window.open('', '_blank', 'width=980,height=900');
+            if (!win) return this.showToast('Allow popups to print the contract.', 'error');
+            const btn = document.getElementById('bp-contract-print');
+            const oldHtml = btn ? btn.innerHTML : '';
+            if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing...'; }
+            try {
+                let pageImgs = [];
+                if (this.isCloudinaryUrl(url) && this.isPdfFile(url, name) && url.indexOf('/image/upload/') !== -1) {
+                    const pages = await this.loadContractPageData(url, CONTRACT_PAGE_LIMIT);
+                    pageImgs = pages.map(p => p.url);
+                } else if (this.isImageFile(url, name)) {
+                    pageImgs = [this.displayUrl(url, name)];
+                } else {
+                    const src = this.displayUrl(url, name);
+                    const heading = this.escapeHtml(title || name || 'Contract');
+                    const html = '<!doctype html><html><head><title>' + heading + '</title>' +
+                        '<style>html,body{height:100%;margin:0}.toolbar{position:fixed;top:0;left:0;right:0;z-index:5;padding:10px;text-align:center;background:#111827}.toolbar button{padding:10px 22px;border:0;border-radius:6px;background:#2563eb;color:#fff;font-weight:700;cursor:pointer}.frame{position:absolute;inset:52px 0 0 0}.frame iframe{width:100%;height:100%;border:0}@media print{.toolbar{display:none}.frame{inset:0}}</style>' +
+                        '</head><body><div class="toolbar"><button onclick="window.print()">Print</button></div><div class="frame"><iframe src="' + this.escapeHtml(src) + '"></iframe></div></body></html>';
+                    win.document.write(html);
+                    win.document.close();
+                    return;
+                }
+                const heading = this.escapeHtml(title || name || 'Contract');
+                const html = '<!doctype html><html><head><title>' + heading + '</title>' +
+                    '<style>body{margin:0;background:#e5e7eb;font-family:Arial,sans-serif}.toolbar{position:sticky;top:0;z-index:5;padding:12px;text-align:center;background:#111827;color:#fff}.toolbar button{padding:10px 22px;border:0;border-radius:6px;background:#2563eb;color:#fff;font-weight:700;cursor:pointer}.page{page-break-after:always;display:flex;justify-content:center;padding:18px}.page img{max-width:100%;width:900px;background:#fff;box-shadow:0 8px 24px rgba(0,0,0,.18)}@media print{body{background:#fff}.toolbar{display:none}.page{padding:0;page-break-after:always}.page img{width:100%;box-shadow:none}}</style>' +
+                    '</head><body><div class="toolbar"><button onclick="window.print()">Print</button></div>' +
+                    pageImgs.map(src => '<div class="page"><img src="' + this.escapeHtml(src) + '" alt="Contract page"></div>').join('') +
+                    '<script>window.onload=function(){setTimeout(function(){window.print()},600)};<\\/script></body></html>';
+                win.document.write(html);
+                win.document.close();
+            } catch (err) {
+                win.close();
+                this.showToast('Print failed: ' + (err.message || err), 'error');
+            } finally {
+                if (btn) { btn.disabled = false; btn.innerHTML = oldHtml || '<i class="fas fa-print"></i> Print'; }
+            }
+        },
+
+        closeContractPreview: function () {
+            const modal = document.getElementById('bp-contract-modal');
+            if (modal) {
+                modal.classList.remove('show');
+                modal.setAttribute('aria-hidden', 'true');
+                modal.innerHTML = '';
             }
         },
 
