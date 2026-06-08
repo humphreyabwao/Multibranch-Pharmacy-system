@@ -248,49 +248,333 @@
 
         downloadFinancePdf: function (id) {
             const doc = financeDocs.find(item => item.id === id);
-            if (!doc || !window.jspdf) return this.showToast('PDF library is not ready.', 'error');
-            const jsPDF = window.jspdf.jsPDF;
-            const pdf = new jsPDF({ unit: 'pt', format: 'a4' });
-            const title = doc.type === 'receipt' ? 'RECEIPT' : 'INVOICE';
-            pdf.setFillColor(17, 24, 39);
-            pdf.rect(0, 0, 595, 92, 'F');
-            pdf.setTextColor(255, 255, 255);
-            pdf.setFontSize(22);
-            pdf.text('PharmaFlow', 48, 42);
-            pdf.setFontSize(10);
-            pdf.text('System monthly payment', 48, 62);
-            pdf.setFontSize(20);
-            pdf.text(title, 460, 48, { align: 'right' });
-            pdf.setTextColor(17, 24, 39);
-            pdf.setFontSize(11);
-            pdf.text('Document No.', 48, 132);
-            pdf.text(doc.docNumber || id, 170, 132);
-            pdf.text('Branch', 48, 156);
-            pdf.text(doc.businessName || this.branchName(doc.businessId), 170, 156);
-            pdf.text('Billing Month', 48, 180);
-            pdf.text(doc.billingMonth || '', 170, 180);
-            pdf.text('Issued Date', 48, 204);
-            pdf.text(this.formatDate(doc.createdAt), 170, 204);
-            if (doc.dueDate) {
-                pdf.text('Due Date', 48, 228);
-                pdf.text(this.formatDate(doc.dueDate), 170, 228);
+            if (!doc) return this.showToast('Document not found.', 'error');
+            const html = this.buildFinanceDocumentHtml(doc);
+            const win = window.open('', '_blank', 'width=980,height=760');
+            if (!win) {
+                this.showToast('Allow popups to open the invoice preview.', 'error');
+                return;
             }
-            pdf.autoTable({
-                startY: 270,
-                head: [['Description', 'Amount']],
-                body: [['Monthly PharmaFlow system subscription', this.money(doc.amount, doc.currency)]],
-                theme: 'grid',
-                headStyles: { fillColor: [17, 24, 39] },
-                styles: { fontSize: 11, cellPadding: 12 }
-            });
-            const finalY = pdf.lastAutoTable.finalY + 32;
-            pdf.setFontSize(13);
-            pdf.text('Total', 360, finalY);
-            pdf.text(this.money(doc.amount, doc.currency), 520, finalY, { align: 'right' });
-            pdf.setFontSize(9);
-            pdf.setTextColor(107, 114, 128);
-            pdf.text(doc.note || 'This document only covers the monthly system payment.', 48, finalY + 48, { maxWidth: 500 });
-            pdf.save((doc.docNumber || 'billing-document') + '.pdf');
+            win.document.open();
+            win.document.write(html);
+            win.document.close();
+            win.focus();
+        },
+
+        buildFinanceDocumentHtml: function (doc) {
+            const title = doc.type === 'receipt' ? 'RECEIPT' : 'INVOICE';
+            const status = doc.status || (doc.type === 'receipt' ? 'paid' : 'issued');
+            const isPaid = status === 'paid' || doc.type === 'receipt';
+            const branch = doc.businessName || this.branchName(doc.businessId);
+            const amount = this.money(doc.amount, doc.currency);
+            const docNumber = doc.docNumber || doc.id || 'PF-DOC';
+            const issued = this.formatDate(doc.createdAt);
+            const due = doc.dueDate ? this.formatDate(doc.dueDate) : 'On receipt';
+            const note = doc.note || 'This document only covers the monthly PharmaFlow system payment.';
+            const statusClass = isPaid ? 'paid' : (status === 'overdue' ? 'overdue' : 'issued');
+            const escapedTitle = this.escapeHtml(title);
+
+            return `<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>${this.escapeHtml(docNumber)} - ${escapedTitle}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            background: #eef2f7;
+            color: #172033;
+            font-family: 'Montserrat', Arial, sans-serif;
+            line-height: 1.45;
+        }
+        .toolbar {
+            position: sticky;
+            top: 0;
+            z-index: 5;
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            padding: 14px;
+            background: rgba(238, 242, 247, .92);
+            backdrop-filter: blur(8px);
+            border-bottom: 1px solid #d8e0ea;
+        }
+        .toolbar button {
+            border: 0;
+            border-radius: 7px;
+            padding: 10px 16px;
+            font: 700 13px 'Montserrat', Arial, sans-serif;
+            cursor: pointer;
+        }
+        .toolbar .primary { background: #1f3a5f; color: #fff; }
+        .toolbar .ghost { background: #fff; color: #1f3a5f; border: 1px solid #cdd6e2; }
+        .sheet {
+            width: min(860px, calc(100vw - 28px));
+            margin: 24px auto 40px;
+            background: #fff;
+            border-radius: 14px;
+            box-shadow: 0 18px 45px rgba(23, 32, 51, .15);
+            overflow: hidden;
+        }
+        .brand-strip {
+            height: 12px;
+            background: linear-gradient(90deg, #1f3a5f 0%, #2f6f73 55%, #c99a3d 100%);
+        }
+        .header {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 28px;
+            padding: 42px 46px 28px;
+            border-bottom: 1px solid #e5eaf1;
+        }
+        .logo-mark {
+            width: 48px;
+            height: 48px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 12px;
+            background: #1f3a5f;
+            color: #fff;
+            font-weight: 800;
+            font-size: 20px;
+            margin-bottom: 14px;
+        }
+        .brand h1 {
+            margin: 0;
+            font-size: 24px;
+            letter-spacing: 0;
+            color: #172033;
+        }
+        .brand p {
+            margin: 5px 0 0;
+            color: #64748b;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .doc-title {
+            min-width: 230px;
+            text-align: right;
+        }
+        .doc-title h2 {
+            margin: 0;
+            color: #1f3a5f;
+            font-size: 34px;
+            letter-spacing: 0;
+            font-weight: 800;
+        }
+        .doc-title code {
+            display: inline-block;
+            margin-top: 8px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: #f1f5f9;
+            color: #334155;
+            font-family: 'Montserrat', Arial, sans-serif;
+            font-size: 11px;
+            font-weight: 700;
+        }
+        .status {
+            display: inline-block;
+            margin-top: 12px;
+            padding: 7px 12px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 800;
+            text-transform: uppercase;
+        }
+        .status.paid { background: #dcfce7; color: #166534; }
+        .status.issued { background: #dbeafe; color: #1d4ed8; }
+        .status.overdue { background: #fee2e2; color: #b91c1c; }
+        .content { padding: 32px 46px 42px; }
+        .meta-grid {
+            display: grid;
+            grid-template-columns: 1.1fr .9fr;
+            gap: 24px;
+            margin-bottom: 28px;
+        }
+        .panel {
+            border: 1px solid #e5eaf1;
+            border-radius: 12px;
+            padding: 18px;
+            background: #fbfdff;
+        }
+        .panel .label {
+            display: block;
+            margin-bottom: 8px;
+            color: #64748b;
+            font-size: 10px;
+            font-weight: 800;
+            text-transform: uppercase;
+        }
+        .panel strong {
+            color: #172033;
+            font-size: 16px;
+        }
+        .facts {
+            display: grid;
+            gap: 10px;
+        }
+        .fact {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            font-size: 12px;
+        }
+        .fact span:first-child { color: #64748b; font-weight: 600; }
+        .fact span:last-child { color: #172033; font-weight: 700; text-align: right; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            overflow: hidden;
+            border-radius: 12px;
+            border: 1px solid #e5eaf1;
+        }
+        th {
+            background: #1f3a5f;
+            color: #fff;
+            padding: 14px 16px;
+            text-align: left;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0;
+        }
+        th:last-child, td:last-child { text-align: right; }
+        td {
+            padding: 18px 16px;
+            border-bottom: 1px solid #e5eaf1;
+            color: #334155;
+            font-size: 13px;
+            vertical-align: top;
+        }
+        td strong { color: #172033; }
+        .line-note { display: block; margin-top: 4px; color: #64748b; font-size: 11px; }
+        .totals {
+            width: min(360px, 100%);
+            margin-left: auto;
+            margin-top: 22px;
+            border: 1px solid #e5eaf1;
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        .total-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 13px 16px;
+            color: #334155;
+            font-size: 13px;
+            border-bottom: 1px solid #e5eaf1;
+        }
+        .total-row:last-child {
+            border-bottom: 0;
+            background: #172033;
+            color: #fff;
+            font-size: 16px;
+            font-weight: 800;
+        }
+        .note {
+            margin-top: 28px;
+            padding: 16px 18px;
+            border-left: 4px solid #c99a3d;
+            border-radius: 10px;
+            background: #fffbeb;
+            color: #66512a;
+            font-size: 12px;
+        }
+        .footer {
+            display: flex;
+            justify-content: space-between;
+            gap: 20px;
+            margin-top: 34px;
+            padding-top: 18px;
+            border-top: 1px solid #e5eaf1;
+            color: #64748b;
+            font-size: 11px;
+        }
+        @media print {
+            body { background: #fff; }
+            .toolbar { display: none; }
+            .sheet {
+                width: 100%;
+                margin: 0;
+                border-radius: 0;
+                box-shadow: none;
+            }
+            @page { size: A4; margin: 12mm; }
+        }
+        @media (max-width: 680px) {
+            .header, .meta-grid, .footer { grid-template-columns: 1fr; }
+            .header { display: block; padding: 30px 24px 20px; }
+            .doc-title { text-align: left; margin-top: 22px; }
+            .content { padding: 24px; }
+            .meta-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="toolbar">
+        <button class="primary" onclick="window.print()">Print / Save PDF</button>
+        <button class="ghost" onclick="window.close()">Close</button>
+    </div>
+    <main class="sheet">
+        <div class="brand-strip"></div>
+        <section class="header">
+            <div class="brand">
+                <div class="logo-mark">PF</div>
+                <h1>PharmaFlow</h1>
+                <p>Multibranch Pharmacy Management System</p>
+            </div>
+            <div class="doc-title">
+                <h2>${escapedTitle}</h2>
+                <code>${this.escapeHtml(docNumber)}</code><br>
+                <span class="status ${this.escapeHtml(statusClass)}">${this.escapeHtml(status)}</span>
+            </div>
+        </section>
+        <section class="content">
+            <div class="meta-grid">
+                <div class="panel">
+                    <span class="label">Bill To</span>
+                    <strong>${this.escapeHtml(branch)}</strong>
+                    <p style="margin:8px 0 0;color:#64748b;font-size:12px;">Branch system subscription account</p>
+                </div>
+                <div class="panel facts">
+                    <div class="fact"><span>Issued</span><span>${this.escapeHtml(issued)}</span></div>
+                    <div class="fact"><span>Due Date</span><span>${this.escapeHtml(due)}</span></div>
+                    <div class="fact"><span>Billing Period</span><span>${this.escapeHtml(doc.billingMonth || 'System subscription')}</span></div>
+                    <div class="fact"><span>Currency</span><span>${this.escapeHtml(doc.currency || 'KES')}</span></div>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr><th>Description</th><th>Period</th><th>Amount</th></tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>PharmaFlow system subscription</strong><span class="line-note">Monthly platform access, branch operations, realtime sync, and support.</span></td>
+                        <td>${this.escapeHtml(doc.billingMonth || 'Current billing cycle')}</td>
+                        <td>${this.escapeHtml(amount)}</td>
+                    </tr>
+                </tbody>
+            </table>
+            <div class="totals">
+                <div class="total-row"><span>Subtotal</span><strong>${this.escapeHtml(amount)}</strong></div>
+                <div class="total-row"><span>Tax</span><strong>Included</strong></div>
+                <div class="total-row"><span>Total</span><span>${this.escapeHtml(amount)}</span></div>
+            </div>
+            <div class="note">${this.escapeHtml(note)}</div>
+            <div class="footer">
+                <span>Generated by PharmaFlow</span>
+                <span>${this.escapeHtml(title)} for system subscription billing only</span>
+            </div>
+        </section>
+    </main>
+</body>
+</html>`;
         },
 
         renderCommunications: async function (container) {

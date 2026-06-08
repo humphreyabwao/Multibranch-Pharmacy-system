@@ -2785,6 +2785,7 @@
                         (this.isCollectedBillingDoc(doc) ? '' : '<button class="sales-action-btn bill-mark-paid" data-id="' + this.escapeHtml(doc.id) + '" title="Mark as paid" style="background:#dcfce7;color:#15803d"><i class="fas fa-check"></i></button>') +
                         '<button class="sales-action-btn bill-send-reminder" data-id="' + this.escapeHtml(doc.id) + '" title="Send reminder" style="background:#e0f2fe;color:#0369a1"><i class="fas fa-paper-plane"></i></button>' +
                         '<button class="sales-action-btn bill-suspend-branch" data-biz="' + this.escapeHtml(doc.businessId || '') + '" data-id="' + this.escapeHtml(doc.id) + '" title="Suspend branch" style="background:#fee2e2;color:#991b1b"><i class="fas fa-ban"></i></button>' +
+                        '<button class="sales-action-btn bill-delete-record" data-id="' + this.escapeHtml(doc.id) + '" title="Delete record" style="background:#fee2e2;color:#7f1d1d"><i class="fas fa-trash"></i></button>' +
                     '</div></td>' +
                 '</tr>';
             }).join('');
@@ -2797,6 +2798,9 @@
             });
             body.querySelectorAll('.bill-suspend-branch').forEach(btn => {
                 btn.addEventListener('click', () => this.suspendBranchFromBilling(btn.dataset.biz, btn.dataset.id));
+            });
+            body.querySelectorAll('.bill-delete-record').forEach(btn => {
+                btn.addEventListener('click', () => this.deleteBillingDoc(btn.dataset.id));
             });
         },
 
@@ -2897,6 +2901,25 @@
             } catch (err) {
                 console.error('Suspend branch error:', err);
                 this.showToast('Failed to suspend branch: ' + err.message, 'error');
+            }
+        },
+
+        deleteBillingDoc: async function (docId) {
+            const doc = allBillingDocs.find(d => d.id === docId);
+            if (!doc) return;
+            const label = doc.docNumber || doc.billingMonth || 'this billing record';
+            if (!(await PharmaFlow.confirm('Delete ' + label + '? This will permanently remove it from the revenue ledger.', {
+                title: 'Delete Billing Record',
+                confirmText: 'Delete Record',
+                danger: true
+            }))) return;
+
+            try {
+                await window.db.collection('branch_finance_docs').doc(docId).delete();
+                this.showToast('Billing record deleted.');
+            } catch (err) {
+                console.error('Delete billing record error:', err);
+                this.showToast('Failed to delete billing record: ' + err.message, 'error');
             }
         },
 
