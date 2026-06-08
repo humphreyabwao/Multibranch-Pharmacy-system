@@ -1041,9 +1041,9 @@
             if (fullMode && pdfPage && url.indexOf('/image/upload/') !== -1) {
                 const pages = Array.from({ length: CONTRACT_PAGE_LIMIT }, (_, i) => {
                     const pageUrl = this.cloudinaryPdfPageUrl(url, i + 1);
-                    return '<div class="bp-contract-page" data-page="' + (i + 1) + '"><div class="bp-contract-page-loading"><i class="fas fa-spinner fa-spin"></i> Loading page ' + (i + 1) + '</div><img class="bp-contract-page-img" src="' + this.escapeHtml(pageUrl) + '" alt="Contract page ' + (i + 1) + '" loading="lazy"></div>';
+                    return '<div class="bp-contract-page" data-page="' + (i + 1) + '"><img class="bp-contract-page-img" src="' + this.escapeHtml(pageUrl) + '" alt="Contract page ' + (i + 1) + '" loading="eager"></div>';
                 }).join('');
-                return '<div class="bp-contract-pages">' + pages + '</div><div class="bp-preview-note">Showing available pages from the PDF. Pages after the end of the document are skipped automatically.</div>';
+                return '<div class="bp-contract-pages-shell"><div class="bp-contract-document-loading"><i class="fas fa-spinner fa-spin"></i><span>Preparing document preview...</span></div><div class="bp-contract-pages">' + pages + '</div></div><div class="bp-preview-note">Full document preview</div>';
             }
             if (pdfPage && url.indexOf('/image/upload/') !== -1) {
                 return '<img class="bp-contract-preview-img" src="' + this.escapeHtml(pdfPage) + '" alt="PDF contract preview"><div class="bp-preview-note">Showing page 1 preview. Open the full document to view every page.</div>';
@@ -1067,12 +1067,21 @@
         bindContractPageLoader: function (modal) {
             const pages = Array.from(modal.querySelectorAll('.bp-contract-page'));
             let hitEnd = false;
+            let loadedCount = 0;
+            const loading = modal.querySelector('.bp-contract-document-loading');
+            const note = modal.querySelector('.bp-preview-note');
+            const finishLoading = () => {
+                if (loading) loading.classList.add('is-hidden');
+                if (note) note.textContent = loadedCount > 1 ? 'Full document preview' : 'Page preview';
+            };
             pages.forEach(page => {
                 const img = page.querySelector('img');
                 if (!img) return;
                 img.addEventListener('load', () => {
+                    loadedCount += 1;
                     page.classList.add('is-loaded');
                     page.classList.remove('is-error');
+                    finishLoading();
                 });
                 img.addEventListener('error', () => {
                     const pageNumber = Number(page.dataset.page || 0);
@@ -1087,6 +1096,9 @@
                     if (!remaining) {
                         const wrap = modal.querySelector('.bp-contract-pages');
                         if (wrap) wrap.innerHTML = '<div class="bp-preview-fallback"><i class="fas fa-file-circle-exclamation"></i><h4>No preview pages loaded</h4><p>The document provider blocked this preview. Try re-uploading the contract.</p></div>';
+                        finishLoading();
+                    } else if (loadedCount > 0) {
+                        finishLoading();
                     }
                 });
             });
