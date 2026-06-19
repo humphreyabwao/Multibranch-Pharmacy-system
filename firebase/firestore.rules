@@ -350,6 +350,7 @@ service cloud.firestore {
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'signedFileUrl',
             'signedFileName',
+            'signedFileType',
             'signatureDataUrl',
             'signedBy',
             'signedAt',

@@ -17,7 +17,6 @@
 
     const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
     const CONTRACT_PAGE_LIMIT = 60;
-
     const BranchPortal = {
         cleanup: function () {
             if (activeListener) {
@@ -78,9 +77,19 @@
             return /\.(png|jpe?g|gif|webp|bmp)$/i.test(source);
         },
 
-        isOfficeFile: function (url, name) {
-            const source = ((name || '') + ' ' + (url || '')).toLowerCase().split('?')[0];
-            return /\.(docx?|xlsx?|pptx?)$/i.test(source);
+        isAllowedContractFile: function (file) {
+            if (!file) return false;
+            const name = String(file.name || '').toLowerCase();
+            const type = String(file.type || '').toLowerCase();
+            const isPdf = type === 'application/pdf' || /\.pdf$/i.test(name);
+            const isImage = /^(image\/(png|jpe?g|webp|gif|bmp))$/i.test(type)
+                || /\.(png|jpe?g|webp|gif|bmp)$/i.test(name);
+            return isPdf || isImage;
+        },
+
+        contractFileType: function (file) {
+            if (!file) return '';
+            return file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '') ? 'pdf' : 'image';
         },
 
         isCloudinaryUrl: function (url) {
@@ -101,7 +110,6 @@
 
         displayUrl: function (url, name) {
             if (!url) return '#';
-            if (this.isOfficeFile(url, name)) return 'https://view.officeapps.live.com/op/view.aspx?src=' + encodeURIComponent(url);
             return url;
         },
 
@@ -791,11 +799,11 @@
         contractFormHtml: function () {
             return `
                 <form class="bp-card bp-form-card" id="bp-contract-form">
-                    <div class="bp-card-head"><div><h3 id="bp-contract-form-title">Upload Contract</h3><small id="bp-contract-form-subtitle">Send document to a branch</small></div><span class="bp-pill">PDF/DOC</span></div>
+                    <div class="bp-card-head"><div><h3 id="bp-contract-form-title">Upload Contract</h3><small id="bp-contract-form-subtitle">Send a PDF or image to a branch</small></div><span class="bp-pill">PDF / IMAGE</span></div>
                     <div class="bp-form-grid">
                         <label>Branch<select id="bp-contract-business" class="bp-input" required><option value="">Select branch</option>${this.businessOptions('')}</select></label>
                         <label>Contract Title<input id="bp-contract-title" class="bp-input" placeholder="Service Agreement" required></label>
-                        <label class="bp-field-full">Contract File<input id="bp-contract-file" class="bp-input" type="file" accept=".pdf,.doc,.docx,image/*" required><small id="bp-contract-file-help">PDF previews open inside the portal. DOC files use a document viewer when supported.</small></label>
+                        <label class="bp-field-full">Contract File<input id="bp-contract-file" class="bp-input" type="file" accept="application/pdf,image/png,image/jpeg,image/webp,image/gif,image/bmp,.pdf,.png,.jpg,.jpeg,.webp,.gif,.bmp" required><small id="bp-contract-file-help">PDF, PNG, JPG, WEBP, GIF, or BMP only. Documents open directly in the portal.</small></label>
                         <label class="bp-field-full">Note<textarea id="bp-contract-note" class="bp-input" rows="4" placeholder="Signing instructions"></textarea></label>
                     </div>
                     <div class="bp-actions">
@@ -843,7 +851,7 @@
                         <button class="btn btn-sm btn-outline" data-bp-preview="${this.escapeHtml(contract.id)}" data-bp-preview-type="original"><i class="fas fa-eye"></i> Preview</button>
                         ${this.openActionHtml(contract.fileUrl, contract.fileName, 'Open', contract.id, 'original')}
                         ${contract.signedFileUrl ? `<button class="btn btn-sm btn-outline" data-bp-preview="${this.escapeHtml(contract.id)}" data-bp-preview-type="signed"><i class="fas fa-file-lines"></i> Signed Preview</button>${this.openActionHtml(contract.signedFileUrl, contract.signedFileName, 'Signed', contract.id, 'signed')}` : ''}
-                        ${this.isSuperAdmin() ? `<button class="btn btn-sm btn-outline" data-bp-edit-contract="${this.escapeHtml(contract.id)}"><i class="fas fa-pen"></i> Update</button><button class="btn btn-sm btn-danger" data-bp-delete-contract="${this.escapeHtml(contract.id)}"><i class="fas fa-trash"></i> Delete</button>` : `<label class="btn btn-sm btn-outline bp-upload-inline"><i class="fas fa-upload"></i> Upload<input type="file" data-bp-signed-upload="${this.escapeHtml(contract.id)}" accept=".pdf,.doc,.docx,image/*"></label><button class="btn btn-sm btn-primary" data-bp-sign="${this.escapeHtml(contract.id)}"><i class="fas fa-signature"></i> Sign</button>`}
+                        ${this.isSuperAdmin() ? `<button class="btn btn-sm btn-outline" data-bp-edit-contract="${this.escapeHtml(contract.id)}"><i class="fas fa-pen"></i> Update</button><button class="btn btn-sm btn-danger" data-bp-delete-contract="${this.escapeHtml(contract.id)}"><i class="fas fa-trash"></i> Delete</button>` : `<label class="btn btn-sm btn-outline bp-upload-inline"><i class="fas fa-upload"></i> Upload<input type="file" data-bp-signed-upload="${this.escapeHtml(contract.id)}" accept="application/pdf,image/png,image/jpeg,image/webp,image/gif,image/bmp,.pdf,.png,.jpg,.jpeg,.webp,.gif,.bmp"></label><button class="btn btn-sm btn-primary" data-bp-sign="${this.escapeHtml(contract.id)}"><i class="fas fa-signature"></i> Sign</button>`}
                     </td>
                 </tr>
             `).join('');
@@ -866,6 +874,9 @@
 
         uploadFile: async function (file, businessId, folder) {
             if (!file) throw new Error('No file selected.');
+            if (!this.isAllowedContractFile(file)) {
+                throw new Error('Only PDF and image files are allowed.');
+            }
             const safeName = Date.now() + '-' + file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
             if (PharmaFlow.CloudinaryUpload && PharmaFlow.CloudinaryUpload.isActive()) {
                 const publicId = safeName.replace(/\.[^/.]+$/, '');
@@ -886,6 +897,7 @@
             const businessId = document.getElementById('bp-contract-business')?.value;
             const file = document.getElementById('bp-contract-file')?.files[0];
             if (!businessId || (!editingContractId && !file)) return this.showToast('Select a branch and contract file.', 'error');
+            if (file && !this.isAllowedContractFile(file)) return this.showToast('Choose a PDF or image file only.', 'error');
             const btn = e.target.querySelector('button[type="submit"]');
             if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...'; }
             try {
@@ -899,6 +911,7 @@
                 if (file) {
                     payload.fileUrl = await this.uploadFile(file, businessId, 'contracts');
                     payload.fileName = file.name;
+                    payload.fileType = this.contractFileType(file);
                     payload.status = 'pending';
                     payload.signedFileUrl = firebase.firestore.FieldValue.delete();
                     payload.signedFileName = firebase.firestore.FieldValue.delete();
@@ -950,7 +963,7 @@
             const file = document.getElementById('bp-contract-file');
             if (file) file.required = true;
             const help = document.getElementById('bp-contract-file-help');
-            if (help) help.textContent = 'PDF previews open inside the portal. DOC files use a document viewer when supported.';
+            if (help) help.textContent = 'PDF, PNG, JPG, WEBP, GIF, or BMP only. Documents open directly in the portal.';
             const title = document.getElementById('bp-contract-form-title');
             if (title) title.textContent = 'Upload Contract';
             const subtitle = document.getElementById('bp-contract-form-subtitle');
@@ -982,125 +995,82 @@
             const signed = type === 'signed';
             const url = signed ? contract.signedFileUrl : contract.fileUrl;
             const name = signed ? contract.signedFileName : contract.fileName;
-            const fullMode = mode === 'full';
             if (!url) return this.showToast('No document is available to preview.', 'error');
             const modal = document.getElementById('bp-contract-modal');
             if (!modal) return;
+            const isImage = this.isImageFile(url, name);
             modal.innerHTML = `
                 <div class="bp-modal-panel bp-modal-panel--preview">
-                    <div class="bp-card-head">
-                        <div><h3>${fullMode ? 'Full Contract Preview' : (signed ? 'Signed Contract Preview' : 'Contract Preview')}</h3><small>${this.escapeHtml(contract.title || name || 'Document')}</small></div>
-                        <button class="btn btn-sm btn-outline" id="bp-contract-preview-close"><i class="fas fa-times"></i></button>
+                    <div class="bp-preview-header">
+                        <div class="bp-preview-heading">
+                            <span class="bp-preview-file-icon"><i class="fas ${isImage ? 'fa-file-image' : 'fa-file-pdf'}"></i></span>
+                            <div><h3>${signed ? 'Signed Contract' : 'Contract Preview'}</h3><small>${this.escapeHtml(contract.title || name || 'Document')}</small></div>
+                        </div>
+                        <div class="bp-preview-toolbar">
+                            ${isImage ? '<button class="btn btn-sm btn-outline" id="bp-preview-zoom-out" type="button" title="Zoom out"><i class="fas fa-minus"></i></button><span id="bp-preview-zoom-label">100%</span><button class="btn btn-sm btn-outline" id="bp-preview-zoom-in" type="button" title="Zoom in"><i class="fas fa-plus"></i></button><button class="btn btn-sm btn-outline" id="bp-preview-zoom-reset" type="button" title="Fit image"><i class="fas fa-expand"></i></button>' : ''}
+                            <button class="btn btn-sm btn-outline" id="bp-contract-preview-close" type="button" aria-label="Close preview"><i class="fas fa-times"></i></button>
+                        </div>
                     </div>
                     <div class="bp-contract-preview">
-                        ${this.contractPreviewHtml(url, name, fullMode)}
+                        ${this.contractPreviewHtml(url, name)}
                     </div>
                     <div class="bp-actions bp-preview-actions">
-                        ${this.fullDocumentActionHtml(url, name, id, type, fullMode)}
                         ${this.downloadActionHtml(url, name)}
                         ${this.printActionHtml(url, name)}
+                        <a class="btn btn-outline" href="${this.escapeHtml(url)}" target="_blank" rel="noopener"><i class="fas fa-up-right-from-square"></i> Open in New Tab</a>
                     </div>
                 </div>
             `;
             modal.classList.add('show');
             modal.setAttribute('aria-hidden', 'false');
             document.getElementById('bp-contract-preview-close')?.addEventListener('click', () => this.closeContractPreview());
-            document.getElementById('bp-contract-full-preview')?.addEventListener('click', () => this.openContractPreview(id, type, 'full'));
-            document.getElementById('bp-contract-first-page')?.addEventListener('click', () => this.openContractPreview(id, type, 'single'));
             document.getElementById('bp-contract-download-full')?.addEventListener('click', () => this.downloadFullContract(url, name, contract.title));
             document.getElementById('bp-contract-print')?.addEventListener('click', () => this.printContract(url, name, contract.title));
-            if (fullMode) this.bindContractPageLoader(modal);
-        },
-
-        fullDocumentActionHtml: function (url, name, id, type, fullMode) {
-            if (this.isCloudinaryUrl(url) && this.isPdfFile(url, name) && url.indexOf('/image/upload/') !== -1) {
-                return fullMode
-                    ? '<button class="btn btn-outline" id="bp-contract-first-page" type="button"><i class="fas fa-file"></i> Page 1 Preview</button>'
-                    : '<button class="btn btn-outline" id="bp-contract-full-preview" type="button"><i class="fas fa-file-lines"></i> View Full Document</button>';
-            }
-            return '<a class="btn btn-outline" href="' + this.escapeHtml(this.displayUrl(url, name)) + '" target="_blank" rel="noopener"><i class="fas fa-up-right-from-square"></i> Open Full Document</a>';
+            if (isImage) this.bindImagePreviewControls(modal);
         },
 
         downloadActionHtml: function (url, name) {
-            if (this.isCloudinaryUrl(url) && this.isPdfFile(url, name) && url.indexOf('/image/upload/') !== -1) {
-                return '<button class="btn btn-primary" id="bp-contract-download-full" type="button"><i class="fas fa-download"></i> Download Full Document</button>';
-            }
-            return '<a class="btn btn-primary" href="' + this.escapeHtml(url) + '" target="_blank" rel="noopener"><i class="fas fa-download"></i> Download</a>';
+            return '<a class="btn btn-primary" href="' + this.escapeHtml(url) + '" target="_blank" rel="noopener" download="' + this.escapeHtml(name || 'contract') + '"><i class="fas fa-download"></i> Download</a>';
         },
 
         printActionHtml: function (url, name) {
-            if (this.isPdfFile(url, name) || this.isImageFile(url, name) || this.isOfficeFile(url, name)) {
+            if (this.isPdfFile(url, name) || this.isImageFile(url, name)) {
                 return '<button class="btn btn-outline" id="bp-contract-print" type="button"><i class="fas fa-print"></i> Print</button>';
             }
             return '';
         },
 
-        contractPreviewHtml: function (url, name, fullMode) {
+        contractPreviewHtml: function (url, name) {
             const safeUrl = this.escapeHtml(url);
-            const pdfPage = this.cloudinaryPdfPageUrl(url);
-            if (fullMode && pdfPage && url.indexOf('/image/upload/') !== -1) {
-                const pages = Array.from({ length: CONTRACT_PAGE_LIMIT }, (_, i) => {
-                    const pageUrl = this.cloudinaryPdfPageUrl(url, i + 1);
-                    return '<div class="bp-contract-page" data-page="' + (i + 1) + '"><img class="bp-contract-page-img" src="' + this.escapeHtml(pageUrl) + '" alt="Contract page ' + (i + 1) + '" loading="eager"></div>';
-                }).join('');
-                return '<div class="bp-contract-pages-shell"><div class="bp-contract-document-loading"><i class="fas fa-spinner fa-spin"></i><span>Preparing document preview...</span></div><div class="bp-contract-pages">' + pages + '</div></div><div class="bp-preview-note">Full document preview</div>';
-            }
-            if (pdfPage && url.indexOf('/image/upload/') !== -1) {
-                return '<img class="bp-contract-preview-img" src="' + this.escapeHtml(pdfPage) + '" alt="PDF contract preview"><div class="bp-preview-note">Showing page 1 preview. Open the full document to view every page.</div>';
-            }
-            if (pdfPage && url.indexOf('/raw/upload/') !== -1) {
-                return '<div class="bp-preview-fallback"><i class="fas fa-file-pdf"></i><h4>This PDF was uploaded with Cloudinary raw delivery</h4><p>Raw PDF files can be blocked from inline viewing. Click Update and re-upload the PDF to enable realtime preview.</p><a class="btn btn-outline" href="' + safeUrl + '" target="_blank" rel="noopener"><i class="fas fa-up-right-from-square"></i> Try Opening Original</a></div>';
-            }
             if (this.isImageFile(url, name)) {
-                return '<img class="bp-contract-preview-img" src="' + safeUrl + '" alt="Contract preview">';
+                return '<div class="bp-contract-image-stage"><img class="bp-contract-preview-img" id="bp-contract-preview-image" src="' + safeUrl + '" alt="Contract preview"></div>';
             }
             if (this.isPdfFile(url, name)) {
-                return '<iframe class="bp-contract-preview-frame" src="' + safeUrl + '#toolbar=1&navpanes=0" title="PDF contract preview"></iframe>';
+                return '<object class="bp-contract-preview-frame" data="' + safeUrl + '#toolbar=1&navpanes=0&view=FitH" type="application/pdf"><div class="bp-preview-fallback"><i class="fas fa-file-pdf"></i><h4>Your browser could not display this PDF</h4><p>Use Open in New Tab or Download below.</p></div></object>';
             }
-            if (this.isOfficeFile(url, name)) {
-                const viewer = 'https://view.officeapps.live.com/op/embed.aspx?src=' + encodeURIComponent(url);
-                return '<iframe class="bp-contract-preview-frame" src="' + this.escapeHtml(viewer) + '" title="Document contract preview"></iframe>';
-            }
-            return '<div class="bp-preview-fallback"><i class="fas fa-file-lines"></i><h4>Preview unavailable for this file type</h4><p>Open the document in a new tab to view or download it.</p></div>';
+            return '<div class="bp-preview-fallback"><i class="fas fa-file-circle-xmark"></i><h4>Unsupported legacy contract</h4><p>Replace this file with a PDF or image to preview it.</p></div>';
         },
 
-        bindContractPageLoader: function (modal) {
-            const pages = Array.from(modal.querySelectorAll('.bp-contract-page'));
-            let hitEnd = false;
-            let loadedCount = 0;
-            const loading = modal.querySelector('.bp-contract-document-loading');
-            const note = modal.querySelector('.bp-preview-note');
-            const finishLoading = () => {
-                if (loading) loading.classList.add('is-hidden');
-                if (note) note.textContent = loadedCount > 1 ? 'Full document preview' : 'Page preview';
+        bindImagePreviewControls: function (modal) {
+            const image = modal.querySelector('#bp-contract-preview-image');
+            const label = modal.querySelector('#bp-preview-zoom-label');
+            if (!image) return;
+            let zoom = 1;
+            const applyZoom = () => {
+                image.style.transform = 'scale(' + zoom + ')';
+                if (label) label.textContent = Math.round(zoom * 100) + '%';
             };
-            pages.forEach(page => {
-                const img = page.querySelector('img');
-                if (!img) return;
-                img.addEventListener('load', () => {
-                    loadedCount += 1;
-                    page.classList.add('is-loaded');
-                    page.classList.remove('is-error');
-                    finishLoading();
-                });
-                img.addEventListener('error', () => {
-                    const pageNumber = Number(page.dataset.page || 0);
-                    page.remove();
-                    if (!hitEnd && pageNumber > 1) {
-                        hitEnd = true;
-                        pages.forEach(other => {
-                            if (Number(other.dataset.page || 0) > pageNumber) other.remove();
-                        });
-                    }
-                    const remaining = modal.querySelectorAll('.bp-contract-page').length;
-                    if (!remaining) {
-                        const wrap = modal.querySelector('.bp-contract-pages');
-                        if (wrap) wrap.innerHTML = '<div class="bp-preview-fallback"><i class="fas fa-file-circle-exclamation"></i><h4>No preview pages loaded</h4><p>The document provider blocked this preview. Try re-uploading the contract.</p></div>';
-                        finishLoading();
-                    } else if (loadedCount > 0) {
-                        finishLoading();
-                    }
-                });
+            modal.querySelector('#bp-preview-zoom-in')?.addEventListener('click', () => {
+                zoom = Math.min(3, zoom + .25);
+                applyZoom();
+            });
+            modal.querySelector('#bp-preview-zoom-out')?.addEventListener('click', () => {
+                zoom = Math.max(.5, zoom - .25);
+                applyZoom();
+            });
+            modal.querySelector('#bp-preview-zoom-reset')?.addEventListener('click', () => {
+                zoom = 1;
+                applyZoom();
             });
         },
 
@@ -1235,11 +1205,13 @@
         uploadSignedContract: async function (id, file) {
             const contract = contracts.find(item => item.id === id);
             if (!contract || !file) return;
+            if (!this.isAllowedContractFile(file)) return this.showToast('Choose a PDF or image file only.', 'error');
             try {
                 const signedFileUrl = await this.uploadFile(file, contract.businessId, 'signed_contracts');
                 await window.db.collection('branch_contracts').doc(id).update({
                     signedFileUrl,
                     signedFileName: file.name,
+                    signedFileType: this.contractFileType(file),
                     signedBy: this.getUserName(),
                     signedAt: this.nowIso(),
                     status: 'signed',
