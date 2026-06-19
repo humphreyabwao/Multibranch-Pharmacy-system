@@ -38,6 +38,10 @@ service cloud.firestore {
       return isSuperAdmin() || belongsToBusiness(businessId);
     }
 
+    function branchCertificateUploadsEnabled(businessId) {
+      return get(/databases/$(database)/documents/businesses/$(businessId)).data.branchCertificateUploadEnabled == true;
+    }
+
     // ===== USER PROFILES =====
     match /users/{userId} {
       // Admins+ can read all user profiles (needed for admin panel user management)
@@ -94,8 +98,24 @@ service cloud.firestore {
     // ===== BUSINESSES (Franchises) =====
     match /businesses/{businessId} {
       allow read: if isAuthenticated();
-      allow create: if isAdminOrAbove();
-      allow update: if isSuperAdmin() || (isAdminOrAbove() && belongsToBusiness(businessId));
+      allow create: if isSuperAdmin()
+        || (
+          hasRole('admin')
+          && (
+            !('branchCertificateUploadEnabled' in request.resource.data)
+            || request.resource.data.branchCertificateUploadEnabled == false
+          )
+        );
+      allow update: if isSuperAdmin()
+        || (
+          isAdminOrAbove()
+          && belongsToBusiness(businessId)
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+            'branchCertificateUploadEnabled',
+            'branchCertificatePermissionUpdatedAt',
+            'branchCertificatePermissionUpdatedBy'
+          ])
+        );
       allow delete: if isSuperAdmin();
 
       // ── Sales (POS) — all staff can create, admin+ to edit/delete ──
@@ -283,11 +303,15 @@ service cloud.firestore {
             'disposalDate',
             'disposalNotes',
             'disposedBy',
+            'disposedByEmail',
+            'disposedByUid',
             'disposedAt',
             'updatedAt'
           ])
           && request.resource.data.status == 'disposed'
           && request.resource.data.disposedBy is string
+          && request.resource.data.disposedByEmail is string
+          && request.resource.data.disposedByUid is string
           && request.resource.data.disposedAt is string;
         allow delete: if canAccessBusiness(businessId) && isAdminOrAbove();
       }
@@ -394,6 +418,33 @@ service cloud.firestore {
             'updatedAt'
           ])
         );
+    }
+
+    // ===== BRANCH PORTAL: CERTIFICATES =====
+    // Superadmin grants upload access on the business document. Branch users can
+    // then create image-only certificate records for their own branch.
+    match /branch_certificates/{certificateId} {
+      allow read: if isSuperAdmin()
+        || (isAuthenticated() && belongsToBusiness(resource.data.businessId));
+      allow create: if isAuthenticated()
+        && request.resource.data.businessId is string
+        && belongsToBusiness(request.resource.data.businessId)
+        && branchCertificateUploadsEnabled(request.resource.data.businessId)
+        && request.resource.data.imageUrl is string
+        && request.resource.data.imageName is string
+        && request.resource.data.imageType is string
+        && request.resource.data.imageType.matches('image/(png|jpeg|webp)')
+        && request.resource.data.certificateType in [
+          'pharmacy_license',
+          'waste_facility',
+          'business_permit',
+          'professional_license',
+          'inspection_certificate',
+          'other'
+        ]
+        && request.resource.data.title is string
+        && request.resource.data.uploadedBy is string;
+      allow update, delete: if isSuperAdmin();
     }
 
     // Allow superadmin collection-group ticket queue reads.

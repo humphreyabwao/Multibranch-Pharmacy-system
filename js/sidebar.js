@@ -201,7 +201,8 @@
             children: [
                 { id: 'billing-documents', label: 'Invoices & Receipts', icon: 'fas fa-file-invoice-dollar' },
                 { id: 'branch-communications', label: 'Communications', icon: 'fas fa-comments' },
-                { id: 'branch-contracts', label: 'Contracts', icon: 'fas fa-file-signature' }
+                { id: 'branch-contracts', label: 'Contracts', icon: 'fas fa-file-signature' },
+                { id: 'branch-certificates', label: 'Certificates', icon: 'fas fa-certificate' }
             ]
         },
         {

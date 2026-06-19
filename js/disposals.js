@@ -31,6 +31,16 @@
             return profile ? (profile.displayName || profile.email || 'User') : 'User';
         },
 
+        getUserIdentity: function () {
+            const profile = PharmaFlow.Auth ? PharmaFlow.Auth.userProfile : null;
+            const authUser = window.auth && window.auth.currentUser ? window.auth.currentUser : null;
+            return {
+                name: profile?.displayName || authUser?.displayName || profile?.email || authUser?.email || 'User',
+                email: profile?.email || authUser?.email || '',
+                uid: authUser?.uid || profile?.uid || ''
+            };
+        },
+
         escapeHtml: function (value) {
             const el = document.createElement('div');
             el.textContent = value == null ? '' : String(value);
@@ -300,7 +310,7 @@
         },
 
         tableHtml: function (bodyId) {
-            return `<table class="dsp-table"><thead><tr><th>Product</th><th>Batch</th><th>Reason</th><th>Qty</th><th>Loss value</th><th>Expiry</th><th>Status</th><th>Action</th></tr></thead><tbody id="${bodyId}"><tr><td colspan="8" class="dsp-empty"><i class="fas fa-spinner fa-spin"></i> Loading...</td></tr></tbody></table>`;
+            return `<table class="dsp-table"><thead><tr><th>Product</th><th>Batch</th><th>Reason</th><th>Qty</th><th>Loss value</th><th>Expiry</th><th>Status</th><th>Disposed by</th><th>Action</th></tr></thead><tbody id="${bodyId}"><tr><td colspan="9" class="dsp-empty"><i class="fas fa-spinner fa-spin"></i> Loading...</td></tr></tbody></table>`;
         },
 
         subscribe: function (syncExpired) {
@@ -601,7 +611,7 @@
                 const itemStatus = item.status || 'pending';
                 if (status && itemStatus !== status) return false;
                 if (reason && item.reason !== reason) return false;
-                if (query && ![item.productName, item.sku, item.batchNumber, item.reason, item.notes, item.recordedBy].join(' ').toLowerCase().includes(query)) return false;
+                if (query && ![item.productName, item.sku, item.batchNumber, item.reason, item.notes, item.recordedBy, item.disposedBy, item.disposedByEmail].join(' ').toLowerCase().includes(query)) return false;
                 return true;
             });
         },
@@ -618,7 +628,7 @@
             const body = document.getElementById(bodyId);
             if (!body) return;
             if (!rows.length) {
-                body.innerHTML = '<tr><td colspan="8" class="dsp-empty"><i class="fas fa-circle-check"></i> No disposal records found</td></tr>';
+                body.innerHTML = '<tr><td colspan="9" class="dsp-empty"><i class="fas fa-circle-check"></i> No disposal records found</td></tr>';
                 return;
             }
             body.innerHTML = rows.map(item => {
@@ -631,6 +641,7 @@
                     <td>${this.formatCurrency(item.lossValue || 0)}</td>
                     <td>${this.formatDate(item.expiryDate)}</td>
                     <td><span class="dsp-status dsp-status--${status}">${this.escapeHtml(status)}</span></td>
+                    <td>${status === 'disposed' ? `<span class="dsp-disposed-by"><i class="fas fa-user-check"></i><span><strong>${this.escapeHtml(item.disposedBy || 'User')}</strong>${item.disposedByEmail ? `<small>${this.escapeHtml(item.disposedByEmail)}</small>` : ''}</span></span>` : '<span class="dsp-not-disposed">—</span>'}</td>
                     <td>${status !== 'disposed' ? `<button class="btn btn-sm btn-primary" data-dsp-finalize="${this.escapeHtml(item.id)}"><i class="fas fa-check"></i> Complete</button>` : `<small>${this.formatDate(item.disposedAt)}</small>`}</td>
                 </tr>`;
             }).join('');
@@ -642,29 +653,108 @@
         openFinalizeModal: function (id) {
             const item = disposals.find(entry => entry.id === id);
             if (!item) return;
+            const quantity = parseInt(item.quantity, 10) || 0;
+            const reason = (item.reason || 'other').replace(/_/g, ' ');
+            const today = new Date().toISOString().split('T')[0];
+            const disposer = this.getUserIdentity();
             let root = document.getElementById('dsp-modal-root');
             if (!root) {
                 root = document.createElement('div');
                 root.id = 'dsp-modal-root';
                 document.body.appendChild(root);
             }
-            root.innerHTML = `<div class="dsp-modal show"><div class="dsp-modal-card">
-                <div class="dsp-card-head"><div><h3>Complete physical disposal</h3><small>${this.escapeHtml(item.productName)} · ${this.escapeHtml(item.batchNumber || 'No batch')}</small></div><button class="btn btn-sm btn-outline" id="dsp-modal-close"><i class="fas fa-times"></i></button></div>
-                <div class="dsp-form-grid">
-                    <label>Method<select id="dsp-method"><option value="licensed_collector">Licensed waste collector</option><option value="supplier_return">Returned to supplier</option><option value="incineration">Incineration</option><option value="destruction">Controlled destruction</option><option value="other">Other</option></select></label>
-                    <label>Disposal date<input id="dsp-date" type="date" value="${new Date().toISOString().split('T')[0]}"></label>
-                    <label class="dsp-field-full">Completion notes<textarea id="dsp-final-notes" rows="4" placeholder="Certificate number, collector, witnesses, or other details"></textarea></label>
+
+            root.innerHTML = `<div class="dsp-modal show" role="dialog" aria-modal="true" aria-labelledby="dsp-finalize-title">
+                <div class="dsp-modal-card dsp-finalize-modal">
+                    <div class="dsp-finalize-head">
+                        <div class="dsp-finalize-head__icon"><i class="fas fa-shield-halved"></i></div>
+                        <div class="dsp-finalize-head__copy">
+                            <span class="dsp-finalize-eyebrow">Final disposal record</span>
+                            <h3 id="dsp-finalize-title">Complete physical disposal</h3>
+                            <p>Confirm how this quarantined stock was safely disposed.</p>
+                        </div>
+                        <button type="button" class="dsp-modal-close" id="dsp-modal-close" aria-label="Close completion modal">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+
+                    <div class="dsp-finalize-body">
+                        <section class="dsp-finalize-summary" aria-label="Disposal summary">
+                            <div class="dsp-finalize-product">
+                                <span class="dsp-finalize-product__icon"><i class="fas fa-capsules"></i></span>
+                                <div>
+                                    <strong>${this.escapeHtml(item.productName || 'Product')}</strong>
+                                    <small>${this.escapeHtml(item.sku || 'No SKU')} &middot; Batch ${this.escapeHtml(item.batchNumber || 'Not recorded')}</small>
+                                </div>
+                                <span class="dsp-reason dsp-reason--${this.escapeHtml(item.reason || 'other')}">${this.escapeHtml(reason)}</span>
+                            </div>
+                            <div class="dsp-finalize-facts">
+                                <div><span>Quantity</span><strong>${quantity} unit${quantity === 1 ? '' : 's'}</strong></div>
+                                <div><span>Estimated loss</span><strong>${this.formatCurrency(item.lossValue || 0)}</strong></div>
+                                <div><span>Expiry date</span><strong>${this.formatDate(item.expiryDate)}</strong></div>
+                                <div><span>Disposed by</span><strong title="${this.escapeHtml(disposer.email)}">${this.escapeHtml(disposer.name)}</strong></div>
+                            </div>
+                        </section>
+
+                        <div class="dsp-finalize-notice">
+                            <i class="fas fa-circle-info"></i>
+                            <p><strong>This action closes the record.</strong> It remains available in disposal history for audit and compliance review.</p>
+                        </div>
+
+                        <div class="dsp-finalize-form">
+                            <label>
+                                <span><i class="fas fa-truck-ramp-box"></i> Disposal method</span>
+                                <select id="dsp-method">
+                                    <option value="licensed_collector">Licensed waste collector</option>
+                                    <option value="supplier_return">Returned to supplier</option>
+                                    <option value="incineration">Incineration</option>
+                                    <option value="destruction">Controlled destruction</option>
+                                    <option value="other">Other</option>
+                                </select>
+                            </label>
+                            <label>
+                                <span><i class="fas fa-calendar-check"></i> Disposal date</span>
+                                <input id="dsp-date" type="date" value="${today}" max="${today}">
+                            </label>
+                            <label class="dsp-field-full">
+                                <span><i class="fas fa-file-signature"></i> Completion notes <em>Optional</em></span>
+                                <textarea id="dsp-final-notes" rows="4" placeholder="Add certificate number, collector details, witnesses, or other supporting information"></textarea>
+                                <small>Include any reference details that may be useful during an audit.</small>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="dsp-finalize-actions">
+                        <button type="button" class="btn btn-outline" id="dsp-modal-cancel">Keep Pending</button>
+                        <button type="button" class="btn btn-primary dsp-finalize-confirm" id="dsp-modal-confirm">
+                            <i class="fas fa-check-circle"></i>
+                            <span><strong>Mark as Disposed</strong><small>Complete this disposal record</small></span>
+                        </button>
+                    </div>
                 </div>
-                <div class="dsp-actions"><button class="btn btn-outline" id="dsp-modal-cancel">Cancel</button><button class="btn btn-primary" id="dsp-modal-confirm"><i class="fas fa-check"></i> Mark Disposed</button></div>
-            </div></div>`;
-            const close = () => { root.innerHTML = ''; };
+            </div>`;
+
+            const handleKeydown = event => {
+                if (event.key === 'Escape') close();
+            };
+            const close = () => {
+                document.removeEventListener('keydown', handleKeydown);
+                root.innerHTML = '';
+            };
+
+            document.addEventListener('keydown', handleKeydown);
             document.getElementById('dsp-modal-close')?.addEventListener('click', close);
             document.getElementById('dsp-modal-cancel')?.addEventListener('click', close);
             document.getElementById('dsp-modal-confirm')?.addEventListener('click', () => this.finalizeDisposal(id, close));
+            root.querySelector('.dsp-modal')?.addEventListener('click', event => {
+                if (event.target.classList.contains('dsp-modal')) close();
+            });
+            document.getElementById('dsp-method')?.focus();
         },
 
         finalizeDisposal: async function (id, close) {
             const businessId = this.getBusinessId();
+            const disposer = this.getUserIdentity();
             const button = document.getElementById('dsp-modal-confirm');
             if (button) { button.disabled = true; button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...'; }
             try {
@@ -673,7 +763,9 @@
                     disposalMethod: document.getElementById('dsp-method')?.value || 'other',
                     disposalDate: document.getElementById('dsp-date')?.value || '',
                     disposalNotes: (document.getElementById('dsp-final-notes')?.value || '').trim(),
-                    disposedBy: this.getUserName(),
+                    disposedBy: disposer.name,
+                    disposedByEmail: disposer.email,
+                    disposedByUid: disposer.uid,
                     disposedAt: new Date().toISOString(),
                     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
                 });
@@ -681,7 +773,10 @@
                 this.showToast('Disposal completed and retained in the audit history.');
             } catch (err) {
                 this.showToast('Failed to complete disposal: ' + (err.message || err), 'error');
-                if (button) { button.disabled = false; button.innerHTML = '<i class="fas fa-check"></i> Mark Disposed'; }
+                if (button) {
+                    button.disabled = false;
+                    button.innerHTML = '<i class="fas fa-check-circle"></i><span><strong>Mark as Disposed</strong><small>Complete this disposal record</small></span>';
+                }
             }
         },
 

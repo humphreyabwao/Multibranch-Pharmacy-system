@@ -380,6 +380,7 @@
 
                 if (subId === 'branch-communications') { PharmaFlow.BranchPortal.renderCommunications(contentBody); return; }
                 if (subId === 'branch-contracts') { PharmaFlow.BranchPortal.renderContracts(contentBody); return; }
+                if (subId === 'branch-certificates') { PharmaFlow.BranchPortal.renderCertificates(contentBody); return; }
                 PharmaFlow.BranchPortal.renderBilling(contentBody);
                 return;
             }

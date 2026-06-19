@@ -14,6 +14,7 @@
     let currentPage = 1;
     let pageSize = 50;
     let exportMenuState = null;
+    let financialColumnsVisible = false;
 
     const AllSales = {
 
@@ -386,6 +387,7 @@
 
         render: function (container) {
             currentPage = 1;
+            financialColumnsVisible = false;
             const businessId = this.getBusinessId();
 
             // Default date range: last 30 days
@@ -476,12 +478,17 @@
                                 <option value="100">100 per page</option>
                                 <option value="250">250 per page</option>
                             </select>
+                            <button type="button" class="as-column-toggle" id="as-column-toggle"
+                                title="Show discount and VAT columns" aria-label="Show discount and VAT columns"
+                                aria-pressed="false">
+                                <span aria-hidden="true">&gt;&gt;</span>
+                            </button>
                         </div>
                     </div>
 
                     <!-- Table -->
                     <div class="sales-table-wrapper">
-                        <table class="sales-table">
+                        <table class="sales-table" id="as-sales-table">
                             <thead>
                                 <tr>
                                     <th>#</th>
@@ -490,10 +497,10 @@
                                     <th>Time</th>
                                     <th>Items</th>
                                     <th>Subtotal</th>
-                                    <th>Discount</th>
-                                    <th>Product VAT</th>
-                                    <th>Sale VAT</th>
-                                    <th>Total VAT</th>
+                                    <th class="as-financial-column">Discount</th>
+                                    <th class="as-financial-column">Product VAT</th>
+                                    <th class="as-financial-column">Sale VAT</th>
+                                    <th class="as-financial-column">Total VAT</th>
                                     <th>Total</th>
                                     <th>Profit</th>
                                     <th>Payment</th>
@@ -503,7 +510,7 @@
                                 </tr>
                             </thead>
                             <tbody id="as-tbody">
-                                <tr><td colspan="16" class="sales-loading"><i class="fas fa-spinner fa-spin"></i> Loading sales...</td></tr>
+                                <tr><td colspan="12" class="sales-loading"><i class="fas fa-spinner fa-spin"></i> Loading sales...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -547,6 +554,14 @@
                 self.renderCurrentPage();
             });
 
+            const columnToggle = document.getElementById('as-column-toggle');
+            if (columnToggle) {
+                columnToggle.addEventListener('click', function () {
+                    financialColumnsVisible = !financialColumnsVisible;
+                    self.updateFinancialColumnVisibility();
+                });
+            }
+
             if (PharmaFlow.bindVatFormatSelect) {
                 PharmaFlow.bindVatFormatSelect(document.getElementById('as-vat-format'), function () {
                     self.renderCurrentPage();
@@ -581,6 +596,25 @@
         },
 
         // ─── QUICK DATE FILTERS ──────────────────────────────
+
+        updateFinancialColumnVisibility: function () {
+            const table = document.getElementById('as-sales-table');
+            const toggle = document.getElementById('as-column-toggle');
+            if (table) {
+                table.classList.toggle('as-show-financial-columns', financialColumnsVisible);
+            }
+            if (toggle) {
+                const action = financialColumnsVisible ? 'Hide' : 'Show';
+                toggle.classList.toggle('active', financialColumnsVisible);
+                toggle.setAttribute('aria-pressed', String(financialColumnsVisible));
+                toggle.setAttribute('aria-label', action + ' discount and VAT columns');
+                toggle.title = action + ' discount and VAT columns';
+                toggle.innerHTML = '<span aria-hidden="true">' + (financialColumnsVisible ? '&lt;&lt;' : '&gt;&gt;') + '</span>';
+            }
+
+            const emptyCell = document.querySelector('#as-tbody .sales-loading');
+            if (emptyCell) emptyCell.colSpan = financialColumnsVisible ? 16 : 12;
+        },
 
         applyQuickDateFilter: function (range) {
             const now = new Date();
@@ -723,7 +757,7 @@
             const pageData = filteredSales.slice(start, start + pageSize);
 
             if (pageData.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="16" class="sales-loading"><i class="fas fa-inbox"></i> No sales found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="' + (financialColumnsVisible ? 16 : 12) + '" class="sales-loading"><i class="fas fa-inbox"></i> No sales found</td></tr>';
                 this.renderPagination(0, 0);
                 return;
             }
@@ -740,10 +774,10 @@
                     <td>${this.formatTime(sale.saleDate)}</td>
                     <td>${sale.itemCount || 0}</td>
                     <td>${this.formatCurrency(sale.subtotal)}</td>
-                    <td>${sale.discountAmount > 0 ? '- ' + this.formatCurrency(sale.discountAmount) : '—'}</td>
-                    <td class="sales-vat-cell">${this.formatVatCell(sale, 'product')}</td>
-                    <td class="sales-vat-cell">${this.formatVatCell(sale, 'cart')}</td>
-                    <td class="sales-vat-cell">${this.formatVatCell(sale, 'total')}</td>
+                    <td class="as-financial-column">${sale.discountAmount > 0 ? '- ' + this.formatCurrency(sale.discountAmount) : '—'}</td>
+                    <td class="sales-vat-cell as-financial-column">${this.formatVatCell(sale, 'product')}</td>
+                    <td class="sales-vat-cell as-financial-column">${this.formatVatCell(sale, 'cart')}</td>
+                    <td class="sales-vat-cell as-financial-column">${this.formatVatCell(sale, 'total')}</td>
                     <td><strong>${this.formatCurrency(sale.total)}</strong></td>
                     <td class="${(sale.totalProfit || 0) >= 0 ? 'sales-profit-pos' : 'sales-profit-neg'}">${this.formatCurrency(sale.totalProfit)}</td>
                     <td>${payBadge}</td>

@@ -1219,11 +1219,12 @@
                                     <th>License No.</th>
                                     <th>Users</th>
                                     <th>Status</th>
+                                    <th>Certificate Uploads</th>
                                     <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody id="adm-biz-tbody">
-                                <tr><td colspan="8" class="dda-loading"><i class="fas fa-spinner fa-spin"></i> Loading franchises...</td></tr>
+                                <tr><td colspan="9" class="dda-loading"><i class="fas fa-spinner fa-spin"></i> Loading franchises...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -1438,7 +1439,10 @@
                 email: document.getElementById('adm-biz-email')?.value?.trim() || '',
                 address: document.getElementById('adm-biz-address')?.value?.trim() || '',
                 isActive: document.getElementById('adm-biz-status')?.value !== 'inactive',
-                notes: document.getElementById('adm-biz-notes')?.value?.trim() || ''
+                notes: document.getElementById('adm-biz-notes')?.value?.trim() || '',
+                branchCertificateUploadEnabled: isEdit
+                    ? allBusinesses.find(item => item.id === editId)?.branchCertificateUploadEnabled === true
+                    : false
             };
 
             // Validate admin assignment fields before saving
@@ -1597,7 +1601,7 @@
             const pageData = filteredBusinesses.slice(start, start + PAGE_SIZE);
 
             if (pageData.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="8" class="dda-loading"><i class="fas fa-inbox"></i> No franchises found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="9" class="dda-loading"><i class="fas fa-inbox"></i> No franchises found</td></tr>';
                 this.renderBizPagination();
                 return;
             }
@@ -1615,6 +1619,14 @@
                     <td>${this.escapeHtml(b.licenseNumber || '—')}</td>
                     <td><span class="adm-perm-count">${b._userCount || 0} users</span></td>
                     <td>${statusBadge}</td>
+                    <td>
+                        <button class="adm-cert-permission ${b.branchCertificateUploadEnabled === true ? 'is-enabled' : ''}"
+                            data-id="${b.id}" data-enabled="${b.branchCertificateUploadEnabled === true}"
+                            title="${b.branchCertificateUploadEnabled === true ? 'Revoke certificate uploads' : 'Grant certificate uploads'}">
+                            <i class="fas ${b.branchCertificateUploadEnabled === true ? 'fa-unlock-keyhole' : 'fa-lock'}"></i>
+                            <span>${b.branchCertificateUploadEnabled === true ? 'Allowed' : 'Locked'}</span>
+                        </button>
+                    </td>
                     <td>
                         <div class="adm-actions-cell">
                             <button class="sales-action-btn adm-edit-biz" data-id="${b.id}" title="Edit" style="background:#e0e7ff;color:#4338ca"><i class="fas fa-edit"></i></button>
@@ -1634,11 +1646,38 @@
             tbody.querySelectorAll('.adm-toggle-biz').forEach(btn => {
                 btn.addEventListener('click', () => this.toggleFranchiseStatus(btn.dataset.id, btn.dataset.active === 'true'));
             });
+            tbody.querySelectorAll('.adm-cert-permission').forEach(btn => {
+                btn.addEventListener('click', () => this.toggleCertificateUploadPermission(btn.dataset.id, btn.dataset.enabled === 'true'));
+            });
             tbody.querySelectorAll('.adm-delete-biz').forEach(btn => {
                 btn.addEventListener('click', () => this.deleteFranchise(btn.dataset.id, btn.dataset.name));
             });
 
             this.renderBizPagination();
+        },
+
+        toggleCertificateUploadPermission: async function (bizId, currentlyEnabled) {
+            const business = allBusinesses.find(item => item.id === bizId);
+            const action = currentlyEnabled ? 'revoke' : 'grant';
+            const message = currentlyEnabled
+                ? 'Revoke certificate upload rights from "' + (business?.name || 'this branch') + '"? Existing certificates will remain visible.'
+                : 'Allow users at "' + (business?.name || 'this branch') + '" to upload licensing and waste-facility certificate images?';
+            if (!(await PharmaFlow.confirm(message, {
+                title: currentlyEnabled ? 'Revoke Certificate Uploads' : 'Grant Certificate Uploads',
+                confirmText: currentlyEnabled ? 'Revoke Access' : 'Grant Access',
+                danger: currentlyEnabled
+            }))) return;
+
+            try {
+                await window.db.collection('businesses').doc(bizId).update({
+                    branchCertificateUploadEnabled: !currentlyEnabled,
+                    branchCertificatePermissionUpdatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    branchCertificatePermissionUpdatedBy: PharmaFlow.Auth?.userProfile?.displayName || PharmaFlow.Auth?.userProfile?.email || 'Superadmin'
+                });
+                this.showToast('Certificate upload rights ' + (currentlyEnabled ? 'revoked.' : 'granted.'));
+            } catch (err) {
+                this.showToast('Failed to ' + action + ' certificate upload rights: ' + err.message, 'error');
+            }
         },
 
         toggleFranchiseStatus: async function (bizId, isCurrentlyActive) {

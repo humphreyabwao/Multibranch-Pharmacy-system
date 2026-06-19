@@ -11,6 +11,7 @@
     let financeDocs = [];
     let communications = [];
     let contracts = [];
+    let certificates = [];
     let businesses = [];
     let signingPad = null;
     let editingContractId = null;
@@ -26,6 +27,7 @@
             financeDocs = [];
             communications = [];
             contracts = [];
+            certificates = [];
             signingPad = null;
             editingContractId = null;
         },
@@ -85,6 +87,14 @@
             const isImage = /^(image\/(png|jpe?g|webp|gif|bmp))$/i.test(type)
                 || /\.(png|jpe?g|webp|gif|bmp)$/i.test(name);
             return isPdf || isImage;
+        },
+
+        isAllowedCertificateImage: function (file) {
+            if (!file) return false;
+            const name = String(file.name || '').toLowerCase();
+            const type = String(file.type || '').toLowerCase();
+            return /^(image\/(png|jpe?g|webp))$/i.test(type)
+                || /\.(png|jpe?g|webp)$/i.test(name);
         },
 
         contractFileType: function (file) {
@@ -1298,6 +1308,306 @@
             });
             this.closeSignModal();
             this.showToast('Digital signature saved.');
+        },
+
+        renderCertificates: async function (container) {
+            this.cleanup();
+            await this.loadBusinesses();
+            const admin = this.isSuperAdmin();
+            const businessId = this.getBusinessId();
+            let uploadEnabled = admin;
+
+            if (!admin && businessId) {
+                try {
+                    const businessSnap = await window.db.collection('businesses').doc(businessId).get();
+                    uploadEnabled = businessSnap.exists && businessSnap.data().branchCertificateUploadEnabled === true;
+                } catch (err) {
+                    uploadEnabled = false;
+                }
+            }
+
+            container.innerHTML = `
+                <div class="bp-module bp-cert-module">
+                    ${this.headerHtml('Branch Certificates', 'fas fa-certificate', 'Licences, waste-facility approvals, and branch compliance images')}
+
+                    ${admin ? `
+                        <div class="bp-cert-admin-note">
+                            <i class="fas fa-shield-halved"></i>
+                            <div><strong>Superadmin certificate register</strong><span>Upload rights are granted per branch from Admin Panel → Manage Franchises.</span></div>
+                        </div>
+                    ` : uploadEnabled ? this.certificateUploadFormHtml() : `
+                        <div class="bp-cert-locked">
+                            <span><i class="fas fa-lock"></i></span>
+                            <div>
+                                <strong>Certificate uploads are not enabled</strong>
+                                <p>Your Superadmin must grant this branch permission before users can upload licensing or waste-facility certificates.</p>
+                            </div>
+                        </div>
+                    `}
+
+                    <section class="bp-card">
+                        <div class="bp-card-head">
+                            <div>
+                                <h3>${admin ? 'All Branch Certificates' : 'Branch Certificate Register'}</h3>
+                                <small>Image records retained for branch compliance review</small>
+                            </div>
+                            <span class="bp-pill">Images only</span>
+                        </div>
+                        <div class="bp-toolbar">
+                            <div class="bp-search"><i class="fas fa-search"></i><input id="bp-cert-search" type="text" placeholder="Search certificate, authority, branch..."></div>
+                            <select id="bp-cert-type-filter" class="bp-input">
+                                <option value="">All certificate types</option>
+                                <option value="pharmacy_license">Pharmacy licence</option>
+                                <option value="waste_facility">Waste facility</option>
+                                <option value="business_permit">Business permit</option>
+                                <option value="professional_license">Professional licence</option>
+                                <option value="inspection_certificate">Inspection certificate</option>
+                                <option value="other">Other</option>
+                            </select>
+                            ${admin ? `<select id="bp-cert-business-filter" class="bp-input"><option value="">All branches</option>${this.businessOptions('')}</select>` : ''}
+                        </div>
+                        <div class="bp-cert-grid" id="bp-cert-grid">
+                            <div class="bp-empty"><i class="fas fa-spinner fa-spin"></i> Loading certificates...</div>
+                        </div>
+                    </section>
+                    <div id="bp-cert-preview-modal" class="bp-modal" aria-hidden="true"></div>
+                </div>
+            `;
+
+            if (!admin && uploadEnabled) {
+                document.getElementById('bp-cert-form')?.addEventListener('submit', event => this.saveCertificate(event));
+            }
+            document.getElementById('bp-cert-search')?.addEventListener('input', () => this.renderCertificateCards());
+            document.getElementById('bp-cert-type-filter')?.addEventListener('change', () => this.renderCertificateCards());
+            document.getElementById('bp-cert-business-filter')?.addEventListener('change', () => this.renderCertificateCards());
+            this.subscribeCertificates();
+        },
+
+        certificateUploadFormHtml: function () {
+            return `
+                <form class="bp-card bp-cert-upload" id="bp-cert-form">
+                    <div class="bp-card-head">
+                        <div><h3>Upload Certificate</h3><small>Add an image of an official branch certificate</small></div>
+                        <span class="bp-status bp-status--ok"><i class="fas fa-unlock-keyhole"></i> Enabled</span>
+                    </div>
+                    <div class="bp-form-grid">
+                        <label>Certificate type
+                            <select id="bp-cert-type" class="bp-input" required>
+                                <option value="">Select type</option>
+                                <option value="pharmacy_license">Pharmacy licence</option>
+                                <option value="waste_facility">Waste facility</option>
+                                <option value="business_permit">Business permit</option>
+                                <option value="professional_license">Professional licence</option>
+                                <option value="inspection_certificate">Inspection certificate</option>
+                                <option value="other">Other</option>
+                            </select>
+                        </label>
+                        <label>Certificate title<input id="bp-cert-title" class="bp-input" placeholder="e.g. Medical Waste Handling Licence" required></label>
+                        <label>Issuing authority<input id="bp-cert-authority" class="bp-input" placeholder="e.g. County Government or PPB"></label>
+                        <label>Certificate / licence number<input id="bp-cert-number" class="bp-input" placeholder="Reference number"></label>
+                        <label>Issue date<input id="bp-cert-issued" class="bp-input" type="date"></label>
+                        <label>Expiry date<input id="bp-cert-expiry" class="bp-input" type="date"></label>
+                        <label class="bp-field-full">Certificate image
+                            <input id="bp-cert-file" class="bp-input" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" required>
+                            <small>PNG, JPG, or WEBP only. Maximum recommended size: 8 MB.</small>
+                        </label>
+                        <label class="bp-field-full">Notes<textarea id="bp-cert-notes" class="bp-input" rows="3" placeholder="Optional compliance notes"></textarea></label>
+                    </div>
+                    <div class="bp-actions">
+                        <button class="btn btn-primary" id="bp-cert-submit" type="submit"><i class="fas fa-cloud-arrow-up"></i> Upload Certificate</button>
+                        <button class="btn btn-outline" type="reset"><i class="fas fa-rotate-left"></i> Clear</button>
+                    </div>
+                </form>
+            `;
+        },
+
+        subscribeCertificates: function () {
+            if (activeListener) activeListener();
+            let ref = window.db.collection('branch_certificates');
+            if (!this.isSuperAdmin()) {
+                const businessId = this.getBusinessId();
+                if (!businessId) return this.showCertificatesError('No branch is assigned to this user.');
+                ref = ref.where('businessId', '==', businessId);
+            }
+            activeListener = ref.onSnapshot(snapshot => {
+                certificates = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                certificates.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+                this.renderCertificateCards();
+            }, err => this.showCertificatesError(err.message || 'Failed to load branch certificates.'));
+        },
+
+        showCertificatesError: function (message) {
+            const grid = document.getElementById('bp-cert-grid');
+            if (grid) grid.innerHTML = '<div class="bp-empty bp-empty--error"><i class="fas fa-triangle-exclamation"></i> ' + this.escapeHtml(message) + '</div>';
+        },
+
+        certificateTypeLabel: function (type) {
+            const labels = {
+                pharmacy_license: 'Pharmacy licence',
+                waste_facility: 'Waste facility',
+                business_permit: 'Business permit',
+                professional_license: 'Professional licence',
+                inspection_certificate: 'Inspection certificate',
+                other: 'Other'
+            };
+            return labels[type] || 'Certificate';
+        },
+
+        certificateExpiryState: function (value) {
+            if (!value) return { className: 'neutral', label: 'No expiry' };
+            const date = new Date(value + 'T23:59:59');
+            if (isNaN(date.getTime())) return { className: 'neutral', label: 'No expiry' };
+            const days = Math.ceil((date.getTime() - Date.now()) / 86400000);
+            if (days < 0) return { className: 'expired', label: 'Expired' };
+            if (days <= 30) return { className: 'warning', label: days + ' days left' };
+            return { className: 'valid', label: 'Valid' };
+        },
+
+        renderCertificateCards: function () {
+            const grid = document.getElementById('bp-cert-grid');
+            if (!grid) return;
+            const query = (document.getElementById('bp-cert-search')?.value || '').trim().toLowerCase();
+            const type = document.getElementById('bp-cert-type-filter')?.value || '';
+            const businessFilter = document.getElementById('bp-cert-business-filter')?.value || '';
+            let rows = certificates.slice();
+            if (type) rows = rows.filter(item => item.certificateType === type);
+            if (businessFilter) rows = rows.filter(item => item.businessId === businessFilter);
+            if (query) {
+                rows = rows.filter(item => [
+                    item.title, item.authority, item.certificateNumber, item.businessName,
+                    item.uploadedBy, this.certificateTypeLabel(item.certificateType)
+                ].join(' ').toLowerCase().includes(query));
+            }
+            if (!rows.length) {
+                grid.innerHTML = '<div class="bp-empty"><i class="fas fa-certificate"></i> No certificates found</div>';
+                return;
+            }
+
+            grid.innerHTML = rows.map(item => {
+                const expiry = this.certificateExpiryState(item.expiryDate);
+                return `
+                    <article class="bp-cert-card">
+                        <button class="bp-cert-image" type="button" data-bp-cert-preview="${this.escapeHtml(item.id)}" aria-label="Preview ${this.escapeHtml(item.title || 'certificate')}">
+                            <img src="${this.escapeHtml(item.imageUrl)}" alt="${this.escapeHtml(item.title || 'Branch certificate')}" loading="lazy">
+                            <span><i class="fas fa-expand"></i> Preview</span>
+                        </button>
+                        <div class="bp-cert-card__body">
+                            <div class="bp-cert-card__top">
+                                <span class="bp-cert-type">${this.escapeHtml(this.certificateTypeLabel(item.certificateType))}</span>
+                                <span class="bp-cert-expiry bp-cert-expiry--${expiry.className}">${this.escapeHtml(expiry.label)}</span>
+                            </div>
+                            <h4>${this.escapeHtml(item.title || 'Certificate')}</h4>
+                            <p>${this.escapeHtml(item.authority || 'Issuing authority not specified')}</p>
+                            <dl>
+                                <div><dt>Branch</dt><dd>${this.escapeHtml(item.businessName || this.branchName(item.businessId))}</dd></div>
+                                <div><dt>Reference</dt><dd>${this.escapeHtml(item.certificateNumber || '—')}</dd></div>
+                                <div><dt>Expiry</dt><dd>${item.expiryDate ? this.formatDate(item.expiryDate) : 'No expiry'}</dd></div>
+                                <div><dt>Uploaded by</dt><dd>${this.escapeHtml(item.uploadedBy || 'User')}</dd></div>
+                            </dl>
+                        </div>
+                        <div class="bp-cert-card__actions">
+                            <button class="btn btn-sm btn-outline" data-bp-cert-preview="${this.escapeHtml(item.id)}"><i class="fas fa-eye"></i> View</button>
+                            <a class="btn btn-sm btn-outline" href="${this.escapeHtml(item.imageUrl)}" target="_blank" rel="noopener"><i class="fas fa-up-right-from-square"></i> Open</a>
+                            ${this.isSuperAdmin() ? `<button class="btn btn-sm btn-danger" data-bp-cert-delete="${this.escapeHtml(item.id)}"><i class="fas fa-trash"></i></button>` : ''}
+                        </div>
+                    </article>
+                `;
+            }).join('');
+
+            grid.querySelectorAll('[data-bp-cert-preview]').forEach(button => {
+                button.addEventListener('click', () => this.openCertificatePreview(button.dataset.bpCertPreview));
+            });
+            grid.querySelectorAll('[data-bp-cert-delete]').forEach(button => {
+                button.addEventListener('click', () => this.deleteCertificate(button.dataset.bpCertDelete));
+            });
+        },
+
+        saveCertificate: async function (event) {
+            event.preventDefault();
+            const businessId = this.getBusinessId();
+            const file = document.getElementById('bp-cert-file')?.files[0];
+            if (!businessId || !file) return this.showToast('Select a certificate image.', 'error');
+            if (!this.isAllowedCertificateImage(file)) return this.showToast('Only PNG, JPG, and WEBP images are allowed.', 'error');
+            if (file.size > 8 * 1024 * 1024) return this.showToast('Certificate image must be smaller than 8 MB.', 'error');
+
+            const button = document.getElementById('bp-cert-submit');
+            if (button) { button.disabled = true; button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading...'; }
+            try {
+                const imageUrl = await this.uploadFile(file, businessId, 'branch_certificates');
+                const businessSnap = await window.db.collection('businesses').doc(businessId).get();
+                const businessName = businessSnap.exists ? (businessSnap.data().name || businessId) : businessId;
+                const extension = String(file.name || '').toLowerCase().split('.').pop();
+                const imageType = file.type || (extension === 'png' ? 'image/png' : extension === 'webp' ? 'image/webp' : 'image/jpeg');
+                await window.db.collection('branch_certificates').add({
+                    businessId,
+                    businessName,
+                    certificateType: document.getElementById('bp-cert-type')?.value || 'other',
+                    title: (document.getElementById('bp-cert-title')?.value || '').trim(),
+                    authority: (document.getElementById('bp-cert-authority')?.value || '').trim(),
+                    certificateNumber: (document.getElementById('bp-cert-number')?.value || '').trim(),
+                    issueDate: document.getElementById('bp-cert-issued')?.value || '',
+                    expiryDate: document.getElementById('bp-cert-expiry')?.value || '',
+                    notes: (document.getElementById('bp-cert-notes')?.value || '').trim(),
+                    imageUrl,
+                    imageName: file.name,
+                    imageType,
+                    uploadedBy: this.getUserName(),
+                    uploadedByUid: window.auth?.currentUser?.uid || '',
+                    createdAt: this.nowIso(),
+                    updatedAt: this.nowIso()
+                });
+                event.target.reset();
+                this.showToast('Branch certificate uploaded.');
+            } catch (err) {
+                this.showToast('Certificate upload failed: ' + (err.message || err), 'error');
+            } finally {
+                if (button) { button.disabled = false; button.innerHTML = '<i class="fas fa-cloud-arrow-up"></i> Upload Certificate'; }
+            }
+        },
+
+        openCertificatePreview: function (id) {
+            const certificate = certificates.find(item => item.id === id);
+            const modal = document.getElementById('bp-cert-preview-modal');
+            if (!certificate || !modal) return;
+            modal.innerHTML = `
+                <div class="bp-modal-panel bp-cert-preview-panel">
+                    <div class="bp-preview-header">
+                        <div class="bp-preview-heading">
+                            <span class="bp-preview-file-icon"><i class="fas fa-certificate"></i></span>
+                            <div><h3>${this.escapeHtml(certificate.title || 'Branch Certificate')}</h3><small>${this.escapeHtml(certificate.businessName || this.branchName(certificate.businessId))}</small></div>
+                        </div>
+                        <button class="btn btn-sm btn-outline" id="bp-cert-preview-close" aria-label="Close certificate preview"><i class="fas fa-times"></i></button>
+                    </div>
+                    <div class="bp-cert-preview-stage"><img src="${this.escapeHtml(certificate.imageUrl)}" alt="${this.escapeHtml(certificate.title || 'Certificate')}"></div>
+                    <div class="bp-actions">
+                        <a class="btn btn-primary" href="${this.escapeHtml(certificate.imageUrl)}" target="_blank" rel="noopener"><i class="fas fa-up-right-from-square"></i> Open Full Image</a>
+                        <button class="btn btn-outline" id="bp-cert-preview-done">Close</button>
+                    </div>
+                </div>
+            `;
+            modal.classList.add('show');
+            modal.setAttribute('aria-hidden', 'false');
+            const close = () => {
+                modal.classList.remove('show');
+                modal.setAttribute('aria-hidden', 'true');
+                modal.innerHTML = '';
+            };
+            document.getElementById('bp-cert-preview-close')?.addEventListener('click', close);
+            document.getElementById('bp-cert-preview-done')?.addEventListener('click', close);
+            modal.addEventListener('click', event => { if (event.target === modal) close(); }, { once: true });
+        },
+
+        deleteCertificate: async function (id) {
+            if (!this.isSuperAdmin()) return;
+            const certificate = certificates.find(item => item.id === id);
+            if (!certificate) return;
+            if (!confirm('Delete "' + (certificate.title || 'this certificate') + '" from the branch register?')) return;
+            try {
+                await window.db.collection('branch_certificates').doc(id).delete();
+                this.showToast('Certificate record deleted.');
+            } catch (err) {
+                this.showToast('Delete failed: ' + (err.message || err), 'error');
+            }
         },
 
         headerHtml: function (title, icon, subtitle) {
