@@ -86,16 +86,28 @@
             if (!product) return [];
             const productQty = Math.max(0, parseInt(product.quantity, 10) || 0);
             let batches = [];
+            const productBuyingPrice = parseFloat(product.buyingPrice) || 0;
+            const productSellingPrice = parseFloat(product.sellingPrice) || 0;
+            const productMinimumSellPrice = parseFloat(product.minimumSellPrice) || productBuyingPrice;
 
             if (Array.isArray(product.stockBatches) && product.stockBatches.length) {
                 batches = product.stockBatches
-                    .map(batch => ({ ...batch, quantity: Math.max(0, parseInt(batch.quantity, 10) || 0) }))
+                    .map(batch => ({
+                        ...batch,
+                        quantity: Math.max(0, parseInt(batch.quantity, 10) || 0),
+                        buyingPrice: parseFloat(batch.buyingPrice) || productBuyingPrice,
+                        sellingPrice: parseFloat(batch.sellingPrice) || productSellingPrice,
+                        minimumSellPrice: parseFloat(batch.minimumSellPrice) || productMinimumSellPrice
+                    }))
                     .filter(batch => batch.quantity > 0);
             } else if (productQty > 0 || product.expiryDate || product.batchNumber) {
                 batches = [{
                     batchNumber: product.batchNumber || '',
                     quantity: productQty,
                     expiryDate: product.expiryDate || null,
+                    buyingPrice: productBuyingPrice,
+                    sellingPrice: productSellingPrice,
+                    minimumSellPrice: productMinimumSellPrice,
                     addedAt: product.createdAt || product.updatedAt || null,
                     legacy: true
                 }];
@@ -122,6 +134,9 @@
                     batchNumber: product.batchNumber || '',
                     quantity: productQty - assigned,
                     expiryDate: product.expiryDate || null,
+                    buyingPrice: productBuyingPrice,
+                    sellingPrice: productSellingPrice,
+                    minimumSellPrice: productMinimumSellPrice,
                     addedAt: product.updatedAt || product.createdAt || null,
                     reconciled: true
                 });
@@ -163,6 +178,40 @@
         addBackToStockBatches: function (product, qty, saleItem, saleId) {
             const addQty = Math.max(0, parseInt(qty, 10) || 0);
             const batches = this.getProductStockBatches(product);
+            const allocations = Array.isArray(saleItem?.batchAllocations) ? saleItem.batchAllocations : [];
+
+            if (allocations.length) {
+                allocations.forEach(allocation => {
+                    const allocationQty = Math.max(0, parseInt(allocation.quantity, 10) || 0);
+                    if (!allocationQty) return;
+                    const batchNumber = allocation.batchNumber || product?.sku || saleItem?.sku || saleItem?.productId || '';
+                    const batchIndex = batches.findIndex(batch => (batch.batchNumber || '') === batchNumber);
+                    if (batchIndex >= 0) {
+                        batches[batchIndex] = {
+                            ...batches[batchIndex],
+                            quantity: (parseInt(batches[batchIndex].quantity, 10) || 0) + allocationQty,
+                            buyingPrice: parseFloat(allocation.buyingPrice) || parseFloat(batches[batchIndex].buyingPrice) || parseFloat(product?.buyingPrice) || 0,
+                            sellingPrice: parseFloat(allocation.sellingPrice) || parseFloat(batches[batchIndex].sellingPrice) || parseFloat(product?.sellingPrice) || 0,
+                            minimumSellPrice: parseFloat(allocation.minimumSellPrice) || parseFloat(batches[batchIndex].minimumSellPrice) || parseFloat(product?.minimumSellPrice) || parseFloat(product?.buyingPrice) || 0
+                        };
+                    } else {
+                        batches.push({
+                            batchNumber: batchNumber,
+                            quantity: allocationQty,
+                            expiryDate: allocation.expiryDate || product?.expiryDate || null,
+                            buyingPrice: parseFloat(allocation.buyingPrice) || parseFloat(product?.buyingPrice) || 0,
+                            sellingPrice: parseFloat(allocation.sellingPrice) || parseFloat(product?.sellingPrice) || 0,
+                            minimumSellPrice: parseFloat(allocation.minimumSellPrice) || parseFloat(product?.minimumSellPrice) || parseFloat(product?.buyingPrice) || 0,
+                            addedAt: new Date().toISOString(),
+                            source: 'sale_cancel',
+                            saleId: saleId
+                        });
+                    }
+                });
+
+                return batches.sort((a, b) => this.getBatchDateValue(a.expiryDate) - this.getBatchDateValue(b.expiryDate));
+            }
+
             const preferredBatch = saleItem?.batchNumber || saleItem?.stockBatchNumber || product?.batchNumber || '';
             const batchIndex = preferredBatch
                 ? batches.findIndex(batch => (batch.batchNumber || '') === preferredBatch)
@@ -183,6 +232,9 @@
                     batchNumber: preferredBatch || product?.sku || saleItem?.sku || saleItem?.productId || '',
                     quantity: addQty,
                     expiryDate: product?.expiryDate || null,
+                    buyingPrice: parseFloat(saleItem?.buyingPrice) || parseFloat(product?.buyingPrice) || 0,
+                    sellingPrice: parseFloat(saleItem?.unitPrice) || parseFloat(product?.sellingPrice) || 0,
+                    minimumSellPrice: parseFloat(product?.minimumSellPrice) || parseFloat(saleItem?.buyingPrice) || parseFloat(product?.buyingPrice) || 0,
                     addedAt: new Date().toISOString(),
                     source: 'sale_cancel',
                     saleId: saleId

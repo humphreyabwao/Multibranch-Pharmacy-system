@@ -41,6 +41,26 @@
             if (typeof d === 'string') return new Date(d);
             return d instanceof Date ? d : null;
         },
+        _inventoryBatchValue(item, field) {
+            const productQty = Math.max(0, parseInt(item && item.quantity, 10) || 0);
+            if (!productQty) return 0;
+            const fallback = parseFloat(item && item[field]) || 0;
+            const batches = Array.isArray(item && item.stockBatches) ? item.stockBatches : [];
+            if (!batches.length) return productQty * fallback;
+
+            let assigned = 0;
+            let value = 0;
+            batches.forEach(batch => {
+                if (assigned >= productQty) return;
+                const qty = Math.max(0, parseInt(batch.quantity, 10) || 0);
+                const used = Math.min(qty, productQty - assigned);
+                const batchPrice = parseFloat(batch[field]);
+                value += used * (Number.isFinite(batchPrice) ? batchPrice : fallback);
+                assigned += used;
+            });
+            if (assigned < productQty) value += (productQty - assigned) * fallback;
+            return value;
+        },
         _salePaymentLabel(s) {
             if (s.paymentMethod === 'split' && Array.isArray(s.paymentSplits) && s.paymentSplits.length) {
                 return 'SPLIT ' + s.paymentSplits.filter(p => (p.amount || 0) > 0)
@@ -688,7 +708,7 @@
         _renderInventoryTab(body) {
             const inv = rptInventory;
             const stats = this._inventoryStatsSnapshot(inv);
-            const totalCostValue = inv.reduce((s, i) => s + ((i.quantity || 0) * (i.buyingPrice || 0)), 0);
+            const totalCostValue = inv.reduce((s, i) => s + this._inventoryBatchValue(i, 'buyingPrice'), 0);
             const totalRetailValue = stats.totalValue;
 
             const outOfStock = inv.filter(i => (i.quantity || 0) <= 0);
@@ -701,7 +721,7 @@
                 const cat = i.category || 'Uncategorized';
                 if (!catMap[cat]) catMap[cat] = { count: 0, value: 0, qty: 0 };
                 catMap[cat].count++;
-                catMap[cat].value += (i.quantity || 0) * (i.sellingPrice || 0);
+                catMap[cat].value += this._inventoryBatchValue(i, 'sellingPrice');
                 catMap[cat].qty += (i.quantity || 0);
             });
             const catArr = Object.entries(catMap).sort((a, b) => b[1].value - a[1].value);
@@ -768,7 +788,7 @@
                     <tbody>${expiring.map(i => {
                         const expD = this._dateObj(i.expiryDate);
                         const expLabel = expD && !isNaN(expD.getTime()) ? expD.toLocaleDateString('en-KE') : String(i.expiryDate || '-');
-                        return `<tr><td>${this._esc(i.name)}</td><td>${this._esc(i.sku || '-')}</td><td>${this._esc(i.batchNumber || '-')}</td><td>${i.quantity || 0}</td><td><span class="rpt-badge-warn">${this._esc(expLabel)}</span></td><td>${this._fc((i.quantity || 0) * (i.sellingPrice || 0))}</td></tr>`;
+                        return `<tr><td>${this._esc(i.name)}</td><td>${this._esc(i.sku || '-')}</td><td>${this._esc(i.batchNumber || '-')}</td><td>${i.quantity || 0}</td><td><span class="rpt-badge-warn">${this._esc(expLabel)}</span></td><td>${this._fc(this._inventoryBatchValue(i, 'sellingPrice'))}</td></tr>`;
                     }).join('')}</tbody>
                 </table></div>
             </div>` : ''}`;
@@ -994,7 +1014,7 @@
                         const expRaw = i.expiryDate;
                         const expD = this._dateObj(expRaw);
                         const expCell = expD && !isNaN(expD.getTime()) ? expD.toLocaleDateString('en-KE') : (expRaw ? String(expRaw) : '-');
-                        return [i.name || '-', i.sku || '-', i.category || '-', i.drugType || '-', qty, buy, sell, qty * buy, qty * sell, expCell];
+                        return [i.name || '-', i.sku || '-', i.category || '-', i.drugType || '-', qty, buy, sell, this._inventoryBatchValue(i, 'buyingPrice'), this._inventoryBatchValue(i, 'sellingPrice'), expCell];
                     });
                     break;
                 }
@@ -1113,7 +1133,7 @@
             const invCat = {};
             rptInventory.forEach(i => {
                 const cat = i.category || 'Uncategorized';
-                invCat[cat] = (invCat[cat] || 0) + (i.quantity || 0) * (i.sellingPrice || 0);
+                invCat[cat] = (invCat[cat] || 0) + this._inventoryBatchValue(i, 'sellingPrice');
             });
             const invPie = this._summarizeForPie(Object.entries(invCat).sort((a, b) => b[1] - a[1]), 8);
             if (!invPie.labels.length) {

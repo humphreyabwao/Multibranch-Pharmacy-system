@@ -2944,6 +2944,11 @@ input, select, textarea {
     color: #059669;
 }
 
+.inv-action-btn--batches {
+    background: #e0f2fe;
+    color: #0369a1;
+}
+
 [data-theme="dark"] .inv-action-btn--edit {
     background: rgba(37, 99, 235, 0.15);
 }
@@ -2954,6 +2959,10 @@ input, select, textarea {
 
 [data-theme="dark"] .inv-action-btn--stock {
     background: rgba(5, 150, 105, 0.15);
+}
+
+[data-theme="dark"] .inv-action-btn--batches {
+    background: rgba(14, 165, 233, 0.16);
 }
 
 .inv-recon-status {
@@ -3172,12 +3181,17 @@ input, select, textarea {
 .inv-stock-info span { font-size: 0.85rem; color: var(--text-secondary); }
 
 #inv-stock-modal .inv-modal {
-    max-width: 520px;
+    width: min(96vw, 640px);
+    max-width: 640px;
+    max-height: calc(100vh - 32px);
     border: 1px solid var(--border-color);
     overflow: hidden;
+    display: flex;
+    flex-direction: column;
 }
 
 #inv-stock-modal .inv-modal-header {
+    flex: 0 0 auto;
     padding: 18px 22px;
     background: linear-gradient(180deg, color-mix(in srgb, var(--primary) 9%, var(--bg-card)), var(--bg-card));
 }
@@ -3187,14 +3201,20 @@ input, select, textarea {
 }
 
 #inv-stock-modal .inv-modal-body {
-    padding: 22px;
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 20px 22px;
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 14px;
     background: var(--bg-card);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
 }
 
 #inv-stock-modal .inv-modal-footer {
+    flex: 0 0 auto;
     padding: 16px 22px 20px;
     background: color-mix(in srgb, var(--bg-tertiary) 72%, var(--bg-card));
 }
@@ -3218,15 +3238,18 @@ input, select, textarea {
 .inv-batch-history {
     display: grid;
     gap: 8px;
+    max-height: min(24vh, 190px);
+    overflow-y: auto;
+    padding-right: 4px;
 }
 
 .inv-batch-history__item {
     display: grid;
-    grid-template-columns: minmax(0, 1.4fr) repeat(2, auto);
-    gap: 10px;
+    grid-template-columns: minmax(120px, 1fr) repeat(4, minmax(72px, auto));
+    gap: 8px 10px;
     align-items: center;
     padding: 10px 12px;
-    border-radius: 10px;
+    border-radius: 8px;
     background: var(--bg-card);
     border: 1px solid var(--border-light);
     box-shadow: var(--shadow-sm);
@@ -3257,13 +3280,25 @@ input, select, textarea {
     gap: 6px;
 }
 
+#inv-stock-modal .inv-form-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 0;
+}
+
 #inv-stock-modal .inv-form-group label {
     font-size: 0.8rem;
     color: var(--text-secondary);
 }
 
 #inv-stock-modal .inv-form-group input {
+    width: 100%;
     padding: 11px 12px;
+}
+
+#inv-stock-modal .inv-form-group select {
+    width: 100%;
 }
 
 #inv-stock-modal .inv-form-group small {
@@ -3285,6 +3320,63 @@ input, select, textarea {
     box-shadow: var(--shadow-sm);
 }
 
+@media (max-width: 640px) {
+    #inv-stock-modal {
+        align-items: stretch;
+        padding: 10px;
+    }
+
+    #inv-stock-modal .inv-modal {
+        width: 100%;
+        max-height: calc(100vh - 20px);
+        border-radius: var(--radius-md);
+    }
+
+    #inv-stock-modal .inv-modal-header,
+    #inv-stock-modal .inv-modal-body,
+    #inv-stock-modal .inv-modal-footer {
+        padding-left: 16px;
+        padding-right: 16px;
+    }
+
+    #inv-stock-modal .inv-modal-body {
+        gap: 12px;
+    }
+
+    #inv-stock-modal .inv-form-row {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+
+    .inv-batch-history {
+        max-height: 180px;
+    }
+
+    .inv-batch-history__item {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        align-items: start;
+    }
+
+    .inv-batch-history__item strong {
+        grid-column: 1 / -1;
+    }
+
+    .inv-batch-history__item span {
+        white-space: normal;
+    }
+
+    #inv-stock-modal .inv-modal-footer {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+
+    #inv-stock-modal .inv-modal-footer .btn {
+        width: 100%;
+        justify-content: center;
+    }
+}
+
 [data-theme="dark"] #inv-stock-modal .inv-modal-header {
     background: linear-gradient(180deg, rgba(37, 99, 235, 0.14), rgba(30, 41, 59, 0.96));
 }
@@ -3299,6 +3391,193 @@ input, select, textarea {
 
 [data-theme="dark"] .inv-batch-history__item {
     background: rgba(30, 41, 59, 0.88);
+}
+
+#inv-batch-tracker-modal .inv-batch-tracker-modal {
+    width: min(96vw, 920px);
+    max-width: 920px;
+    max-height: calc(100vh - 32px);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+#inv-batch-tracker-modal .inv-modal-header,
+#inv-batch-tracker-modal .inv-modal-footer {
+    flex: 0 0 auto;
+}
+
+#inv-batch-tracker-modal .inv-modal-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    background: var(--bg-card);
+}
+
+.inv-batch-tracker-product {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 14px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+}
+
+.inv-batch-tracker-product > div {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+}
+
+.inv-batch-tracker-product strong {
+    font-size: 1rem;
+    color: var(--text-primary);
+}
+
+.inv-batch-tracker-product small,
+.inv-batch-tracker-product span {
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+}
+
+.inv-batch-tracker-ok,
+.inv-batch-tracker-warn {
+    flex: 0 0 auto;
+    border-radius: 999px;
+    padding: 6px 10px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.inv-batch-tracker-ok {
+    background: var(--success-light);
+    color: var(--success);
+}
+
+.inv-batch-tracker-warn {
+    background: var(--warning-light);
+    color: var(--warning);
+}
+
+.inv-batch-tracker-stats {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.inv-batch-tracker-stats > div {
+    padding: 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+}
+
+.inv-batch-tracker-stats span {
+    display: block;
+    color: var(--text-primary);
+    font-size: 1rem;
+    font-weight: 800;
+}
+
+.inv-batch-tracker-stats small {
+    color: var(--text-tertiary);
+    font-size: 0.74rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.inv-batch-tracker-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    color: var(--text-tertiary);
+    font-size: 0.8rem;
+}
+
+.inv-batch-tracker-table-wrap {
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    overflow: auto;
+    background: var(--bg-secondary);
+}
+
+.inv-batch-tracker-table {
+    min-width: 820px;
+}
+
+.inv-batch-tracker-table td strong,
+.inv-batch-tracker-table td small {
+    display: block;
+}
+
+.inv-batch-tracker-table td small {
+    color: var(--text-tertiary);
+    font-size: 0.72rem;
+    margin-top: 2px;
+    text-transform: capitalize;
+}
+
+.inv-batch-qty {
+    font-weight: 800;
+    color: var(--primary) !important;
+}
+
+[data-theme="dark"] .inv-batch-tracker-product,
+[data-theme="dark"] .inv-batch-tracker-stats > div,
+[data-theme="dark"] .inv-batch-tracker-table-wrap {
+    background: rgba(15, 23, 42, 0.28);
+}
+
+[data-theme="dark"] .inv-batch-tracker-ok {
+    background: rgba(5, 150, 105, 0.16);
+    color: #86efac;
+}
+
+[data-theme="dark"] .inv-batch-tracker-warn {
+    background: rgba(217, 119, 6, 0.16);
+    color: #fcd34d;
+}
+
+@media (max-width: 760px) {
+    #inv-batch-tracker-modal {
+        align-items: stretch;
+        padding: 10px;
+    }
+
+    #inv-batch-tracker-modal .inv-batch-tracker-modal {
+        width: 100%;
+        max-height: calc(100vh - 20px);
+        border-radius: var(--radius-md);
+    }
+
+    .inv-batch-tracker-product {
+        display: grid;
+    }
+
+    .inv-batch-tracker-ok,
+    .inv-batch-tracker-warn {
+        justify-self: start;
+        white-space: normal;
+    }
+
+    .inv-batch-tracker-stats {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .inv-batch-tracker-stats > div:last-child {
+        grid-column: 1 / -1;
+    }
+
+    .inv-batch-tracker-meta {
+        display: grid;
+    }
 }
 
 /* Small modal variant */

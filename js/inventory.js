@@ -19,6 +19,7 @@
     let allProducts = [];
     let reconciliationSales = [];
     let reconciliationStockHistory = [];
+    let unsubBatchTracker = null;
 
     // Pagination state
     let currentPage = 1;
@@ -64,6 +65,9 @@
                     batchNumber: product.batchNumber || '',
                     quantity: product.quantity || 0,
                     expiryDate: product.expiryDate || null,
+                    buyingPrice: parseFloat(product.buyingPrice) || 0,
+                    sellingPrice: parseFloat(product.sellingPrice) || 0,
+                    minimumSellPrice: parseFloat(product.minimumSellPrice) || parseFloat(product.buyingPrice) || 0,
                     addedAt: product.createdAt || product.updatedAt || null,
                     legacy: true
                 }];
@@ -100,7 +104,9 @@
                 const expiry = batch.expiryDate ? this.formatDate(batch.expiryDate) : '—';
                 const batchNumber = batch.batchNumber || ('Batch ' + (index + 1));
                 const quantity = batch.quantity || 0;
-                return '<div class="inv-batch-history__item"><strong>' + this.escapeHtml(batchNumber) + '</strong><span>Qty: ' + quantity + '</span><span>Expiry: ' + expiry + '</span></div>';
+                const buyingPrice = batch.buyingPrice != null ? batch.buyingPrice : product.buyingPrice;
+                const sellingPrice = batch.sellingPrice != null ? batch.sellingPrice : product.sellingPrice;
+                return '<div class="inv-batch-history__item"><strong>' + this.escapeHtml(batchNumber) + '</strong><span>Qty: ' + quantity + '</span><span>Buy: ' + this.formatCurrency(buyingPrice || 0) + '</span><span>Sell: ' + this.formatCurrency(sellingPrice || 0) + '</span><span>Expiry: ' + expiry + '</span></div>';
             }).join('') + '</div>';
         },
 
@@ -1181,6 +1187,9 @@
                         <td><span class="status-badge ${statusClass}">${statusLabel}</span></td>
                         <td>
                             <div class="inv-actions">
+                                <button class="inv-action-btn inv-action-btn--batches" data-id="${p.id}" title="Track Batches">
+                                    <i class="fas fa-layer-group"></i>
+                                </button>
                                 <button class="inv-action-btn inv-action-btn--stock" data-id="${p.id}" title="Add Stock">
                                     <i class="fas fa-boxes-packing"></i>
                                 </button>
@@ -1199,6 +1208,9 @@
             if (countEl) countEl.textContent = 'Showing ' + (startIdx + 1) + '-' + endIdx + ' of ' + totalFiltered + ' products' + (totalFiltered !== allProducts.length ? ' (filtered from ' + allProducts.length + ')' : '');
 
             // Bind action buttons
+            tbody.querySelectorAll('.inv-action-btn--batches').forEach(btn => {
+                btn.addEventListener('click', () => this.openBatchTrackerModal(btn.dataset.id));
+            });
             tbody.querySelectorAll('.inv-action-btn--stock').forEach(btn => {
                 btn.addEventListener('click', () => this.openStockModal(btn.dataset.id));
             });
@@ -1269,6 +1281,182 @@
         },
 
         // ─── EXPORT ──────────────────────────────────────────
+
+        getBatchTrackerRows: function (product) {
+            const batches = this.getStockBatches(product)
+                .map((batch, index) => ({
+                    ...batch,
+                    _index: index,
+                    quantity: Math.max(0, parseInt(batch.quantity, 10) || 0),
+                    buyingPrice: batch.buyingPrice != null ? parseFloat(batch.buyingPrice) || 0 : parseFloat(product.buyingPrice) || 0,
+                    sellingPrice: batch.sellingPrice != null ? parseFloat(batch.sellingPrice) || 0 : parseFloat(product.sellingPrice) || 0,
+                    minimumSellPrice: batch.minimumSellPrice != null ? parseFloat(batch.minimumSellPrice) || 0 : parseFloat(product.minimumSellPrice) || parseFloat(product.buyingPrice) || 0
+                }))
+                .filter(batch => batch.quantity > 0 || batch.expiryDate || batch.batchNumber);
+
+            return batches.sort((a, b) => {
+                const da = a.expiryDate ? (a.expiryDate.toDate ? a.expiryDate.toDate() : new Date(a.expiryDate)) : new Date('9999-12-31');
+                const db = b.expiryDate ? (b.expiryDate.toDate ? b.expiryDate.toDate() : new Date(b.expiryDate)) : new Date('9999-12-31');
+                return da - db;
+            });
+        },
+
+        getBatchTrackerStats: function (product, batches) {
+            const totalQty = batches.reduce((sum, batch) => sum + (parseInt(batch.quantity, 10) || 0), 0);
+            const costValue = batches.reduce((sum, batch) => sum + ((parseFloat(batch.buyingPrice) || 0) * (parseInt(batch.quantity, 10) || 0)), 0);
+            const retailValue = batches.reduce((sum, batch) => sum + ((parseFloat(batch.sellingPrice) || 0) * (parseInt(batch.quantity, 10) || 0)), 0);
+            const productQty = Math.max(0, parseInt(product.quantity, 10) || 0);
+            return {
+                totalQty: totalQty,
+                productQty: productQty,
+                batchCount: batches.length,
+                costValue: costValue,
+                retailValue: retailValue,
+                qtyDiff: totalQty - productQty
+            };
+        },
+
+        renderBatchTrackerContent: function (product) {
+            const batches = this.getBatchTrackerRows(product);
+            const stats = this.getBatchTrackerStats(product, batches);
+            const updated = product.updatedAt || product.createdAt || null;
+            const diffClass = stats.qtyDiff === 0 ? 'inv-batch-tracker-ok' : 'inv-batch-tracker-warn';
+            const diffText = stats.qtyDiff === 0 ? 'Matches product stock' : (stats.qtyDiff > 0 ? '+' : '') + stats.qtyDiff + ' vs product stock';
+
+            const rows = batches.length ? batches.map((batch, index) => {
+                const qty = parseInt(batch.quantity, 10) || 0;
+                const costValue = qty * (parseFloat(batch.buyingPrice) || 0);
+                const retailValue = qty * (parseFloat(batch.sellingPrice) || 0);
+                const margin = retailValue ? ((retailValue - costValue) / retailValue * 100) : 0;
+                const source = batch.source || (batch.legacy ? 'legacy' : 'manual');
+                return `
+                    <tr>
+                        <td><strong>${this.escapeHtml(batch.batchNumber || ('Batch ' + (index + 1)))}</strong><small>${this.escapeHtml(source)}</small></td>
+                        <td class="inv-batch-qty">${qty}</td>
+                        <td>${this.formatCurrency(batch.buyingPrice || 0)}</td>
+                        <td>${this.formatCurrency(batch.sellingPrice || 0)}</td>
+                        <td>${this.formatCurrency(costValue)}</td>
+                        <td>${this.formatCurrency(retailValue)}</td>
+                        <td>${Number.isFinite(margin) ? margin.toFixed(1) + '%' : '—'}</td>
+                        <td>${this.formatDate(batch.expiryDate)}</td>
+                    </tr>
+                `;
+            }).join('') : `
+                <tr>
+                    <td colspan="8" class="inv-empty-cell">
+                        <div class="inv-empty">
+                            <i class="fas fa-layer-group"></i>
+                            <p>No batch records found</p>
+                            <span>Add stock to start tracking this product by batch.</span>
+                        </div>
+                    </td>
+                </tr>
+            `;
+
+            return `
+                <div class="inv-batch-tracker-product">
+                    <div>
+                        <strong>${this.escapeHtml(product.name || 'Unnamed product')}</strong>
+                        ${product.genericName ? '<small>' + this.escapeHtml(product.genericName) + '</small>' : ''}
+                        <span>SKU: ${this.escapeHtml(product.sku || '—')} · ${this.escapeHtml(product.category || 'Uncategorized')}</span>
+                    </div>
+                    <span class="${diffClass}">${this.escapeHtml(diffText)}</span>
+                </div>
+                <div class="inv-batch-tracker-stats">
+                    <div><span>${stats.batchCount}</span><small>Batches</small></div>
+                    <div><span>${stats.totalQty}</span><small>Batch Qty</small></div>
+                    <div><span>${stats.productQty}</span><small>Product Qty</small></div>
+                    <div><span>${this.formatCurrency(stats.costValue)}</span><small>Cost Value</small></div>
+                    <div><span>${this.formatCurrency(stats.retailValue)}</span><small>Retail Value</small></div>
+                </div>
+                <div class="inv-batch-tracker-meta">
+                    <span><i class="fas fa-signal"></i> Live quantities</span>
+                    <span>Last update: ${this.escapeHtml(updated ? this.formatDateTime(updated) : '—')}</span>
+                </div>
+                <div class="inv-batch-tracker-table-wrap">
+                    <table class="data-table inv-batch-tracker-table">
+                        <thead>
+                            <tr>
+                                <th>Batch</th>
+                                <th>Qty Left</th>
+                                <th>Cost</th>
+                                <th>Sell</th>
+                                <th>Cost Value</th>
+                                <th>Retail Value</th>
+                                <th>Margin</th>
+                                <th>Expiry</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>
+            `;
+        },
+
+        openBatchTrackerModal: function (productId) {
+            const product = allProducts.find(p => p.id === productId);
+            if (!product) return;
+
+            if (unsubBatchTracker) {
+                try { unsubBatchTracker(); } catch (e) { /* ignore */ }
+                unsubBatchTracker = null;
+            }
+
+            const existing = document.getElementById('inv-batch-tracker-modal');
+            if (existing) existing.remove();
+
+            const modal = document.createElement('div');
+            modal.className = 'inv-modal-overlay';
+            modal.id = 'inv-batch-tracker-modal';
+            modal.innerHTML = `
+                <div class="inv-modal inv-batch-tracker-modal">
+                    <div class="inv-modal-header">
+                        <h3><i class="fas fa-layer-group"></i> Batch Tracker</h3>
+                        <button class="inv-modal-close" id="inv-batch-tracker-close">&times;</button>
+                    </div>
+                    <div class="inv-modal-body" id="inv-batch-tracker-body">
+                        ${this.renderBatchTrackerContent(product)}
+                    </div>
+                    <div class="inv-modal-footer">
+                        <button class="btn btn-outline" id="inv-batch-tracker-done">Close</button>
+                    </div>
+                </div>
+            `;
+
+            document.body.appendChild(modal);
+            setTimeout(() => modal.classList.add('show'), 10);
+
+            const closeModal = () => {
+                if (unsubBatchTracker) {
+                    try { unsubBatchTracker(); } catch (e) { /* ignore */ }
+                    unsubBatchTracker = null;
+                }
+                modal.classList.remove('show');
+                setTimeout(() => modal.remove(), 200);
+            };
+
+            document.getElementById('inv-batch-tracker-close').addEventListener('click', closeModal);
+            document.getElementById('inv-batch-tracker-done').addEventListener('click', closeModal);
+            modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+
+            const businessId = this.getBusinessId();
+            if (!businessId || !window.db) return;
+
+            const body = document.getElementById('inv-batch-tracker-body');
+            const ref = getBusinessCollection(businessId, 'inventory').doc(productId);
+            unsubBatchTracker = ref.onSnapshot(snapshot => {
+                if (!body) return;
+                if (!snapshot.exists) {
+                    body.innerHTML = '<div class="inv-empty-cell">This product no longer exists.</div>';
+                    return;
+                }
+                const liveProduct = { id: snapshot.id, ...snapshot.data() };
+                body.innerHTML = this.renderBatchTrackerContent(liveProduct);
+            }, err => {
+                console.error('Batch tracker listener error:', err);
+                if (body) body.innerHTML = '<div class="inv-empty-cell" style="color:var(--danger)">Failed to load live batch data.</div>';
+            });
+        },
 
         showExportMenu: function (anchorBtn) {
             const existing = document.getElementById('inv-export-menu');
@@ -1782,6 +1970,9 @@
                         batchNumber: batchNumber || sku,
                         quantity: quantity,
                         expiryDate: expiryTs,
+                        buyingPrice: buyingPrice,
+                        sellingPrice: sellingPrice,
+                        minimumSellPrice: buyingPrice,
                         addedAt: new Date().toISOString(),
                         source: 'import'
                     }],
@@ -2348,6 +2539,9 @@
                     batchNumber: batch || sku,
                     quantity: quantity,
                     expiryDate: firebase.firestore.Timestamp.fromDate(new Date(expiryStr)),
+                    buyingPrice: buyingPrice,
+                    sellingPrice: sellingPrice,
+                    minimumSellPrice: minimumSellPrice != null ? minimumSellPrice : buyingPrice,
                     addedAt: new Date().toISOString(),
                     source: 'initial'
                 }],
@@ -2422,6 +2616,9 @@
             const currentExpiry = product.expiryDate
                 ? (product.expiryDate.toDate ? product.expiryDate.toDate() : new Date(product.expiryDate)).toISOString().split('T')[0]
                 : '';
+            const currentBuyingPrice = parseFloat(product.buyingPrice) || 0;
+            const currentSellingPrice = parseFloat(product.sellingPrice) || 0;
+            const currentMinimumSellPrice = parseFloat(product.minimumSellPrice) || currentBuyingPrice;
 
             const modal = document.createElement('div');
             modal.className = 'inv-modal-overlay';
@@ -2460,6 +2657,21 @@
                             <label for="stock-add-qty">Quantity to Add <span class="req">*</span></label>
                             <input type="number" id="stock-add-qty" min="1" placeholder="e.g. 50" required autofocus>
                         </div>
+                        <div class="inv-form-row" style="margin-top:10px">
+                            <div class="inv-form-group">
+                                <label for="stock-buying-price">Buying Price (KSH) <span class="req">*</span></label>
+                                <input type="number" id="stock-buying-price" min="0" step="0.01" value="${currentBuyingPrice}">
+                            </div>
+                            <div class="inv-form-group">
+                                <label for="stock-selling-price">Selling Price (KSH) <span class="req">*</span></label>
+                                <input type="number" id="stock-selling-price" min="0" step="0.01" value="${currentSellingPrice}">
+                            </div>
+                        </div>
+                        <div class="inv-form-group" style="margin-top:10px">
+                            <label for="stock-min-sell-price">Minimum sell price — discount floor (KSH)</label>
+                            <input type="number" id="stock-min-sell-price" min="0" step="0.01" value="${currentMinimumSellPrice}">
+                            <small style="color:var(--text-tertiary)">Applies to this new batch only. Blank defaults to buying price.</small>
+                        </div>
                         <div class="inv-form-group" style="margin-top:10px">
                             <label for="stock-new-expiry">New Expiry Date</label>
                             <input type="date" id="stock-new-expiry" value="${currentExpiry}">
@@ -2490,6 +2702,10 @@
                 const newExpiry = document.getElementById('stock-new-expiry').value;
                 const newBatchNumber = document.getElementById('stock-new-batch')?.value?.trim() || '';
                 const newBatchMode = document.getElementById('stock-new-batch-mode')?.value || 'manual';
+                const batchBuyingPrice = parseFloat(document.getElementById('stock-buying-price')?.value) || 0;
+                const batchSellingPrice = parseFloat(document.getElementById('stock-selling-price')?.value) || 0;
+                const batchMinSellRaw = parseFloat(document.getElementById('stock-min-sell-price')?.value);
+                const batchMinimumSellPrice = Number.isFinite(batchMinSellRaw) && batchMinSellRaw > 0 ? batchMinSellRaw : batchBuyingPrice;
                 const expiryValue = newExpiry || currentExpiry;
 
                 if (!addQty || addQty < 1) {
@@ -2499,6 +2715,21 @@
 
                 if (!expiryValue) {
                     this.showToast('Please provide an expiry date for the new stock batch.', 'error');
+                    return;
+                }
+
+                if (batchSellingPrice < batchBuyingPrice) {
+                    this.showToast('Selling price should not be less than buying price.', 'error');
+                    return;
+                }
+
+                if (batchMinimumSellPrice - batchSellingPrice > 0.001) {
+                    this.showToast('Minimum sell price cannot be greater than selling price.', 'error');
+                    return;
+                }
+
+                if (batchBuyingPrice > 0 && batchMinimumSellPrice + 0.001 < batchBuyingPrice) {
+                    this.showToast('Minimum sell price cannot be below buying price (cost).', 'error');
                     return;
                 }
 
@@ -2530,6 +2761,9 @@
                             batchNumber: newBatchNumber || self.generateBatchNumber(),
                             quantity: addQty,
                             expiryDate: expiryTimestamp,
+                            buyingPrice: batchBuyingPrice,
+                            sellingPrice: batchSellingPrice,
+                            minimumSellPrice: batchMinimumSellPrice,
                             addedAt: new Date().toISOString(),
                             source: 'restock',
                             mode: newBatchMode
@@ -2541,6 +2775,9 @@
 
                         transaction.update(docRef, {
                             quantity: newQtyForHistory,
+                            buyingPrice: batchBuyingPrice,
+                            sellingPrice: batchSellingPrice,
+                            minimumSellPrice: batchMinimumSellPrice,
                             batchNumber: data.batchNumber || batchRecord.batchNumber,
                             expiryDate: self.getPrimaryExpiryFromBatches(currentBatches) || expiryTimestamp,
                             stockBatches: currentBatches,
@@ -2556,7 +2793,8 @@
                         previousQty: previousQtyForHistory,
                         addedQty: addQty,
                         newQty: newQtyForHistory,
-                        unitCost: product.buyingPrice || 0,
+                        unitCost: batchBuyingPrice,
+                        sellingPrice: batchSellingPrice,
                         batchNumber: batchNumberForHistory,
                         expiryDate: expiryValue,
                         addedBy: PharmaFlow.Auth?.userProfile?.displayName || PharmaFlow.Auth?.userProfile?.email || 'Unknown',
@@ -2915,6 +3153,10 @@
             if (unsubReconciliationStock) {
                 unsubReconciliationStock();
                 unsubReconciliationStock = null;
+            }
+            if (unsubBatchTracker) {
+                unsubBatchTracker();
+                unsubBatchTracker = null;
             }
             reconciliationSales = [];
             reconciliationStockHistory = [];

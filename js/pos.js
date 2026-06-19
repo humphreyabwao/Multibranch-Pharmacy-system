@@ -91,6 +91,8 @@
 
         /** Minimum revenue for this line (floor unit × qty). */
         getLineFloorTotal: function (item) {
+            const batchFloor = this.getBatchAllocatedTotal(item, 'minimumSellPrice');
+            if (batchFloor != null) return batchFloor;
             return this.roundMoney(this.getLineFloorUnit(item) * this.getLineQuantity(item));
         },
 
@@ -218,16 +220,28 @@
             if (!product) return [];
             const productQty = Math.max(0, parseInt(product.quantity, 10) || 0);
             let batches = [];
+            const productBuyingPrice = parseFloat(product.buyingPrice) || 0;
+            const productSellingPrice = parseFloat(product.sellingPrice) || 0;
+            const productMinimumSellPrice = parseFloat(product.minimumSellPrice) || productBuyingPrice;
 
             if (Array.isArray(product.stockBatches) && product.stockBatches.length) {
                 batches = product.stockBatches
-                    .map(batch => ({ ...batch, quantity: Math.max(0, parseInt(batch.quantity, 10) || 0) }))
+                    .map(batch => ({
+                        ...batch,
+                        quantity: Math.max(0, parseInt(batch.quantity, 10) || 0),
+                        buyingPrice: parseFloat(batch.buyingPrice) || productBuyingPrice,
+                        sellingPrice: parseFloat(batch.sellingPrice) || productSellingPrice,
+                        minimumSellPrice: parseFloat(batch.minimumSellPrice) || productMinimumSellPrice
+                    }))
                     .filter(batch => batch.quantity > 0);
             } else if (productQty > 0 || product.expiryDate || product.batchNumber) {
                 batches = [{
                     batchNumber: product.batchNumber || '',
                     quantity: productQty,
                     expiryDate: product.expiryDate || null,
+                    buyingPrice: productBuyingPrice,
+                    sellingPrice: productSellingPrice,
+                    minimumSellPrice: productMinimumSellPrice,
                     addedAt: product.createdAt || product.updatedAt || null,
                     legacy: true
                 }];
@@ -254,12 +268,101 @@
                     batchNumber: product.batchNumber || '',
                     quantity: productQty - assigned,
                     expiryDate: product.expiryDate || null,
+                    buyingPrice: productBuyingPrice,
+                    sellingPrice: productSellingPrice,
+                    minimumSellPrice: productMinimumSellPrice,
                     addedAt: product.updatedAt || product.createdAt || null,
                     reconciled: true
                 });
             }
 
             return normalized;
+        },
+
+        getNextSellableBatch: function (product) {
+            const batches = this.getProductStockBatches(product);
+            return batches.length ? batches[0] : null;
+        },
+
+        allocateProductBatches: function (product, requestedQty) {
+            let remaining = Math.max(0, parseInt(requestedQty, 10) || 0);
+            const allocations = [];
+            const batches = this.getProductStockBatches(product)
+                .sort((a, b) => this.getBatchDateValue(a.expiryDate) - this.getBatchDateValue(b.expiryDate));
+
+            batches.forEach(batch => {
+                if (remaining <= 0) return;
+                const available = Math.max(0, parseInt(batch.quantity, 10) || 0);
+                const used = Math.min(available, remaining);
+                if (used <= 0) return;
+                allocations.push({
+                    batchNumber: batch.batchNumber || '',
+                    quantity: used,
+                    expiryDate: batch.expiryDate || null,
+                    buyingPrice: parseFloat(batch.buyingPrice) || 0,
+                    sellingPrice: parseFloat(batch.sellingPrice) || 0,
+                    minimumSellPrice: parseFloat(batch.minimumSellPrice) || parseFloat(batch.buyingPrice) || 0
+                });
+                remaining -= used;
+            });
+
+            if (remaining > 0) {
+                throw new Error('Insufficient stock for ' + (product && product.name ? product.name : 'selected product'));
+            }
+
+            return allocations;
+        },
+
+        refreshCartItemBatchPricing: function (item, product) {
+            const qty = this.getLineQuantity(item);
+            const allocations = this.allocateProductBatches(product, qty);
+            item.batchAllocations = allocations;
+            item.price = this.getWeightedBatchValue(allocations, 'sellingPrice');
+            item.buyingPrice = this.getWeightedBatchValue(allocations, 'buyingPrice');
+            item.minimumSellPrice = this.getWeightedBatchValue(allocations, 'minimumSellPrice') || item.buyingPrice || 0;
+            item.maxQty = product.quantity || item.maxQty || qty;
+            return item;
+        },
+
+        getWeightedBatchValue: function (allocations, field) {
+            const qty = (allocations || []).reduce((sum, batch) => sum + (parseInt(batch.quantity, 10) || 0), 0);
+            if (!qty) return 0;
+            const total = (allocations || []).reduce((sum, batch) => sum + ((parseFloat(batch[field]) || 0) * (parseInt(batch.quantity, 10) || 0)), 0);
+            return this.roundMoney(total / qty);
+        },
+
+        getBatchAllocatedTotal: function (item, field) {
+            const allocations = Array.isArray(item && item.batchAllocations) ? item.batchAllocations : [];
+            if (!allocations.length) return null;
+            return this.roundMoney(allocations.reduce((sum, batch) => {
+                return sum + ((parseFloat(batch[field]) || 0) * (parseInt(batch.quantity, 10) || 0));
+            }, 0));
+        },
+
+        getBatchProfitTotal: function (item) {
+            const allocations = Array.isArray(item && item.batchAllocations) ? item.batchAllocations : [];
+            if (!allocations.length) {
+                return this.roundMoney((this.getLineUnitPrice(item) - (parseFloat(item.buyingPrice) || 0)) * this.getLineQuantity(item));
+            }
+            return this.roundMoney(allocations.reduce((sum, batch) => {
+                const qty = parseInt(batch.quantity, 10) || 0;
+                return sum + (((parseFloat(batch.sellingPrice) || 0) - (parseFloat(batch.buyingPrice) || 0)) * qty);
+            }, 0));
+        },
+
+        formatBatchAllocationSummary: function (item) {
+            const allocations = Array.isArray(item && item.batchAllocations) ? item.batchAllocations : [];
+            if (!allocations.length) return this.formatCurrency(this.getLineUnitPrice(item)) + ' each';
+            if (allocations.length === 1) {
+                const batch = allocations[0];
+                const label = batch.batchNumber ? ' · ' + this.escapeHtml(batch.batchNumber) : '';
+                return this.formatCurrency(batch.sellingPrice || 0) + ' each' + label;
+            }
+            return allocations.map(batch => {
+                const qty = parseInt(batch.quantity, 10) || 0;
+                const label = batch.batchNumber ? ' ' + this.escapeHtml(batch.batchNumber) : '';
+                return qty + ' @ ' + this.formatCurrency(batch.sellingPrice || 0) + label;
+            }).join(' · ');
         },
 
         getPrimaryBatchAfterSale: function (batches) {
@@ -292,6 +395,36 @@
             }
 
             return updatedBatches;
+        },
+
+        reduceStockBatchesWithAllocations: function (product, soldQty) {
+            let remaining = Math.max(0, parseInt(soldQty, 10) || 0);
+            const allocations = [];
+            const sortedBatches = this.getProductStockBatches(product)
+                .sort((a, b) => this.getBatchDateValue(a.expiryDate) - this.getBatchDateValue(b.expiryDate));
+
+            const updatedBatches = sortedBatches.map(batch => {
+                const available = Math.max(0, parseInt(batch.quantity, 10) || 0);
+                const used = Math.min(available, remaining);
+                if (used > 0) {
+                    allocations.push({
+                        batchNumber: batch.batchNumber || '',
+                        quantity: used,
+                        expiryDate: batch.expiryDate || null,
+                        buyingPrice: parseFloat(batch.buyingPrice) || 0,
+                        sellingPrice: parseFloat(batch.sellingPrice) || 0,
+                        minimumSellPrice: parseFloat(batch.minimumSellPrice) || parseFloat(batch.buyingPrice) || 0
+                    });
+                }
+                remaining -= used;
+                return { ...batch, quantity: available - used };
+            }).filter(batch => (parseInt(batch.quantity, 10) || 0) > 0);
+
+            if (remaining > 0) {
+                throw new Error('Insufficient stock for ' + (product.name || 'selected product'));
+            }
+
+            return { updatedBatches, allocations };
         },
 
         // ─── RENDER POS ─────────────────────────────────────
@@ -1004,6 +1137,8 @@
                 const outOfStock = stock <= 0;
                 const lowStock = stock > 0 && stock <= 10;
                 const drugBadge = this.getDrugTypeBadge(p.drugType);
+                const nextBatch = this.getNextSellableBatch(p);
+                const displayPrice = nextBatch ? nextBatch.sellingPrice : p.sellingPrice;
 
                 return `
                     <div class="pos-product-card ${outOfStock ? 'pos-product--oos' : ''} ${inCart ? 'pos-product--in-cart' : ''}" 
@@ -1020,7 +1155,7 @@
                             <span class="pos-product-cat">${this.escapeHtml(p.category || '')}</span>
                         </div>
                         <div class="pos-product-bottom">
-                            <span class="pos-product-price">${this.formatCurrency(p.sellingPrice)}</span>
+                            <span class="pos-product-price">${this.formatCurrency(displayPrice || 0)}</span>
                             <span class="pos-product-stock ${outOfStock ? 'oos' : ''} ${lowStock ? 'low' : ''}">
                                 ${outOfStock ? 'Out of Stock' : stock + ' in stock'}
                             </span>
@@ -1060,8 +1195,7 @@
             if (!isFinite(raw) || raw <= 0) return 0;
             const qty = this.getLineQuantity(item);
             if (qty <= 0) return 0;
-            const unitPrice = this.getLineUnitPrice(item);
-            const lineSubtotal = this.roundMoney(unitPrice * qty);
+            const lineSubtotal = this.getLineBaseTotal(item);
             const vatType = (item.vatType || 'percent') === 'amount' ? 'amount' : 'percent';
 
             if (vatType === 'amount') {
@@ -1088,6 +1222,8 @@
 
         /** Line merchandise total (unit × qty), excl. product VAT. */
         getLineBaseTotal: function (item) {
+            const batchTotal = this.getBatchAllocatedTotal(item, 'sellingPrice');
+            if (batchTotal != null) return batchTotal;
             return this.roundMoney(this.getLineUnitPrice(item) * this.getLineQuantity(item));
         },
 
@@ -1143,15 +1279,19 @@
                     return;
                 }
                 existing.qty++;
-                existing.buyingPrice = product.buyingPrice || 0;
-                const mnu = parseFloat(product.minimumSellPrice);
-                existing.minimumSellPrice = Number.isFinite(mnu) && mnu > 0 ? mnu : null;
+                try {
+                    this.refreshCartItemBatchPricing(existing, product);
+                } catch (err) {
+                    existing.qty--;
+                    this.showToast(err.message || 'Unable to allocate stock.', 'error');
+                    return;
+                }
             } else {
                 if ((product.quantity || 0) <= 0) {
                     this.showToast(product.name + ' is out of stock', 'error');
                     return;
                 }
-                cart.push({
+                const item = {
                     id: product.id,
                     name: product.name,
                     sku: product.sku || '',
@@ -1168,7 +1308,14 @@
                     vatEnabled: !!product.vatEnabled,
                     vatType: product.vatType || 'percent',
                     vatValue: parseFloat(product.vatValue) || 0
-                });
+                };
+                try {
+                    this.refreshCartItemBatchPricing(item, product);
+                } catch (err) {
+                    this.showToast(err.message || 'Unable to allocate stock.', 'error');
+                    return;
+                }
+                cart.push(item);
             }
 
             this.renderCart();
@@ -1197,6 +1344,16 @@
                 item.qty = max;
             } else {
                 item.qty = newQty;
+            }
+
+            if (product) {
+                try {
+                    this.refreshCartItemBatchPricing(item, product);
+                } catch (err) {
+                    this.showToast(err.message || 'Unable to allocate stock.', 'error');
+                    item.qty = Math.min(item.qty, max);
+                    this.refreshCartItemBatchPricing(item, product);
+                }
             }
 
             this.renderCart();
@@ -1230,7 +1387,7 @@
                         <span class="pos-cart-item-num">${i + 1}</span>
                         <div>
                             <strong>${this.escapeHtml(item.name)}</strong>
-                            <small>${this.formatCurrency(item.price)} each</small>
+                            <small>${this.formatBatchAllocationSummary(item)}</small>
                         </div>
                     </div>
                     <div class="pos-cart-item-controls">
@@ -1446,8 +1603,8 @@
 
             try {
                 const totals = this.getCurrentTotals();
-                const totalProfit = this.roundMoney(
-                    cart.reduce((sum, item) => sum + this.roundMoney((this.getLineUnitPrice(item) - (parseFloat(item.buyingPrice) || 0)) * this.getLineQuantity(item)), 0)
+                let totalProfit = this.roundMoney(
+                    cart.reduce((sum, item) => sum + this.getBatchProfitTotal(item), 0)
                     - totals.discountAmount
                     + totals.dispensingFee
                 );
@@ -1511,11 +1668,12 @@
                             unitPrice: unitPrice,
                             buyingPrice: parseFloat(item.buyingPrice) || 0,
                             quantity: qty,
+                            batchAllocations: Array.isArray(item.batchAllocations) ? item.batchAllocations : [],
                             lineBaseTotal: lineBaseTotal,
                             productVatAmount: productVatAmount,
                             lineGrossTotal: lineGrossTotal,
                             lineTotal: lineGrossTotal,
-                            profit: this.roundMoney((unitPrice - (parseFloat(item.buyingPrice) || 0)) * qty),
+                            profit: this.getBatchProfitTotal(item),
                             vatEnabled: !!item.vatEnabled,
                             vatType: item.vatType || 'percent',
                             vatValue: parseFloat(item.vatValue) || 0
@@ -1570,12 +1728,24 @@
                         }
 
                         const nextQty = currentQty - itemQty;
-                        const nextBatches = this.reduceStockBatches(product, itemQty);
+                        const reduction = this.reduceStockBatchesWithAllocations(product, itemQty);
+                        const nextBatches = reduction.updatedBatches;
                         const primaryBatch = this.getPrimaryBatchAfterSale(nextBatches);
                         const saleLine = saleData.items.find(line => line.productId === item.id);
                         if (saleLine) {
                             saleLine.stockBefore = currentQty;
                             saleLine.stockAfter = nextQty;
+                            saleLine.batchAllocations = reduction.allocations;
+                            saleLine.buyingPrice = this.getWeightedBatchValue(reduction.allocations, 'buyingPrice');
+                            saleLine.unitPrice = this.getWeightedBatchValue(reduction.allocations, 'sellingPrice');
+                            saleLine.lineBaseTotal = this.roundMoney(reduction.allocations.reduce((sum, batch) => sum + ((parseFloat(batch.sellingPrice) || 0) * (parseInt(batch.quantity, 10) || 0)), 0));
+                            saleLine.productVatAmount = this.getPosLineProductVat({ ...item, batchAllocations: reduction.allocations });
+                            saleLine.lineGrossTotal = this.roundMoney(saleLine.lineBaseTotal + saleLine.productVatAmount);
+                            saleLine.lineTotal = saleLine.lineGrossTotal;
+                            saleLine.profit = this.roundMoney(reduction.allocations.reduce((sum, batch) => {
+                                const qty = parseInt(batch.quantity, 10) || 0;
+                                return sum + (((parseFloat(batch.sellingPrice) || 0) - (parseFloat(batch.buyingPrice) || 0)) * qty);
+                            }, 0));
                         }
 
                         stockUpdates.push({
@@ -1590,6 +1760,12 @@
                         });
                     }
 
+                    totalProfit = this.roundMoney(
+                        saleData.items.reduce((sum, line) => sum + (parseFloat(line.profit) || 0), 0)
+                        - totals.discountAmount
+                        + totals.dispensingFee
+                    );
+                    saleData.totalProfit = totalProfit;
                     transaction.set(saleRef, saleData);
                     stockUpdates.forEach(update => transaction.update(update.ref, update.data));
                 });

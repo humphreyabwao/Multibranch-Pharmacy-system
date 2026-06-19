@@ -300,6 +300,7 @@
                                                 <th>Expiry Date</th>
                                                 <th>Current Stock</th>
                                                 <th>Unit Cost</th>
+                                                <th>Sell Price</th>
                                                 <th>Order Qty</th>
                                                 <th>VAT</th>
                                                 <th>Line Total</th>
@@ -307,11 +308,11 @@
                                             </tr>
                                         </thead>
                                         <tbody id="ord-items-tbody">
-                                            <tr><td colspan="11" class="dda-loading"><i class="fas fa-inbox"></i> No items added yet</td></tr>
+                                            <tr><td colspan="12" class="dda-loading"><i class="fas fa-inbox"></i> No items added yet</td></tr>
                                         </tbody>
                                         <tfoot id="ord-items-tfoot" style="display:none">
                                             <tr>
-                                                <td colspan="8"></td>
+                                                <td colspan="10"></td>
                                                 <td><strong>Total:</strong></td>
                                                 <td><strong id="ord-items-total">KSH 0.00</strong></td>
                                             </tr>
@@ -589,6 +590,8 @@
                 category: product.category || '',
                 currentStock: product.quantity || 0,
                 unitCost: product.buyingPrice || 0,
+                sellingPrice: product.sellingPrice || 0,
+                minimumSellPrice: product.minimumSellPrice || product.buyingPrice || 0,
                 orderQty: 1,
                 batchMode: 'auto',
                 batchNumber: this.generateBatchNumber(),
@@ -706,7 +709,7 @@
             if (!tbody) return;
 
             if (orderItems.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="11" class="dda-loading"><i class="fas fa-inbox"></i> No items added yet</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="12" class="dda-loading"><i class="fas fa-inbox"></i> No items added yet</td></tr>';
                 if (tfoot) tfoot.style.display = 'none';
                 return;
             }
@@ -733,6 +736,9 @@
                     <td>${item.currentStock}</td>
                     <td>
                         <input type="number" class="ord-inline-input ord-cost-input" data-idx="${i}" value="${item.unitCost}" min="0" step="0.01">
+                    </td>
+                    <td>
+                        <input type="number" class="ord-inline-input ord-sell-input" data-idx="${i}" value="${item.sellingPrice || 0}" min="0" step="0.01">
                     </td>
                     <td>
                         <input type="number" class="ord-inline-input ord-qty-input" data-idx="${i}" value="${item.orderQty}" min="1">
@@ -778,6 +784,23 @@
                 input.addEventListener('change', () => {
                     const idx = parseInt(input.dataset.idx);
                     orderItems[idx].unitCost = Math.max(0, parseFloat(input.value) || 0);
+                    if (!orderItems[idx].minimumSellPrice || orderItems[idx].minimumSellPrice < orderItems[idx].unitCost) {
+                        orderItems[idx].minimumSellPrice = orderItems[idx].unitCost;
+                    }
+                    if ((orderItems[idx].sellingPrice || 0) < orderItems[idx].unitCost) {
+                        orderItems[idx].sellingPrice = orderItems[idx].unitCost;
+                    }
+                    this.renderOrderItems();
+                });
+            });
+            tbody.querySelectorAll('.ord-sell-input').forEach(input => {
+                input.addEventListener('change', () => {
+                    const idx = parseInt(input.dataset.idx);
+                    orderItems[idx].sellingPrice = Math.max(0, parseFloat(input.value) || 0);
+                    if (orderItems[idx].sellingPrice < (orderItems[idx].unitCost || 0)) {
+                        this.showToast('Selling price should not be less than unit cost.', 'error');
+                        orderItems[idx].sellingPrice = orderItems[idx].unitCost || 0;
+                    }
                     this.renderOrderItems();
                 });
             });
@@ -903,6 +926,8 @@
                         batchNumber: item.batchNumber || '',
                         expiryDate: item.expiryDate || '',
                         unitCost: item.unitCost,
+                        sellingPrice: item.sellingPrice || (inventoryCache.find(p => p.id === item.productId)?.sellingPrice || 0),
+                        minimumSellPrice: item.minimumSellPrice || item.unitCost || (inventoryCache.find(p => p.id === item.productId)?.buyingPrice || 0),
                         orderQty: item.orderQty,
                         vatEnabled: !!item.vatEnabled,
                         vatType: item.vatType || 'percent',
@@ -1553,6 +1578,8 @@
                         category: item.category || '',
                         currentStock: item.currentStock || 0,
                         unitCost: item.unitCost || 0,
+                        sellingPrice: item.sellingPrice || 0,
+                        minimumSellPrice: item.minimumSellPrice || item.unitCost || 0,
                         orderQty: parseInt(item.orderQty) || 0,
                         batchMode: batchMode,
                         batchNumber: item.batchNumber || (batchMode === 'auto' ? this.generateBatchNumber() : ''),
@@ -1594,7 +1621,7 @@
                                     <div class="ord-push-item__summary">
                                         <div class="ord-push-item__main">
                                             <strong>${this.escapeHtml(item.name)}</strong>
-                                            <small>${this.escapeHtml(item.sku || '')} · Qty ${item.orderQty} · ${this.formatCurrency(item.unitCost)}</small>
+                                            <small>${this.escapeHtml(item.sku || '')} · Qty ${item.orderQty} · Cost ${this.formatCurrency(item.unitCost)} · Sell ${this.formatCurrency(item.sellingPrice || 0)}</small>
                                         </div>
                                         <div class="ord-push-item__chips">
                                             <span class="ord-push-chip ord-push-chip--batch" data-push-chip-batch="${index}">${this.escapeHtml(item.batchNumber || 'Batch pending')}</span>
@@ -1621,6 +1648,16 @@
                                             <div class="inv-sku-row inv-batch-row">
                                                 <input type="text" class="ord-push-batch" data-push-batch="${index}" value="${this.escapeHtml(item.batchNumber || '')}" placeholder="Enter batch number manually">
                                                 <button type="button" class="btn btn-sm btn-outline ord-push-generate" data-push-generate="${index}" title="Generate batch number"><i class="fas fa-dice"></i></button>
+                                            </div>
+                                        </div>
+                                        <div class="inv-form-row">
+                                            <div class="inv-form-group">
+                                                <label>Unit Cost</label>
+                                                <input type="number" class="ord-push-cost" value="${item.unitCost || 0}" min="0" step="0.01" readonly>
+                                            </div>
+                                            <div class="inv-form-group">
+                                                <label>Selling Price</label>
+                                                <input type="number" class="ord-push-sell" data-push-sell="${index}" value="${item.sellingPrice || 0}" min="0" step="0.01">
                                             </div>
                                         </div>
                                         <div class="ord-push-editor-actions">
@@ -1693,9 +1730,9 @@
                     syncRow(index);
                 });
             });
-            modal.querySelectorAll('.ord-push-batch, .ord-push-expiry').forEach(el => {
-                el.addEventListener('input', () => syncRow(parseInt(el.dataset.pushBatch || el.dataset.pushExpiry, 10)));
-                el.addEventListener('change', () => syncRow(parseInt(el.dataset.pushBatch || el.dataset.pushExpiry, 10)));
+            modal.querySelectorAll('.ord-push-batch, .ord-push-expiry, .ord-push-sell').forEach(el => {
+                el.addEventListener('input', () => syncRow(parseInt(el.dataset.pushBatch || el.dataset.pushExpiry || el.dataset.pushSell, 10)));
+                el.addEventListener('change', () => syncRow(parseInt(el.dataset.pushBatch || el.dataset.pushExpiry || el.dataset.pushSell, 10)));
             });
             modal.querySelectorAll('.ord-push-done').forEach(btn => {
                 btn.addEventListener('click', () => {
@@ -1734,6 +1771,8 @@
                 const mode = row.querySelector('[data-push-mode="' + index + '"]')?.value || 'manual';
                 let batchNumber = row.querySelector('[data-push-batch="' + index + '"]')?.value?.trim() || '';
                 const expiryDate = row.querySelector('[data-push-expiry="' + index + '"]')?.value || '';
+                const sellingPrice = Math.max(0, parseFloat(row.querySelector('[data-push-sell="' + index + '"]')?.value) || 0);
+                const unitCost = parseFloat(fallback.unitCost) || 0;
 
                 if (mode === 'auto' && !batchNumber) {
                     batchNumber = this.generateBatchNumber();
@@ -1744,6 +1783,9 @@
                 if (!expiryDate) {
                     return { ok: false, message: 'Expiry date is required for ' + (fallback.name || 'an item') + '.' };
                 }
+                if (sellingPrice < unitCost) {
+                    return { ok: false, message: 'Selling price cannot be below unit cost for ' + (fallback.name || 'an item') + '.' };
+                }
 
                 collected.push({
                     productId: fallback.productId,
@@ -1752,6 +1794,8 @@
                     category: fallback.category,
                     orderQty: fallback.orderQty,
                     unitCost: fallback.unitCost,
+                    sellingPrice: sellingPrice,
+                    minimumSellPrice: fallback.minimumSellPrice || fallback.unitCost || 0,
                     batchMode: mode,
                     batchNumber: batchNumber,
                     expiryDate: expiryDate
@@ -1791,6 +1835,9 @@
                             batchNumber: item.batchNumber || this.generateBatchNumber(),
                             quantity: qty,
                             expiryDate: expiryTs,
+                            buyingPrice: item.unitCost || 0,
+                            sellingPrice: item.sellingPrice || invData.sellingPrice || 0,
+                            minimumSellPrice: item.minimumSellPrice || item.unitCost || invData.buyingPrice || 0,
                             addedAt: now,
                             source: 'order_received',
                             orderId: order.orderId || order.id,
@@ -1802,6 +1849,8 @@
                         await ref.update({
                             quantity: prevQty + qty,
                             buyingPrice: item.unitCost || 0,
+                            sellingPrice: item.sellingPrice || invData.sellingPrice || 0,
+                            minimumSellPrice: item.minimumSellPrice || item.unitCost || invData.minimumSellPrice || invData.buyingPrice || 0,
                             expiryDate: nextExpiry || expiryTs,
                             batchNumber: invData.batchNumber || batchRecord.batchNumber,
                             stockBatches: existingBatches,
@@ -1820,6 +1869,7 @@
                             addedQty: qty,
                             newQty: prevQty + qty,
                             unitCost: item.unitCost || 0,
+                            sellingPrice: item.sellingPrice || invData.sellingPrice || 0,
                             batchNumber: item.batchNumber || batchRecord.batchNumber,
                             expiryDate: item.expiryDate,
                             addedBy: addedBy,
