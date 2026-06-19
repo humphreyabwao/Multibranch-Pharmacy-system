@@ -58,6 +58,9 @@
 
         getStockBatches: function (product) {
             if (!product) return [];
+            if (PharmaFlow.InventoryBatchEngine) {
+                return PharmaFlow.InventoryBatchEngine.canonicalBatches(product);
+            }
             if (Array.isArray(product.stockBatches) && product.stockBatches.length) {
                 return product.stockBatches.slice();
             }
@@ -78,6 +81,12 @@
             return [];
         },
 
+        getSellableQuantity: function (product) {
+            return PharmaFlow.InventoryBatchEngine
+                ? PharmaFlow.InventoryBatchEngine.sellableQuantity(product)
+                : Math.max(0, parseInt(product?.quantity, 10) || 0);
+        },
+
         getPrimaryExpiryFromBatches: function (batches) {
             const dates = (batches || [])
                 .map(batch => batch && batch.expiryDate ? (batch.expiryDate.toDate ? batch.expiryDate.toDate() : new Date(batch.expiryDate)) : null)
@@ -88,11 +97,13 @@
         },
 
         getBatchLabel: function (product) {
-            const batches = this.getStockBatches(product);
-            if (!batches.length) return product && product.batchNumber ? product.batchNumber : '—';
-            if (batches.length === 1) return batches[0].batchNumber || product.batchNumber || '—';
+            const batches = PharmaFlow.InventoryBatchEngine
+                ? PharmaFlow.InventoryBatchEngine.sellableBatches(product)
+                : this.getStockBatches(product);
+            if (!batches.length) return '—';
+            if (batches.length === 1) return batches[0].batchNumber || '—';
 
-            const first = batches[0].batchNumber || product.batchNumber || 'Batch';
+            const first = batches[0].batchNumber || 'Batch';
             return first + ' +' + (batches.length - 1) + ' more';
         },
 
@@ -851,8 +862,10 @@
             const rowsById = new Map();
 
             allProducts.forEach(product => {
-                const currentQty = Math.max(0, parseInt(product.quantity, 10) || 0);
-                const batchQty = this.getStockBatches(product).reduce((sum, batch) => sum + (parseInt(batch.quantity, 10) || 0), 0);
+                const currentQty = this.getSellableQuantity(product);
+                const batchQty = PharmaFlow.InventoryBatchEngine
+                    ? PharmaFlow.InventoryBatchEngine.sellableQuantity(product)
+                    : this.getStockBatches(product).reduce((sum, batch) => sum + (parseInt(batch.quantity, 10) || 0), 0);
                 rowsById.set(product.id, {
                     productId: product.id,
                     name: product.name || 'Unnamed item',
@@ -1081,18 +1094,20 @@
         },
 
         getProductStatus: function (product) {
-            const qty = product.quantity || 0;
+            const qty = this.getSellableQuantity(product);
             const reorder = product.reorderLevel || 10;
             const now = new Date();
 
-            if (product.expiryDate) {
-                const exp = product.expiryDate.toDate ? product.expiryDate.toDate() : new Date(product.expiryDate);
-                if (exp <= now) return 'expired';
+            if (qty <= 0) return 'out-of-stock';
+            const nextBatch = PharmaFlow.InventoryBatchEngine
+                ? PharmaFlow.InventoryBatchEngine.sellableBatches(product)[0]
+                : null;
+            const nextExpiry = nextBatch?.expiryDate || product.expiryDate;
+            if (nextExpiry) {
+                const exp = nextExpiry.toDate ? nextExpiry.toDate() : new Date(nextExpiry);
                 const thirtyDays = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
                 if (exp <= thirtyDays) return 'expiring';
             }
-
-            if (qty <= 0) return 'out-of-stock';
             if (qty <= reorder) return 'low-stock';
             return 'in-stock';
         },
@@ -1131,8 +1146,8 @@
                 switch (sortVal) {
                     case 'name-asc': return (a.name || '').localeCompare(b.name || '');
                     case 'name-desc': return (b.name || '').localeCompare(a.name || '');
-                    case 'qty-asc': return (a.quantity || 0) - (b.quantity || 0);
-                    case 'qty-desc': return (b.quantity || 0) - (a.quantity || 0);
+                    case 'qty-asc': return this.getSellableQuantity(a) - this.getSellableQuantity(b);
+                    case 'qty-desc': return this.getSellableQuantity(b) - this.getSellableQuantity(a);
                     case 'price-asc': return (a.sellingPrice || 0) - (b.sellingPrice || 0);
                     case 'price-desc': return (b.sellingPrice || 0) - (a.sellingPrice || 0);
                     case 'expiry-asc':
@@ -1213,7 +1228,7 @@
                         <td>${this.escapeHtml(p.category || '—')}</td>
                         <td>${this.getDrugTypeBadge(p.drugType)}</td>
                         <td><code>${this.escapeHtml(this.getBatchLabel(p))}</code></td>
-                        <td class="inv-clean-qty ${(p.quantity || 0) <= (p.reorderLevel || 10) ? 'inv-qty-warn' : ''}"><strong>${p.quantity || 0}</strong><small>sellable</small></td>
+                        <td class="inv-clean-qty ${this.getSellableQuantity(p) <= (p.reorderLevel || 10) ? 'inv-qty-warn' : ''}"><strong>${this.getSellableQuantity(p)}</strong><small>sellable</small></td>
                         <td class="inv-quarantine-qty ${quarantine.total ? 'has-quarantine' : ''}">
                             <strong>${quarantine.total}</strong>
                             <small>${quarantine.broken ? quarantine.broken + ' broken' : ''}${quarantine.broken && quarantine.expired ? ' · ' : ''}${quarantine.expired ? quarantine.expired + ' expired' : ''}${!quarantine.broken && !quarantine.expired && quarantine.other ? quarantine.other + ' other' : (!quarantine.total ? 'none' : '')}</small>
@@ -1321,7 +1336,9 @@
         // ─── EXPORT ──────────────────────────────────────────
 
         getBatchTrackerRows: function (product) {
-            const batches = this.getStockBatches(product)
+            const batches = (PharmaFlow.InventoryBatchEngine
+                ? PharmaFlow.InventoryBatchEngine.sellableBatches(product)
+                : this.getStockBatches(product))
                 .map((batch, index) => ({
                     ...batch,
                     _index: index,
@@ -1343,7 +1360,7 @@
             const totalQty = batches.reduce((sum, batch) => sum + (parseInt(batch.quantity, 10) || 0), 0);
             const costValue = batches.reduce((sum, batch) => sum + ((parseFloat(batch.buyingPrice) || 0) * (parseInt(batch.quantity, 10) || 0)), 0);
             const retailValue = batches.reduce((sum, batch) => sum + ((parseFloat(batch.sellingPrice) || 0) * (parseInt(batch.quantity, 10) || 0)), 0);
-            const productQty = Math.max(0, parseInt(product.quantity, 10) || 0);
+            const productQty = this.getSellableQuantity(product);
             return {
                 totalQty: totalQty,
                 productQty: productQty,
@@ -1359,7 +1376,7 @@
             const stats = this.getBatchTrackerStats(product, batches);
             const updated = product.updatedAt || product.createdAt || null;
             const diffClass = stats.qtyDiff === 0 ? 'inv-batch-tracker-ok' : 'inv-batch-tracker-warn';
-            const diffText = stats.qtyDiff === 0 ? 'Matches product stock' : (stats.qtyDiff > 0 ? '+' : '') + stats.qtyDiff + ' vs product stock';
+            const diffText = stats.qtyDiff === 0 ? 'Matches sellable stock' : (stats.qtyDiff > 0 ? '+' : '') + stats.qtyDiff + ' vs sellable stock';
 
             const rows = batches.length ? batches.map((batch, index) => {
                 const qty = parseInt(batch.quantity, 10) || 0;
@@ -1401,14 +1418,14 @@
                     <span class="${diffClass}">${this.escapeHtml(diffText)}</span>
                 </div>
                 <div class="inv-batch-tracker-stats">
-                    <div><span>${stats.batchCount}</span><small>Batches</small></div>
-                    <div><span>${stats.totalQty}</span><small>Batch Qty</small></div>
-                    <div><span>${stats.productQty}</span><small>Product Qty</small></div>
+                    <div><span>${stats.batchCount}</span><small>Sellable Batches</small></div>
+                    <div><span>${stats.totalQty}</span><small>Tracker Sellable</small></div>
+                    <div><span>${stats.productQty}</span><small>Inventory Sellable</small></div>
                     <div><span>${this.formatCurrency(stats.costValue)}</span><small>Cost Value</small></div>
                     <div><span>${this.formatCurrency(stats.retailValue)}</span><small>Retail Value</small></div>
                 </div>
                 <div class="inv-batch-tracker-meta">
-                    <span><i class="fas fa-signal"></i> Live quantities</span>
+                    <span><i class="fas fa-signal"></i> Live sellable quantities only</span>
                     <span>Last update: ${this.escapeHtml(updated ? this.formatDateTime(updated) : '—')}</span>
                 </div>
                 <div class="inv-batch-tracker-table-wrap">
@@ -1534,7 +1551,7 @@
                 'Category': p.category || '',
                 'Drug Type': p.drugType || '',
                 'Batch Number': p.batchNumber || '',
-                'Quantity': p.quantity || 0,
+                'Quantity': this.getSellableQuantity(p),
                 'Buying Price': p.buyingPrice || 0,
                 'Selling Price': p.sellingPrice || 0,
                 'VAT': p.vatEnabled ? (p.vatType === 'amount' ? (p.vatValue || 0) : ((p.vatValue || 0) + '%')) : '',
@@ -1589,7 +1606,7 @@
                 p.category || '',
                 p.drugType || '',
                 p.batchNumber || '',
-                String(p.quantity || 0),
+                String(this.getSellableQuantity(p)),
                 this.formatCurrency(p.buyingPrice || 0),
                 this.formatCurrency(p.sellingPrice || 0),
                 this.getVatDisplay(p),
@@ -2671,7 +2688,7 @@
                         <div class="inv-stock-info">
                             <strong>${this.escapeHtml(product.name)}</strong>
                             ${product.genericName ? '<small class="inv-product-generic">' + this.escapeHtml(product.genericName) + '</small>' : ''}
-                            <span>Current Stock: <b>${product.quantity || 0}</b></span>
+                            <span>Sellable Stock: <b>${this.getSellableQuantity(product)}</b></span>
                         </div>
                         <div class="inv-stock-history-wrap">
                             <div class="inv-stock-history-title">Existing Batches</div>
@@ -2780,7 +2797,6 @@
                     if (!businessId) throw new Error('No business assigned');
 
                     const docRef = getBusinessCollection(businessId, 'inventory').doc(productId);
-                    const self = this;
                     let previousQtyForHistory = 0;
                     let newQtyForHistory = 0;
                     let batchNumberForHistory = newBatchNumber;
@@ -2790,10 +2806,9 @@
                         if (!snapshot.exists) throw new Error('Product not found');
 
                         const data = snapshot.data() || {};
-                        previousQtyForHistory = parseInt(data.quantity) || 0;
-                        const currentBatches = Array.isArray(data.stockBatches) && data.stockBatches.length
-                            ? data.stockBatches.slice()
-                            : self.getStockBatches(data);
+                        const engine = PharmaFlow.InventoryBatchEngine;
+                        if (!engine) throw new Error('Inventory batch engine is unavailable.');
+                        previousQtyForHistory = engine.quantityOf(engine.normalize(data));
                         const expiryTimestamp = firebase.firestore.Timestamp.fromDate(new Date(expiryValue));
                         const batchRecord = {
                             batchNumber: newBatchNumber || self.generateBatchNumber(),
@@ -2806,9 +2821,9 @@
                             source: 'restock',
                             mode: newBatchMode
                         };
-
-                        currentBatches.push(batchRecord);
-                        newQtyForHistory = previousQtyForHistory + addQty;
+                        const appended = engine.appendBatch(data, batchRecord);
+                        const primary = appended.primaryBatch || batchRecord;
+                        newQtyForHistory = appended.quantityAfter;
                         batchNumberForHistory = batchRecord.batchNumber;
 
                         transaction.update(docRef, {
@@ -2816,9 +2831,9 @@
                             buyingPrice: batchBuyingPrice,
                             sellingPrice: batchSellingPrice,
                             minimumSellPrice: batchMinimumSellPrice,
-                            batchNumber: data.batchNumber || batchRecord.batchNumber,
-                            expiryDate: self.getPrimaryExpiryFromBatches(currentBatches) || expiryTimestamp,
-                            stockBatches: currentBatches,
+                            batchNumber: primary.batchNumber || batchRecord.batchNumber,
+                            expiryDate: primary.expiryDate || expiryTimestamp,
+                            stockBatches: appended.updatedBatches,
                             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
                         });
                     });
@@ -2908,11 +2923,13 @@
                             <div class="inv-form-row">
                                 <div class="inv-form-group">
                                     <label>Batch Number</label>
-                                    <input type="text" id="edit-batch" value="${this.escapeHtml(product.batchNumber || '')}">
+                                    <input type="text" id="edit-batch" value="${this.escapeHtml(product.batchNumber || '')}" readonly>
+                                    <small>Managed automatically from the next FEFO batch.</small>
                                 </div>
                                 <div class="inv-form-group">
                                     <label>Quantity <span class="req">*</span></label>
-                                    <input type="number" id="edit-quantity" required min="0" value="${product.quantity || 0}">
+                                    <input type="number" id="edit-quantity" required min="0" value="${product.quantity || 0}" readonly>
+                                    <small>Use Add Stock or Disposal so every movement is audited.</small>
                                 </div>
                             </div>
                             <div class="inv-form-row">
@@ -2964,7 +2981,8 @@
                                 </div>
                                 <div class="inv-form-group">
                                     <label>Expiry Date</label>
-                                    <input type="date" id="edit-expiry" value="${expiryVal}">
+                                    <input type="date" id="edit-expiry" value="${expiryVal}" readonly>
+                                    <small>Derived automatically from the next FEFO batch.</small>
                                 </div>
                             </div>
                             <div class="inv-form-row">
@@ -3038,7 +3056,6 @@
             const vatRaw = parseFloat(document.getElementById('edit-vat-value')?.value) || 0;
             const vatValue = vatEnabled ? (vatType === 'percent' ? Math.min(vatRaw, 100) : vatRaw) : 0;
 
-            const expiryStr = document.getElementById('edit-expiry')?.value;
             const sellPrice = parseFloat(document.getElementById('edit-selling-price')?.value) || 0;
             const buyPrice = parseFloat(document.getElementById('edit-buying-price')?.value) || 0;
             const minSellRaw = parseFloat(document.getElementById('edit-min-sell-price')?.value);
@@ -3060,8 +3077,6 @@
                 name: document.getElementById('edit-name')?.value?.trim() || '',
                 genericName: document.getElementById('edit-generic-name')?.value?.trim() || '',
                 category: document.getElementById('edit-category')?.value?.trim() || '',
-                batchNumber: document.getElementById('edit-batch')?.value?.trim() || '',
-                quantity: parseInt(document.getElementById('edit-quantity')?.value) || 0,
                 buyingPrice: parseFloat(document.getElementById('edit-buying-price')?.value) || 0,
                 sellingPrice: parseFloat(document.getElementById('edit-selling-price')?.value) || 0,
                 vatEnabled: vatEnabled,
@@ -3074,10 +3089,6 @@
                 updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
                 minimumSellPrice: minSellPersist != null ? minSellPersist : firebase.firestore.FieldValue.delete()
             };
-
-            if (expiryStr) {
-                updates.expiryDate = firebase.firestore.Timestamp.fromDate(new Date(expiryStr));
-            }
 
             try {
                 const docRef = getBusinessCollection(businessId, 'inventory').doc(productId);

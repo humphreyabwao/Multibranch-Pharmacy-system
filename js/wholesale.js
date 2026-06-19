@@ -85,6 +85,178 @@
             return 'INV-' + y + '-' + seq;
         },
 
+        _commitWholesaleInventory: async function (businessId, orderData, orderDocId, updateExisting) {
+            const engine = PharmaFlow.InventoryBatchEngine;
+            if (!engine) throw new Error('Inventory batch engine is unavailable.');
+            const inventoryCol = getBusinessCollection(businessId, 'inventory');
+            const ordersCol = getBusinessCollection(businessId, 'wholesale_orders');
+            const salesCol = getBusinessCollection(businessId, 'sales');
+            const historyCol = getBusinessCollection(businessId, 'stock_history');
+            const orderRef = ordersCol.doc(orderDocId);
+            const saleRef = salesCol.doc(orderDocId);
+
+            return window.db.runTransaction(async transaction => {
+                const existingOrder = await transaction.get(orderRef);
+                if (existingOrder.exists && existingOrder.data().inventoryCommitted === true) {
+                    if (updateExisting) return existingOrder.data();
+                    throw new Error('This wholesale order has already deducted inventory.');
+                }
+                if (!updateExisting && existingOrder.exists) {
+                    throw new Error('A wholesale order with this number already exists.');
+                }
+
+                const inventoryLines = (orderData.items || []).filter(item => item.inventoryId);
+                const prepared = [];
+                for (const line of inventoryLines) {
+                    const ref = inventoryCol.doc(line.inventoryId);
+                    const snapshot = await transaction.get(ref);
+                    if (!snapshot.exists) throw new Error('Inventory item no longer exists: ' + (line.name || line.inventoryId));
+                    prepared.push({ line, ref, product: snapshot.data() || {} });
+                }
+
+                prepared.forEach(entry => {
+                    const qty = parseInt(entry.line.quantity, 10) || 0;
+                    const result = engine.consume(entry.product, qty);
+                    const primary = result.primaryBatch || {};
+                    entry.line.batchAllocations = result.allocations;
+                    entry.line.stockBefore = result.quantityBefore;
+                    entry.line.stockAfter = result.quantityAfter;
+                    entry.line.costPrice = result.allocations.reduce((sum, batch) => {
+                        return sum + ((Number(batch.buyingPrice) || 0) * (parseInt(batch.quantity, 10) || 0));
+                    }, 0) / qty;
+                    transaction.update(entry.ref, {
+                        quantity: result.quantityAfter,
+                        stockBatches: result.updatedBatches,
+                        batchNumber: primary.batchNumber || '',
+                        expiryDate: primary.expiryDate || null,
+                        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                    transaction.set(historyCol.doc(), {
+                        productId: entry.line.inventoryId,
+                        productName: entry.line.name || '',
+                        sku: entry.line.sku || '',
+                        category: entry.line.category || '',
+                        type: 'wholesale_sale',
+                        orderId: orderDocId,
+                        previousQty: result.quantityBefore,
+                        removedQty: qty,
+                        newQty: result.quantityAfter,
+                        batchAllocations: result.allocations,
+                        addedBy: orderData.createdBy || this.getCurrentUser(),
+                        createdAt: new Date().toISOString()
+                    });
+                });
+
+                orderData.inventoryCommitted = true;
+                orderData.inventoryCommittedAt = new Date().toISOString();
+                orderData.items = orderData.items || [];
+                if (updateExisting) {
+                    transaction.update(orderRef, {
+                        status: 'confirmed',
+                        items: orderData.items,
+                        inventoryCommitted: true,
+                        inventoryCommittedAt: orderData.inventoryCommittedAt,
+                        updatedAt: new Date().toISOString()
+                    });
+                } else {
+                    transaction.set(orderRef, orderData);
+                }
+                transaction.set(saleRef, {
+                    saleId: orderDocId,
+                    items: orderData.items,
+                    subtotal: orderData.subtotal || 0,
+                    discountValue: orderData.discountValue || 0,
+                    discountType: orderData.discountType || 'amount',
+                    discountAmount: orderData.discountAmount || 0,
+                    total: orderData.grandTotal || 0,
+                    paymentMethod: orderData.paymentMethod || 'cash',
+                    paymentStatus: orderData.paymentStatus || 'unpaid',
+                    amountPaid: orderData.amountPaid || 0,
+                    changeDue: 0,
+                    itemCount: orderData.itemCount || 0,
+                    customerName: orderData.customer?.name || 'Wholesale Customer',
+                    type: 'wholesale',
+                    soldBy: orderData.createdBy || this.getCurrentUser(),
+                    soldByUid: orderData.createdByUid || null,
+                    status: 'completed',
+                    createdAt: orderData.createdAt || new Date().toISOString()
+                });
+                return orderData;
+            });
+        },
+
+        _cancelWholesaleInventory: async function (businessId, order, orderDocId) {
+            const engine = PharmaFlow.InventoryBatchEngine;
+            if (!engine) throw new Error('Inventory batch engine is unavailable.');
+            const inventoryCol = getBusinessCollection(businessId, 'inventory');
+            const orderRef = getBusinessCollection(businessId, 'wholesale_orders').doc(orderDocId);
+            const saleRef = getBusinessCollection(businessId, 'sales').doc(orderDocId);
+            const historyCol = getBusinessCollection(businessId, 'stock_history');
+
+            return window.db.runTransaction(async transaction => {
+                const orderSnapshot = await transaction.get(orderRef);
+                if (!orderSnapshot.exists) throw new Error('Wholesale order no longer exists.');
+                const current = { ...order, ...orderSnapshot.data() };
+                if (current.status === 'cancelled') return;
+
+                const lines = (current.items || []).filter(line => line.inventoryId && Array.isArray(line.batchAllocations));
+                const inventoryItemCount = (current.items || []).filter(line => line.inventoryId).length;
+                if (current.inventoryCommitted === true && lines.length !== inventoryItemCount) {
+                    throw new Error('This legacy order has incomplete batch allocations and cannot be auto-restored. Run the inventory audit before cancellation.');
+                }
+                const prepared = [];
+                if (current.inventoryCommitted === true) {
+                    for (const line of lines) {
+                        const ref = inventoryCol.doc(line.inventoryId);
+                        const snapshot = await transaction.get(ref);
+                        if (!snapshot.exists) throw new Error('Inventory item no longer exists: ' + (line.name || line.inventoryId));
+                        prepared.push({ line, ref, product: snapshot.data() || {} });
+                    }
+                }
+
+                prepared.forEach(entry => {
+                    const restored = engine.restore(entry.product, entry.line.batchAllocations, {
+                        source: 'wholesale_cancel',
+                        sourceId: orderDocId
+                    });
+                    const primary = restored.primaryBatch || {};
+                    transaction.update(entry.ref, {
+                        quantity: restored.quantityAfter,
+                        stockBatches: restored.updatedBatches,
+                        batchNumber: primary.batchNumber || '',
+                        expiryDate: primary.expiryDate || null,
+                        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                    transaction.set(historyCol.doc(), {
+                        productId: entry.line.inventoryId,
+                        productName: entry.line.name || '',
+                        sku: entry.line.sku || '',
+                        category: entry.line.category || '',
+                        type: 'wholesale_cancel_restore',
+                        orderId: orderDocId,
+                        previousQty: engine.quantityOf(engine.normalize(entry.product)),
+                        addedQty: (entry.line.batchAllocations || []).reduce((sum, batch) => sum + (parseInt(batch.quantity, 10) || 0), 0),
+                        newQty: restored.quantityAfter,
+                        batchAllocations: entry.line.batchAllocations,
+                        addedBy: this.getCurrentUser(),
+                        createdAt: new Date().toISOString()
+                    });
+                });
+
+                transaction.update(orderRef, {
+                    status: 'cancelled',
+                    inventoryCommitted: false,
+                    inventoryRestoredAt: current.inventoryCommitted === true ? new Date().toISOString() : null,
+                    updatedAt: new Date().toISOString()
+                });
+                transaction.set(saleRef, {
+                    status: 'cancelled',
+                    cancelledAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString()
+                }, { merge: true });
+            });
+        },
+
         cleanup: function () {
             if (wsUnsubInventory) { wsUnsubInventory(); wsUnsubInventory = null; }
             if (wsUnsubOrders) { wsUnsubOrders(); wsUnsubOrders = null; }
@@ -458,7 +630,9 @@
             }
 
             container.innerHTML = results.map(p => {
-                const stock = p.quantity || 0;
+                const stock = PharmaFlow.InventoryBatchEngine
+                    ? PharmaFlow.InventoryBatchEngine.sellableQuantity(p)
+                    : (p.quantity || 0);
                 const already = wsOrderItems.find(i => i.inventoryId === p.id);
                 return `
                     <div class="ws-search-item ${stock <= 0 ? 'ws-search-item--oos' : ''}" data-id="${p.id}">
@@ -506,7 +680,9 @@
                     unitPrice: product.sellingPrice || product.price || 0,
                     costPrice: product.costPrice || product.buyingPrice || 0,
                     qty: 1,
-                    maxStock: product.quantity || 0,
+                    maxStock: PharmaFlow.InventoryBatchEngine
+                        ? PharmaFlow.InventoryBatchEngine.sellableQuantity(product)
+                        : (product.quantity || 0),
                     source: 'inventory',
                     notes: ''
                 });
@@ -782,45 +958,10 @@
                     updatedAt: new Date().toISOString()
                 };
 
-                // Save to Firestore
-                await getBusinessCollection(businessId, 'wholesale_orders').doc(orderId).set(orderData);
-
-                // Also record as a sale if status is confirmed and paymentStatus is paid
-                if (status === 'confirmed' && paymentStatus === 'paid') {
-                    const saleData = {
-                        saleId: orderId,
-                        items: orderData.items,
-                        subtotal: subtotal,
-                        discountValue: discVal,
-                        discountType: discTypeVal,
-                        discountAmount: discount,
-                        total: grandTotal,
-                        paymentMethod: paymentMethod,
-                        amountPaid: amountPaid,
-                        changeDue: 0,
-                        itemCount: orderData.itemCount,
-                        customerName: customerName,
-                        type: 'wholesale',
-                        soldBy: orderData.createdBy,
-                        soldByUid: orderData.createdByUid,
-                        status: 'completed',
-                        createdAt: new Date().toISOString()
-                    };
-                    await getBusinessCollection(businessId, 'sales').doc(orderId).set(saleData);
-
-                    // Decrement inventory for inventory-sourced items
-                    const invItems = wsOrderItems.filter(i => i.inventoryId);
-                    if (invItems.length > 0) {
-                        const batch = window.db.batch();
-                        invItems.forEach(item => {
-                            const ref = getBusinessCollection(businessId, 'inventory').doc(item.inventoryId);
-                            batch.update(ref, {
-                                quantity: firebase.firestore.FieldValue.increment(-item.qty),
-                                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-                            });
-                        });
-                        await batch.commit();
-                    }
+                if (status === 'confirmed') {
+                    await this._commitWholesaleInventory(businessId, orderData, orderId, false);
+                } else {
+                    await getBusinessCollection(businessId, 'wholesale_orders').doc(orderId).set(orderData);
                 }
 
                 // Log activity
@@ -1366,46 +1507,19 @@
             if (!businessId) return;
 
             try {
-                await getBusinessCollection(businessId, 'wholesale_orders').doc(orderId).update({
-                    status: newStatus,
-                    updatedAt: new Date().toISOString()
-                });
-
-                // If confirming, decrement inventory for inventory-sourced items
                 if (newStatus === 'confirmed') {
                     const order = this._allOrders.find(o => (o.orderId || o.id) === orderId);
-                    if (order && order.items) {
-                        const invItems = order.items.filter(i => i.inventoryId);
-                        if (invItems.length > 0) {
-                            const batch = window.db.batch();
-                            invItems.forEach(item => {
-                                const ref = getBusinessCollection(businessId, 'inventory').doc(item.inventoryId);
-                                batch.update(ref, {
-                                    quantity: firebase.firestore.FieldValue.increment(-item.quantity),
-                                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-                                });
-                            });
-                            await batch.commit();
-                        }
-
-                        // Also create a sale record
-                        const saleData = {
-                            saleId: orderId,
-                            items: order.items,
-                            subtotal: order.subtotal || 0,
-                            total: order.grandTotal || 0,
-                            paymentMethod: order.paymentMethod || 'cash',
-                            amountPaid: order.amountPaid || 0,
-                            changeDue: 0,
-                            itemCount: order.itemCount || order.items.length,
-                            customerName: order.customer?.name || 'Wholesale Customer',
-                            type: 'wholesale',
-                            soldBy: this.getCurrentUser(),
-                            status: 'completed',
-                            createdAt: new Date().toISOString()
-                        };
-                        await getBusinessCollection(businessId, 'sales').doc(orderId).set(saleData);
-                    }
+                    if (!order || !order.items) throw new Error('Order data is unavailable. Refresh and try again.');
+                    await this._commitWholesaleInventory(businessId, order, order.id || orderId, true);
+                } else if (newStatus === 'cancelled') {
+                    const order = this._allOrders.find(o => (o.orderId || o.id) === orderId);
+                    if (!order) throw new Error('Order data is unavailable. Refresh and try again.');
+                    await this._cancelWholesaleInventory(businessId, order, order.id || orderId);
+                } else {
+                    await getBusinessCollection(businessId, 'wholesale_orders').doc(orderId).update({
+                        status: newStatus,
+                        updatedAt: new Date().toISOString()
+                    });
                 }
 
                 // Log activity

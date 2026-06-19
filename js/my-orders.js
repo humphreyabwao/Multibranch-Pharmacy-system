@@ -1812,86 +1812,88 @@
             const profile = PharmaFlow.Auth ? PharmaFlow.Auth.userProfile : null;
             const addedBy = profile ? (profile.displayName || profile.email) : 'Unknown';
             const now = new Date().toISOString();
-            let successCount = 0;
-            let failCount = 0;
+            const engine = PharmaFlow.InventoryBatchEngine;
+            if (!engine) throw new Error('Inventory batch engine is unavailable.');
+            const inventoryCol = getBusinessCollection(businessId, 'inventory');
+            const historyCol = getBusinessCollection(businessId, 'stock_history');
+            const orderRef = getBusinessCollection(businessId, 'orders').doc(order.id);
 
-            for (const item of items) {
-                if (!item.productId) { failCount++; continue; }
-                try {
-                    const ref = getBusinessCollection(businessId, 'inventory').doc(item.productId);
-                    const invDoc = await ref.get();
-                    const qty = parseInt(item.orderQty) || 0;
-                    if (qty <= 0) { failCount++; continue; }
-
-                    if (invDoc.exists) {
-                        const invData = invDoc.data() || {};
-                        const prevQty = invData.quantity || 0;
-                        const expiryTs = firebase.firestore.Timestamp.fromDate(new Date(item.expiryDate));
-                        const existingBatches = Array.isArray(invData.stockBatches) ? invData.stockBatches.slice() : [];
-                        const currentExpiry = invData.expiryDate ? (invData.expiryDate.toDate ? invData.expiryDate.toDate() : new Date(invData.expiryDate)) : null;
-                        const batchExpiry = expiryTs.toDate ? expiryTs.toDate() : new Date(item.expiryDate);
-                        const nextExpiry = !currentExpiry || batchExpiry < currentExpiry ? expiryTs : invData.expiryDate;
-                        const batchRecord = {
-                            batchNumber: item.batchNumber || this.generateBatchNumber(),
-                            quantity: qty,
-                            expiryDate: expiryTs,
-                            buyingPrice: item.unitCost || 0,
-                            sellingPrice: item.sellingPrice || invData.sellingPrice || 0,
-                            minimumSellPrice: item.minimumSellPrice || item.unitCost || invData.buyingPrice || 0,
-                            addedAt: now,
-                            source: 'order_received',
-                            orderId: order.orderId || order.id,
-                            mode: item.batchMode || 'manual'
-                        };
-
-                        existingBatches.push(batchRecord);
-
-                        await ref.update({
-                            quantity: prevQty + qty,
-                            buyingPrice: item.unitCost || 0,
-                            sellingPrice: item.sellingPrice || invData.sellingPrice || 0,
-                            minimumSellPrice: item.minimumSellPrice || item.unitCost || invData.minimumSellPrice || invData.buyingPrice || 0,
-                            expiryDate: nextExpiry || expiryTs,
-                            batchNumber: invData.batchNumber || batchRecord.batchNumber,
-                            stockBatches: existingBatches,
-                            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-                        });
-
-                        await getBusinessCollection(businessId, 'stock_history').add({
-                            productId: item.productId,
-                            productName: item.name || '',
-                            sku: item.sku || '',
-                            category: item.category || '',
-                            orderId: order.orderId || order.id,
-                            supplierName: order.supplierName || '',
-                            type: 'order_received',
-                            previousQty: prevQty,
-                            addedQty: qty,
-                            newQty: prevQty + qty,
-                            unitCost: item.unitCost || 0,
-                            sellingPrice: item.sellingPrice || invData.sellingPrice || 0,
-                            batchNumber: item.batchNumber || batchRecord.batchNumber,
-                            expiryDate: item.expiryDate,
-                            addedBy: addedBy,
-                            createdAt: now
-                        });
-                    } else {
-                        failCount++;
-                        continue;
-                    }
-                    successCount++;
-                } catch (itemErr) {
-                    console.error('Add to inventory item error:', item.name, itemErr);
-                    failCount++;
+            await window.db.runTransaction(async transaction => {
+                const orderSnapshot = await transaction.get(orderRef);
+                if (!orderSnapshot.exists) throw new Error('Purchase order no longer exists.');
+                if (orderSnapshot.data().inventoryAdded === true) {
+                    throw new Error('This purchase order has already been added to inventory.');
                 }
-            }
 
-            await getBusinessCollection(businessId, 'orders').doc(order.id).update({
-                inventoryAdded: true,
-                inventoryAddedAt: firebase.firestore.FieldValue.serverTimestamp(),
-                inventoryAddedBy: addedBy,
-                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                const prepared = [];
+                for (const item of items) {
+                    if (!item.productId) throw new Error('Missing inventory product for ' + (item.name || 'order item') + '.');
+                    const qty = parseInt(item.orderQty, 10) || 0;
+                    if (qty < 1) throw new Error('Invalid received quantity for ' + (item.name || 'order item') + '.');
+                    const ref = inventoryCol.doc(item.productId);
+                    const snapshot = await transaction.get(ref);
+                    if (!snapshot.exists) throw new Error('Inventory product was deleted: ' + (item.name || item.productId));
+                    prepared.push({ item, qty, ref, product: snapshot.data() || {} });
+                }
+
+                prepared.forEach(entry => {
+                    const item = entry.item;
+                    const product = entry.product;
+                    const expiryDate = firebase.firestore.Timestamp.fromDate(new Date(item.expiryDate));
+                    const batchRecord = {
+                        batchNumber: item.batchNumber || this.generateBatchNumber(),
+                        quantity: entry.qty,
+                        expiryDate: expiryDate,
+                        buyingPrice: item.unitCost || 0,
+                        sellingPrice: item.sellingPrice || product.sellingPrice || 0,
+                        minimumSellPrice: item.minimumSellPrice || item.unitCost || product.buyingPrice || 0,
+                        addedAt: now,
+                        source: 'order_received',
+                        orderId: order.orderId || order.id,
+                        mode: item.batchMode || 'manual'
+                    };
+                    const appended = engine.appendBatch(product, batchRecord);
+                    const primary = appended.primaryBatch || batchRecord;
+                    transaction.update(entry.ref, {
+                        quantity: appended.quantityAfter,
+                        buyingPrice: batchRecord.buyingPrice,
+                        sellingPrice: batchRecord.sellingPrice,
+                        minimumSellPrice: batchRecord.minimumSellPrice,
+                        expiryDate: primary.expiryDate || expiryDate,
+                        batchNumber: primary.batchNumber || batchRecord.batchNumber,
+                        stockBatches: appended.updatedBatches,
+                        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                    transaction.set(historyCol.doc(), {
+                        productId: item.productId,
+                        productName: item.name || '',
+                        sku: item.sku || '',
+                        category: item.category || '',
+                        orderId: order.orderId || order.id,
+                        supplierName: order.supplierName || '',
+                        type: 'order_received',
+                        previousQty: engine.quantityOf(engine.normalize(product)),
+                        addedQty: entry.qty,
+                        newQty: appended.quantityAfter,
+                        unitCost: batchRecord.buyingPrice,
+                        sellingPrice: batchRecord.sellingPrice,
+                        batchNumber: batchRecord.batchNumber,
+                        expiryDate: item.expiryDate,
+                        addedBy: addedBy,
+                        createdAt: now
+                    });
+                });
+
+                transaction.update(orderRef, {
+                    inventoryAdded: true,
+                    inventoryAddedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    inventoryAddedBy: addedBy,
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                });
             });
+
+            const successCount = items.length;
+            const failCount = 0;
 
             if (PharmaFlow.ActivityLog) {
                 PharmaFlow.ActivityLog.log({

@@ -569,7 +569,7 @@
                         results.push({
                             type: 'inventory', icon: 'fas fa-pills', color: 'green',
                             title: d.name || 'Unknown Product',
-                            subtitle: `SKU: ${d.sku || 'N/A'} | Qty: ${d.quantity || 0} | ${this.formatCurrency(d.sellingPrice || 0)}${subExtra}`,
+                            subtitle: `SKU: ${d.sku || 'N/A'} | Sellable: ${PharmaFlow.InventoryBatchEngine ? PharmaFlow.InventoryBatchEngine.sellableQuantity(d) : (d.quantity || 0)} | ${this.formatCurrency(d.sellingPrice || 0)}${subExtra}`,
                             navigate: { module: 'inventory', sub: 'view-inventory' }
                         });
                     }

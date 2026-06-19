@@ -289,6 +289,9 @@
         },
 
         getSellableQuantity: function (product) {
+            if (PharmaFlow.InventoryBatchEngine) {
+                return PharmaFlow.InventoryBatchEngine.sellableQuantity(product);
+            }
             return this.getProductStockBatches(product).reduce((sum, batch) => sum + (parseInt(batch.quantity, 10) || 0), 0);
         },
 
@@ -412,6 +415,16 @@
         },
 
         reduceStockBatchesWithAllocations: function (product, soldQty) {
+            if (PharmaFlow.InventoryBatchEngine) {
+                const result = PharmaFlow.InventoryBatchEngine.consume(product, soldQty);
+                return {
+                    updatedBatches: result.updatedBatches,
+                    allocations: result.allocations,
+                    quantityAfter: result.quantityAfter,
+                    sellableAfter: result.sellableAfter,
+                    primaryBatch: result.primaryBatch
+                };
+            }
             let remaining = Math.max(0, parseInt(soldQty, 10) || 0);
             const allocations = [];
             const productBuyingPrice = parseFloat(product.buyingPrice) || 0;
@@ -972,10 +985,44 @@
                 snapshot.forEach(doc => {
                     inventoryCache.push({ id: doc.id, ...doc.data() });
                 });
+                this.reconcileCartWithLiveInventory();
                 this.filterProducts(document.getElementById('pos-search')?.value || '', { resetPage: false });
             }, err => {
                 console.error('POS inventory subscription error:', err);
             });
+        },
+
+        reconcileCartWithLiveInventory: function () {
+            if (!cart.length) return;
+            const nextCart = [];
+            let changed = false;
+
+            cart.forEach(item => {
+                const product = inventoryCache.find(entry => entry.id === item.id);
+                const sellable = product ? this.getSellableQuantity(product) : 0;
+                if (!product || sellable <= 0) {
+                    changed = true;
+                    return;
+                }
+
+                const oldQty = this.getLineQuantity(item);
+                const nextQty = Math.min(oldQty, sellable);
+                if (nextQty !== oldQty || item.maxQty !== sellable) changed = true;
+                item.qty = nextQty;
+                item.maxQty = sellable;
+                try {
+                    this.refreshCartItemBatchPricing(item, product);
+                    nextCart.push(item);
+                } catch (err) {
+                    changed = true;
+                }
+            });
+
+            cart = nextCart;
+            if (changed) {
+                this.renderCart();
+                this.showToast('Cart updated to match live sellable stock.', 'error');
+            }
         },
 
         subscribeToCustomers: function (businessId) {
@@ -1040,7 +1087,7 @@
                     const matchCat = (p.category || '').toLowerCase().includes(q);
                     if (!matchName && !matchGeneric && !matchSku && !matchCat) return false;
                 }
-                if (filter === 'in-stock') return (p.quantity || 0) > 0;
+                if (filter === 'in-stock') return this.getSellableQuantity(p) > 0;
                 if (filter === 'otc') return p.drugType === 'OTC';
                 if (filter === 'pom') return p.drugType === 'POM';
                 return true;
@@ -1739,10 +1786,15 @@
 
                 const inventoryCol = getBusinessCollection(businessId, 'inventory');
                 const salesCol = getBusinessCollection(businessId, 'sales');
+                const historyCol = getBusinessCollection(businessId, 'stock_history');
                 const saleRef = salesCol.doc(saleId);
 
                 await window.db.runTransaction(async (transaction) => {
                     const stockUpdates = [];
+                    const saleSnapshot = await transaction.get(saleRef);
+                    if (saleSnapshot.exists) {
+                        throw new Error('Sale number collision detected. Please retry checkout.');
+                    }
 
                     for (const item of cart) {
                         const itemQty = this.getLineQuantity(item);
@@ -1759,14 +1811,16 @@
                             throw new Error('Only ' + sellableQty + ' unexpired unit(s) left for ' + (product.name || item.name));
                         }
 
-                        const nextQty = currentQty - itemQty;
                         const reduction = this.reduceStockBatchesWithAllocations(product, itemQty);
+                        const nextQty = reduction.quantityAfter != null ? reduction.quantityAfter : (currentQty - itemQty);
                         const nextBatches = reduction.updatedBatches;
-                        const primaryBatch = this.getPrimaryBatchAfterSale(nextBatches);
+                        const primaryBatch = reduction.primaryBatch || this.getPrimaryBatchAfterSale(nextBatches);
                         const saleLine = saleData.items.find(line => line.productId === item.id);
                         if (saleLine) {
-                            saleLine.stockBefore = currentQty;
-                            saleLine.stockAfter = nextQty;
+                            saleLine.stockBefore = sellableQty;
+                            saleLine.stockAfter = reduction.sellableAfter != null
+                                ? reduction.sellableAfter
+                                : Math.max(0, sellableQty - itemQty);
                             saleLine.batchAllocations = reduction.allocations;
                             saleLine.buyingPrice = this.getWeightedBatchValue(reduction.allocations, 'buyingPrice');
                             saleLine.unitPrice = this.getWeightedBatchValue(reduction.allocations, 'sellingPrice');
@@ -1782,6 +1836,21 @@
 
                         stockUpdates.push({
                             ref: ref,
+                            historyRef: historyCol.doc(),
+                            historyData: {
+                                productId: item.id,
+                                productName: product.name || item.name || '',
+                                sku: product.sku || item.sku || '',
+                                category: product.category || item.category || '',
+                                type: 'pos_sale',
+                                saleId: saleId,
+                                previousQty: currentQty,
+                                removedQty: itemQty,
+                                newQty: nextQty,
+                                batchAllocations: reduction.allocations,
+                                addedBy: saleData.soldBy,
+                                createdAt: saleData.createdAt
+                            },
                             data: {
                                 quantity: nextQty,
                                 stockBatches: nextBatches,
@@ -1792,14 +1861,47 @@
                         });
                     }
 
+                    const authoritativeBaseSubtotal = this.roundMoney(
+                        saleData.items.reduce((sum, line) => sum + (parseFloat(line.lineBaseTotal) || 0), 0)
+                    );
+                    const authoritativeProductVat = this.roundMoney(
+                        saleData.items.reduce((sum, line) => sum + (parseFloat(line.productVatAmount) || 0), 0)
+                    );
+                    const authoritativeGross = this.roundMoney(authoritativeBaseSubtotal + authoritativeProductVat);
+                    const authoritativeDiscount = saleData.discountType === 'percent'
+                        ? this.roundMoney(authoritativeGross * (Math.min(parseFloat(saleData.discountValue) || 0, 100) / 100))
+                        : this.roundMoney(Math.min(parseFloat(saleData.discountValue) || 0, authoritativeGross));
+                    const authoritativeNet = this.roundMoney(Math.max(authoritativeGross - authoritativeDiscount, 0));
+                    const authoritativeVat = saleData.vatEnabled
+                        ? (saleData.vatType === 'percent'
+                            ? this.roundMoney(authoritativeNet * (Math.min(parseFloat(saleData.vatValue) || 0, 100) / 100))
+                            : this.roundMoney(Math.min(parseFloat(saleData.vatValue) || 0, authoritativeNet)))
+                        : 0;
+                    const authoritativeTotal = this.roundMoney(
+                        authoritativeNet + (parseFloat(saleData.dispensingFee) || 0) + authoritativeVat
+                    );
+                    if (Math.abs(authoritativeTotal - totals.total) > 0.02) {
+                        throw new Error('Stock pricing changed during checkout. Remove and re-add the affected item, then retry.');
+                    }
+                    saleData.subtotal = authoritativeBaseSubtotal;
+                    saleData.productVatTotal = authoritativeProductVat;
+                    saleData.grossSubtotal = authoritativeGross;
+                    saleData.discountAmount = authoritativeDiscount;
+                    saleData.netTotal = authoritativeNet;
+                    saleData.vatAmount = authoritativeVat;
+                    saleData.total = authoritativeTotal;
+
                     totalProfit = this.roundMoney(
                         saleData.items.reduce((sum, line) => sum + (parseFloat(line.profit) || 0), 0)
-                        - totals.discountAmount
-                        + totals.dispensingFee
+                        - authoritativeDiscount
+                        + saleData.dispensingFee
                     );
                     saleData.totalProfit = totalProfit;
                     transaction.set(saleRef, saleData);
-                    stockUpdates.forEach(update => transaction.update(update.ref, update.data));
+                    stockUpdates.forEach(update => {
+                        transaction.update(update.ref, update.data);
+                        transaction.set(update.historyRef, update.historyData);
+                    });
                 });
 
                 // Record DDA sales in DDA register after the sale + stock transaction commits.

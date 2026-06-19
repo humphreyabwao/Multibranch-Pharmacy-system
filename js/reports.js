@@ -42,10 +42,15 @@
             return d instanceof Date ? d : null;
         },
         _inventoryBatchValue(item, field) {
-            const productQty = Math.max(0, parseInt(item && item.quantity, 10) || 0);
+            const engine = PharmaFlow.InventoryBatchEngine;
+            const productQty = engine
+                ? engine.sellableQuantity(item)
+                : Math.max(0, parseInt(item && item.quantity, 10) || 0);
             if (!productQty) return 0;
             const fallback = parseFloat(item && item[field]) || 0;
-            const batches = Array.isArray(item && item.stockBatches) ? item.stockBatches : [];
+            const batches = engine
+                ? engine.sellableBatches(item)
+                : (Array.isArray(item && item.stockBatches) ? item.stockBatches : []);
             if (!batches.length) return productQty * fallback;
 
             let assigned = 0;
@@ -60,6 +65,11 @@
             });
             if (assigned < productQty) value += (productQty - assigned) * fallback;
             return value;
+        },
+        _sellableQty(item) {
+            return PharmaFlow.InventoryBatchEngine
+                ? PharmaFlow.InventoryBatchEngine.sellableQuantity(item)
+                : Math.max(0, parseInt(item && item.quantity, 10) || 0);
         },
         _salePaymentLabel(s) {
             if (s.paymentMethod === 'split' && Array.isArray(s.paymentSplits) && s.paymentSplits.length) {
@@ -426,7 +436,7 @@
             let lowStock = 0;
             let expiringSoon = 0;
             inv.forEach(p => {
-                const qty = p.quantity || 0;
+                const qty = this._sellableQty(p);
                 const price = p.sellingPrice || 0;
                 const reorderLevel = p.reorderLevel || 10;
                 totalValue += qty * price;
@@ -711,7 +721,7 @@
             const totalCostValue = inv.reduce((s, i) => s + this._inventoryBatchValue(i, 'buyingPrice'), 0);
             const totalRetailValue = stats.totalValue;
 
-            const outOfStock = inv.filter(i => (i.quantity || 0) <= 0);
+            const outOfStock = inv.filter(i => this._sellableQty(i) <= 0);
             const expiring = inv.filter(i => this._invIsExpiringSoon(i));
             const expired = inv.filter(i => this._invIsExpired(i));
 
@@ -722,7 +732,7 @@
                 if (!catMap[cat]) catMap[cat] = { count: 0, value: 0, qty: 0 };
                 catMap[cat].count++;
                 catMap[cat].value += this._inventoryBatchValue(i, 'sellingPrice');
-                catMap[cat].qty += (i.quantity || 0);
+                catMap[cat].qty += this._sellableQty(i);
             });
             const catArr = Object.entries(catMap).sort((a, b) => b[1].value - a[1].value);
             const maxCatVal = catArr.length ? catArr[0][1].value : 1;
@@ -788,7 +798,7 @@
                     <tbody>${expiring.map(i => {
                         const expD = this._dateObj(i.expiryDate);
                         const expLabel = expD && !isNaN(expD.getTime()) ? expD.toLocaleDateString('en-KE') : String(i.expiryDate || '-');
-                        return `<tr><td>${this._esc(i.name)}</td><td>${this._esc(i.sku || '-')}</td><td>${this._esc(i.batchNumber || '-')}</td><td>${i.quantity || 0}</td><td><span class="rpt-badge-warn">${this._esc(expLabel)}</span></td><td>${this._fc(this._inventoryBatchValue(i, 'sellingPrice'))}</td></tr>`;
+                        return `<tr><td>${this._esc(i.name)}</td><td>${this._esc(i.sku || '-')}</td><td>${this._esc(i.batchNumber || '-')}</td><td>${this._sellableQty(i)}</td><td><span class="rpt-badge-warn">${this._esc(expLabel)}</span></td><td>${this._fc(this._inventoryBatchValue(i, 'sellingPrice'))}</td></tr>`;
                     }).join('')}</tbody>
                 </table></div>
             </div>` : ''}`;
@@ -1008,7 +1018,7 @@
                     title = 'Inventory Report';
                     headers = ['Name', 'SKU', 'Category', 'Drug Type', 'Qty', 'Buy Price', 'Sell Price', 'Cost Value', 'Retail Value', 'Expiry'];
                     rows = rptInventory.map(i => {
-                        const qty = i.quantity || 0;
+                        const qty = this._sellableQty(i);
                         const buy = i.buyingPrice || 0;
                         const sell = i.sellingPrice || 0;
                         const expRaw = i.expiryDate;
@@ -1602,7 +1612,7 @@
 
         _exportInventoryReport(items, label) {
             const headers = ['Name', 'SKU', 'Category', 'Qty', 'Reorder Level', 'Buy Price', 'Sell Price'];
-            const rows = items.map(i => [i.name || '-', i.sku || '-', i.category || '-', i.quantity || 0, i.reorderLevel || '-', i.buyingPrice || 0, i.sellingPrice || 0]);
+            const rows = items.map(i => [i.name || '-', i.sku || '-', i.category || '-', this._sellableQty(i), i.reorderLevel || '-', i.buyingPrice || 0, i.sellingPrice || 0]);
             this._exportPDF(`Inventory - ${label}`, headers, rows, this._today(), this._today());
         },
 

@@ -71,6 +71,9 @@
         },
 
         getBatches: function (product) {
+            if (PharmaFlow.InventoryBatchEngine) {
+                return PharmaFlow.InventoryBatchEngine.normalize(product);
+            }
             if (Array.isArray(product && product.stockBatches) && product.stockBatches.length) {
                 return product.stockBatches.map(batch => ({
                     ...batch,
@@ -107,6 +110,9 @@
         },
 
         getPrimaryBatch: function (batches) {
+            if (PharmaFlow.InventoryBatchEngine) {
+                return PharmaFlow.InventoryBatchEngine.primaryBatch(batches);
+            }
             const available = (batches || [])
                 .filter(batch => (parseInt(batch.quantity, 10) || 0) > 0)
                 .sort((a, b) => {

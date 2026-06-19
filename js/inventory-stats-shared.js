@@ -22,10 +22,11 @@
         var expiringSoon = 0;
 
         function batchPricedValue(p, field) {
-            var productQty = Math.max(0, parseInt(p.quantity, 10) || 0);
+            var engine = window.PharmaFlow && window.PharmaFlow.InventoryBatchEngine;
+            var productQty = engine ? engine.sellableQuantity(p) : Math.max(0, parseInt(p.quantity, 10) || 0);
             if (!productQty) return 0;
             var fallback = parseFloat(p[field]) || 0;
-            var batches = Array.isArray(p.stockBatches) ? p.stockBatches : [];
+            var batches = engine ? engine.sellableBatches(p) : (Array.isArray(p.stockBatches) ? p.stockBatches : []);
             if (!batches.length) return productQty * fallback;
 
             var assigned = 0;
@@ -43,7 +44,8 @@
         }
 
         list.forEach(function (p) {
-            var qty = p.quantity || 0;
+            var engine = window.PharmaFlow && window.PharmaFlow.InventoryBatchEngine;
+            var qty = engine ? engine.sellableQuantity(p) : (p.quantity || 0);
             var reorderLevel = p.reorderLevel || 10;
 
             totalValue += batchPricedValue(p, 'sellingPrice');
@@ -51,10 +53,17 @@
             if (qty <= 0) outOfStock++;
             else if (qty <= reorderLevel) lowStock++;
 
-            if (p.expiryDate) {
+            var batches = engine ? engine.sellableBatches(p) : [];
+            var hasExpiringBatch = batches.some(function (batch) {
+                if (!batch.expiryDate) return false;
+                var exp = batch.expiryDate.toDate ? batch.expiryDate.toDate() : new Date(batch.expiryDate);
+                return exp <= thirtyDays && exp > now;
+            });
+            if (!engine && p.expiryDate) {
                 var exp = p.expiryDate.toDate ? p.expiryDate.toDate() : new Date(p.expiryDate);
-                if (exp <= thirtyDays && exp > now) expiringSoon++;
+                hasExpiringBatch = exp <= thirtyDays && exp > now;
             }
+            if (hasExpiringBatch) expiringSoon++;
         });
 
         return {
