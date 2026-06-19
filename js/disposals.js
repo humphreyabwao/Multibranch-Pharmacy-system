@@ -13,6 +13,8 @@
     let disposals = [];
     let syncPromise = null;
     let lastSyncAt = 0;
+    let historyPage = 1;
+    let historyPageSize = 25;
 
     const Disposals = {
         cleanup: function () {
@@ -20,6 +22,7 @@
             if (disposalsUnsub) { disposalsUnsub(); disposalsUnsub = null; }
             inventory = [];
             disposals = [];
+            historyPage = 1;
         },
 
         getBusinessId: function () {
@@ -66,6 +69,9 @@
         },
 
         isExpired: function (value) {
+            if (PharmaFlow.InventoryBatchEngine) {
+                return PharmaFlow.InventoryBatchEngine.isExpired(value);
+            }
             const date = this.toDate(value);
             return !!date && date.getTime() <= Date.now();
         },
@@ -294,17 +300,48 @@
 
         renderHistory: function (container) {
             this.cleanup();
+            historyPage = 1;
             container.innerHTML = this.shellHtml('Disposal History', 'Completed and pending disposal audit trail', `
                 <div class="dsp-toolbar">
                     <div class="dsp-search"><i class="fas fa-search"></i><input id="dsp-history-search" placeholder="Search disposal history"></div>
                     <select id="dsp-history-status"><option value="">All statuses</option><option value="pending">Pending</option><option value="disposed">Disposed</option></select>
                     <select id="dsp-history-reason"><option value="">All reasons</option><option value="expired">Expired</option><option value="broken">Broken</option><option value="damaged">Damaged</option><option value="contaminated">Contaminated</option><option value="recalled">Recalled</option><option value="spillage">Spillage</option><option value="other">Other</option></select>
+                    <div class="dsp-export-actions">
+                        <button class="btn btn-outline" id="dsp-export-excel"><i class="fas fa-file-excel"></i> Excel</button>
+                        <button class="btn btn-outline" id="dsp-export-pdf"><i class="fas fa-file-pdf"></i> PDF</button>
+                    </div>
                 </div>
-                <div class="dsp-card"><div class="dsp-table-wrap">${this.tableHtml('dsp-history-body')}</div></div>
+                <div class="dsp-card">
+                    <div class="dsp-table-wrap">${this.tableHtml('dsp-history-body')}</div>
+                    <div class="dsp-pagination">
+                        <div class="dsp-pagination-info" id="dsp-history-info">Showing 0 records</div>
+                        <div class="dsp-pagination-right">
+                            <label>Rows
+                                <select id="dsp-history-page-size">
+                                    <option value="10">10</option>
+                                    <option value="25" selected>25</option>
+                                    <option value="50">50</option>
+                                    <option value="100">100</option>
+                                </select>
+                            </label>
+                            <div class="dsp-page-controls" id="dsp-history-pages"></div>
+                        </div>
+                    </div>
+                </div>
             `);
             ['dsp-history-search', 'dsp-history-status', 'dsp-history-reason'].forEach(id => {
-                document.getElementById(id)?.addEventListener(id.includes('search') ? 'input' : 'change', () => this.renderHistoryRows());
+                document.getElementById(id)?.addEventListener(id.includes('search') ? 'input' : 'change', () => {
+                    historyPage = 1;
+                    this.renderHistoryRows();
+                });
             });
+            document.getElementById('dsp-history-page-size')?.addEventListener('change', event => {
+                historyPageSize = Math.max(10, parseInt(event.target.value, 10) || 25);
+                historyPage = 1;
+                this.renderHistoryRows();
+            });
+            document.getElementById('dsp-export-excel')?.addEventListener('click', () => this.exportHistoryExcel());
+            document.getElementById('dsp-export-pdf')?.addEventListener('click', () => this.exportHistoryPdf());
             this.subscribe(false);
         },
 
@@ -627,7 +664,112 @@
         },
 
         renderHistoryRows: function () {
-            this.renderRows('dsp-history-body', this.filteredRows(false), false);
+            const rows = this.filteredRows(false);
+            const totalPages = Math.max(1, Math.ceil(rows.length / historyPageSize));
+            historyPage = Math.min(Math.max(1, historyPage), totalPages);
+            const start = (historyPage - 1) * historyPageSize;
+            const pageRows = rows.slice(start, start + historyPageSize);
+            this.renderRows('dsp-history-body', pageRows, false);
+            this.renderHistoryPagination(rows.length, totalPages, start, pageRows.length);
+        },
+
+        renderHistoryPagination: function (total, totalPages, start, visibleCount) {
+            const info = document.getElementById('dsp-history-info');
+            const controls = document.getElementById('dsp-history-pages');
+            if (info) {
+                info.textContent = total
+                    ? 'Showing ' + (start + 1) + '–' + (start + visibleCount) + ' of ' + total + ' records'
+                    : 'Showing 0 records';
+            }
+            if (!controls) return;
+
+            const pages = [];
+            for (let page = 1; page <= totalPages; page++) {
+                if (page === 1 || page === totalPages || Math.abs(page - historyPage) <= 1) pages.push(page);
+            }
+            let previous = 0;
+            const pageButtons = pages.map(page => {
+                const gap = previous && page - previous > 1 ? '<span class="dsp-page-dots">…</span>' : '';
+                previous = page;
+                return gap + `<button type="button" class="dsp-page-btn ${page === historyPage ? 'active' : ''}" data-dsp-page="${page}" ${page === historyPage ? 'aria-current="page"' : ''}>${page}</button>`;
+            }).join('');
+
+            controls.innerHTML = `
+                <button type="button" class="dsp-page-btn" data-dsp-page="${historyPage - 1}" ${historyPage <= 1 ? 'disabled' : ''} aria-label="Previous page"><i class="fas fa-chevron-left"></i></button>
+                ${pageButtons}
+                <button type="button" class="dsp-page-btn" data-dsp-page="${historyPage + 1}" ${historyPage >= totalPages ? 'disabled' : ''} aria-label="Next page"><i class="fas fa-chevron-right"></i></button>
+            `;
+            controls.querySelectorAll('[data-dsp-page]').forEach(button => {
+                button.addEventListener('click', () => {
+                    if (button.disabled) return;
+                    historyPage = parseInt(button.dataset.dspPage, 10) || 1;
+                    this.renderHistoryRows();
+                    document.querySelector('.dsp-table-wrap')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                });
+            });
+        },
+
+        getHistoryExportRows: function () {
+            return this.filteredRows(false).map(item => ({
+                Product: item.productName || 'Product',
+                SKU: item.sku || '',
+                Batch: item.batchNumber || '',
+                Reason: (item.reason || 'other').replace(/_/g, ' '),
+                Quantity: parseInt(item.quantity, 10) || 0,
+                'Loss Value': parseFloat(item.lossValue) || 0,
+                Expiry: this.formatDate(item.expiryDate),
+                Status: item.status || 'pending',
+                'Recorded By': item.recordedBy || '',
+                'Disposed By': item.disposedBy || '',
+                'Disposed By Email': item.disposedByEmail || '',
+                'Disposal Method': (item.disposalMethod || '').replace(/_/g, ' '),
+                'Disposal Date': item.disposalDate || this.formatDate(item.disposedAt),
+                Notes: item.disposalNotes || item.notes || ''
+            }));
+        },
+
+        exportHistoryExcel: function () {
+            const rows = this.getHistoryExportRows();
+            if (!rows.length) return this.showToast('No disposal records match the current filters.', 'error');
+            if (typeof XLSX === 'undefined') return this.showToast('Excel export library is unavailable.', 'error');
+
+            const sheet = XLSX.utils.json_to_sheet(rows);
+            sheet['!cols'] = Object.keys(rows[0]).map(key => ({
+                wch: Math.min(40, Math.max(key.length + 2, ...rows.slice(0, 100).map(row => String(row[key] ?? '').length + 2)))
+            }));
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, sheet, 'Disposal History');
+            XLSX.writeFile(workbook, 'Disposal_History_' + new Date().toISOString().slice(0, 10) + '.xlsx');
+            this.showToast('Disposal history exported to Excel.');
+        },
+
+        exportHistoryPdf: function () {
+            const rows = this.getHistoryExportRows();
+            if (!rows.length) return this.showToast('No disposal records match the current filters.', 'error');
+            if (!window.jspdf?.jsPDF) return this.showToast('PDF export library is unavailable.', 'error');
+
+            const doc = new window.jspdf.jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+            const businessName = PharmaFlow.Settings?.getBusinessName?.() || 'PharmaFlow';
+            const totalLoss = rows.reduce((sum, row) => sum + (parseFloat(row['Loss Value']) || 0), 0);
+            doc.setFontSize(16);
+            doc.text(businessName + ' — Disposal History', 14, 14);
+            doc.setFontSize(9);
+            doc.text('Generated: ' + new Date().toLocaleString('en-KE') + '  |  Records: ' + rows.length + '  |  Total loss: ' + this.formatCurrency(totalLoss), 14, 20);
+            doc.autoTable({
+                startY: 25,
+                head: [['Product', 'SKU', 'Batch', 'Reason', 'Qty', 'Loss', 'Expiry', 'Status', 'Disposed By', 'Method', 'Disposal Date']],
+                body: rows.map(row => [
+                    row.Product, row.SKU, row.Batch, row.Reason, row.Quantity,
+                    this.formatCurrency(row['Loss Value']), row.Expiry, row.Status,
+                    row['Disposed By'] || '—', row['Disposal Method'] || '—', row['Disposal Date'] || '—'
+                ]),
+                styles: { fontSize: 7, cellPadding: 2 },
+                headStyles: { fillColor: [30, 64, 175] },
+                alternateRowStyles: { fillColor: [245, 247, 250] },
+                margin: { left: 10, right: 10 }
+            });
+            doc.save('Disposal_History_' + new Date().toISOString().slice(0, 10) + '.pdf');
+            this.showToast('Disposal history exported to PDF.');
         },
 
         renderRows: function (bodyId, rows, pendingView) {

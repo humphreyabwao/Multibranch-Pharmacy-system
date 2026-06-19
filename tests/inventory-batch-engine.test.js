@@ -69,6 +69,40 @@ function product(batches) {
     assert.strictEqual(result.primaryBatch.batchNumber, 'A');
 }
 
+// Receiving stock preserves all existing physical batches even when the legacy product total drifted.
+{
+    const result = engine.appendBatch({
+        quantity: 1,
+        stockBatches: [
+            { batchNumber: 'A', quantity: 1, expiryDate: future },
+            { batchNumber: 'B', quantity: 1, expiryDate: later }
+        ]
+    }, { batchNumber: 'C', quantity: 2, expiryDate: later });
+    assert.strictEqual(result.quantityAfter, 4);
+    assert.strictEqual(result.updatedBatches.reduce((sum, batch) => sum + batch.quantity, 0), 4);
+}
+
+// An expiry date remains valid through the end of that calendar day.
+{
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const midday = new Date(today);
+    midday.setHours(12, 0, 0, 0);
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    assert.strictEqual(engine.isExpired(today, midday.getTime()), false);
+    assert.strictEqual(engine.isExpired(yesterday, midday.getTime()), true);
+}
+
+// Newly received batches cannot already be expired.
+{
+    assert.throws(() => engine.appendBatch({ quantity: 0, stockBatches: [] }, {
+        batchNumber: 'PAST',
+        quantity: 1,
+        expiryDate: expired
+    }), /already expired/);
+}
+
 // Receiving the exact same physical batch merges instead of duplicating it.
 {
     const result = engine.appendBatch(product([
@@ -103,6 +137,18 @@ function product(batches) {
     }]);
     assert.strictEqual(restored.quantityAfter, 3);
     assert.strictEqual(restored.updatedBatches[0].quantity, 3);
+}
+
+// Restoring a cancelled sale also preserves pre-existing batches when totals had drifted.
+{
+    const restored = engine.restore({
+        quantity: 1,
+        stockBatches: [
+            { batchNumber: 'A', quantity: 1, expiryDate: future },
+            { batchNumber: 'B', quantity: 1, expiryDate: later }
+        ]
+    }, [{ batchNumber: 'C', quantity: 1, expiryDate: later }]);
+    assert.strictEqual(restored.quantityAfter, 3);
 }
 
 // Sellable stock is conservative when legacy product and batch totals disagree.

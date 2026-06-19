@@ -22,6 +22,11 @@
     let reconciliationSales = [];
     let reconciliationStockHistory = [];
     let unsubBatchTracker = null;
+    let lastInventorySyncAt = 0;
+    let lastServerRefreshAt = 0;
+    let refreshPromise = null;
+    let lastExpiryScanAt = 0;
+    let inventorySnapshotReady = false;
 
     // Pagination state
     let currentPage = 1;
@@ -85,6 +90,17 @@
             return PharmaFlow.InventoryBatchEngine
                 ? PharmaFlow.InventoryBatchEngine.sellableQuantity(product)
                 : Math.max(0, parseInt(product?.quantity, 10) || 0);
+        },
+
+        getSellableExpiry: function (product) {
+            if (!product || this.getSellableQuantity(product) <= 0) return null;
+
+            if (PharmaFlow.InventoryBatchEngine) {
+                const nextBatch = PharmaFlow.InventoryBatchEngine.sellableBatches(product)[0];
+                return nextBatch?.expiryDate || null;
+            }
+
+            return product.expiryDate || null;
         },
 
         getPrimaryExpiryFromBatches: function (batches) {
@@ -339,7 +355,7 @@
                             </div>
                         </div>
                         <div class="page-header-right">
-                            <button class="btn btn-sm btn-outline inv-refresh-btn" id="inv-refresh-btn" title="Force refresh inventory from server">
+                            <button class="btn btn-sm btn-outline inv-refresh-btn" id="inv-refresh-btn" title="Refresh instantly; server check runs only when needed">
                                 <i class="fas fa-arrows-rotate"></i> Refresh
                             </button>
                             <button class="btn btn-sm btn-outline" id="inv-export-btn">
@@ -447,8 +463,8 @@
                                         <th>Category</th>
                                         <th>Drug Type</th>
                                         <th>Batch No.</th>
-                                        <th>Clean Qty</th>
-                                        <th>Broken / Quarantined</th>
+                                        <th>QTY</th>
+                                        <th>Quarantined</th>
                                         <th>Buying Price</th>
                                         <th>Selling Price</th>
                                         <th>VAT</th>
@@ -571,11 +587,11 @@
             const products = [];
             if (snapshot && typeof snapshot.forEach === 'function') {
                 snapshot.forEach(doc => {
-                    products.push({ id: doc.id, ...doc.data() });
+                    products.push({ id: doc.id, ...doc.data(), _documentRef: doc.ref });
                 });
             } else if (snapshot && Array.isArray(snapshot.docs)) {
                 snapshot.docs.forEach(doc => {
-                    products.push({ id: doc.id, ...doc.data() });
+                    products.push({ id: doc.id, ...doc.data(), _documentRef: doc.ref });
                 });
             }
 
@@ -586,14 +602,61 @@
             return products.length;
         },
 
+        applyLocalInventoryPatches: function (patches, source) {
+            if (!Array.isArray(patches) || !patches.length) return 0;
+            let changed = 0;
+            patches.forEach(patch => {
+                if (!patch || !patch.id) return;
+                const index = allProducts.findIndex(product => product.id === patch.id);
+                if (patch.deleted) {
+                    if (index >= 0) {
+                        allProducts.splice(index, 1);
+                        changed++;
+                    }
+                } else if (index >= 0) {
+                    allProducts[index] = { ...allProducts[index], ...(patch.data || {}), id: patch.id };
+                    changed++;
+                } else if (patch.data) {
+                    allProducts.push({ id: patch.id, ...patch.data });
+                    changed++;
+                }
+            });
+            if (changed && document.getElementById('inv-table-body')) {
+                this.updateStats();
+                this.populateCategories();
+                this.applyFilters();
+                const time = new Date().toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
+                this.setRefreshState('ready', (source || 'Inventory') + ' synced instantly • ' + time);
+            }
+            return changed;
+        },
+
         refreshInventoryData: async function (businessId, options) {
             if (!businessId) return;
             const colRef = getBusinessCollection(businessId, 'inventory');
             if (!colRef || typeof colRef.get !== 'function') return;
 
             const forceServer = options && options.forceServer;
+            const now = Date.now();
+            const listenerIsFresh = lastInventorySyncAt && now - lastInventorySyncAt < 15000;
+            const serverRefreshCoolingDown = lastServerRefreshAt && now - lastServerRefreshAt < 30000;
+
+            if (allProducts.length) {
+                this.updateStats();
+                this.populateCategories();
+                this.applyFilters();
+            }
+            if (listenerIsFresh || (forceServer && serverRefreshCoolingDown)) {
+                const time = new Date(lastInventorySyncAt || now).toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
+                this.setRefreshState('ready', 'Inventory is current • live update ' + time);
+                this.showToast('Inventory is already up to date.');
+                return allProducts.length;
+            }
+            if (refreshPromise) return refreshPromise;
+            if (forceServer) lastServerRefreshAt = now;
             this.setRefreshState('loading', 'Refreshing inventory from server...');
 
+            refreshPromise = (async () => {
             try {
                 let snapshot;
                 try {
@@ -604,6 +667,7 @@
                 }
 
                 const count = this.applyInventorySnapshot(snapshot);
+                lastInventorySyncAt = Date.now();
                 const time = new Date().toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
                 this.setRefreshState('ready', 'Inventory refreshed at ' + time + ' • ' + count + ' products loaded');
                 this.showToast('Inventory refreshed.');
@@ -611,7 +675,12 @@
                 console.error('Inventory refresh error:', err);
                 this.setRefreshState('error', 'Refresh failed. Live sync is still active.');
                 this.showToast('Failed to refresh inventory.', 'error');
+                return allProducts.length;
+            } finally {
+                refreshPromise = null;
             }
+            })();
+            return refreshPromise;
         },
 
         subscribeToInventory: function (businessId) {
@@ -623,23 +692,27 @@
 
             const colRef = getBusinessCollection(businessId, 'inventory');
             if (!colRef) return;
+            inventorySnapshotReady = false;
+            lastInventorySyncAt = 0;
 
             unsubInventory = colRef.onSnapshot(
                 (snapshot) => {
+                    lastInventorySyncAt = Date.now();
                     // Use docChanges for incremental updates (much faster)
-                    if (allProducts.length === 0) {
+                    if (!inventorySnapshotReady) {
                         // First load — build array directly
                         this.applyInventorySnapshot(snapshot);
+                        inventorySnapshotReady = true;
                     } else {
                         // Incremental update
                         snapshot.docChanges().forEach(change => {
                             if (change.type === 'added') {
                                 if (!allProducts.find(p => p.id === change.doc.id)) {
-                                    allProducts.push({ id: change.doc.id, ...change.doc.data() });
+                                    allProducts.push({ id: change.doc.id, ...change.doc.data(), _documentRef: change.doc.ref });
                                 }
                             } else if (change.type === 'modified') {
                                 const idx = allProducts.findIndex(p => p.id === change.doc.id);
-                                if (idx >= 0) allProducts[idx] = { id: change.doc.id, ...change.doc.data() };
+                                if (idx >= 0) allProducts[idx] = { id: change.doc.id, ...change.doc.data(), _documentRef: change.doc.ref };
                             } else if (change.type === 'removed') {
                                 allProducts = allProducts.filter(p => p.id !== change.doc.id);
                             }
@@ -653,7 +726,9 @@
                         const time = new Date().toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
                         text.textContent = 'Live inventory sync active • updated ' + time;
                     }
-                    if (PharmaFlow.Disposals) {
+                    const shouldScanExpiry = !lastExpiryScanAt || Date.now() - lastExpiryScanAt >= 15 * 60 * 1000;
+                    if (PharmaFlow.Disposals && shouldScanExpiry) {
+                        lastExpiryScanAt = Date.now();
                         PharmaFlow.Disposals.syncExpiredInventory(businessId).catch(err => {
                             console.error('Automatic expired stock sync failed:', err);
                         });
@@ -1099,10 +1174,7 @@
             const now = new Date();
 
             if (qty <= 0) return 'out-of-stock';
-            const nextBatch = PharmaFlow.InventoryBatchEngine
-                ? PharmaFlow.InventoryBatchEngine.sellableBatches(product)[0]
-                : null;
-            const nextExpiry = nextBatch?.expiryDate || product.expiryDate;
+            const nextExpiry = this.getSellableExpiry(product);
             if (nextExpiry) {
                 const exp = nextExpiry.toDate ? nextExpiry.toDate() : new Date(nextExpiry);
                 const thirtyDays = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
@@ -1151,8 +1223,10 @@
                     case 'price-asc': return (a.sellingPrice || 0) - (b.sellingPrice || 0);
                     case 'price-desc': return (b.sellingPrice || 0) - (a.sellingPrice || 0);
                     case 'expiry-asc':
-                        const ea = a.expiryDate ? (a.expiryDate.toDate ? a.expiryDate.toDate() : new Date(a.expiryDate)) : new Date('9999-12-31');
-                        const eb = b.expiryDate ? (b.expiryDate.toDate ? b.expiryDate.toDate() : new Date(b.expiryDate)) : new Date('9999-12-31');
+                        const expiryA = this.getSellableExpiry(a);
+                        const expiryB = this.getSellableExpiry(b);
+                        const ea = expiryA ? (expiryA.toDate ? expiryA.toDate() : new Date(expiryA)) : new Date('9999-12-31');
+                        const eb = expiryB ? (expiryB.toDate ? expiryB.toDate() : new Date(expiryB)) : new Date('9999-12-31');
                         return ea - eb;
                     default: return 0;
                 }
@@ -1199,6 +1273,7 @@
 
             tbody.innerHTML = pageProducts.map(p => {
                 const status = this.getProductStatus(p);
+                const sellableExpiry = this.getSellableExpiry(p);
                 const quarantine = quarantinedByProduct[p.id] || { total: 0, broken: 0, expired: 0, other: 0 };
                 const statusLabel = {
                     'in-stock': 'In Stock',
@@ -1228,7 +1303,7 @@
                         <td>${this.escapeHtml(p.category || '—')}</td>
                         <td>${this.getDrugTypeBadge(p.drugType)}</td>
                         <td><code>${this.escapeHtml(this.getBatchLabel(p))}</code></td>
-                        <td class="inv-clean-qty ${this.getSellableQuantity(p) <= (p.reorderLevel || 10) ? 'inv-qty-warn' : ''}"><strong>${this.getSellableQuantity(p)}</strong><small>sellable</small></td>
+                        <td class="inv-clean-qty ${this.getSellableQuantity(p) <= (p.reorderLevel || 10) ? 'inv-qty-warn' : ''}"><strong>${this.getSellableQuantity(p)}</strong></td>
                         <td class="inv-quarantine-qty ${quarantine.total ? 'has-quarantine' : ''}">
                             <strong>${quarantine.total}</strong>
                             <small>${quarantine.broken ? quarantine.broken + ' broken' : ''}${quarantine.broken && quarantine.expired ? ' · ' : ''}${quarantine.expired ? quarantine.expired + ' expired' : ''}${!quarantine.broken && !quarantine.expired && quarantine.other ? quarantine.other + ' other' : (!quarantine.total ? 'none' : '')}</small>
@@ -1236,7 +1311,7 @@
                         <td>${this.formatCurrency(p.buyingPrice || 0)}</td>
                         <td>${this.formatCurrency(p.sellingPrice || 0)}</td>
                         <td>${this.getVatDisplay(p)}</td>
-                        <td>${this.formatDate(p.expiryDate)}</td>
+                        <td>${sellableExpiry ? this.formatDate(sellableExpiry) : '<span class="text-muted">—</span>'}</td>
                         <td><span class="status-badge ${statusClass}">${statusLabel}</span></td>
                         <td>
                             <div class="inv-actions">
@@ -1347,7 +1422,7 @@
                     sellingPrice: batch.sellingPrice != null ? parseFloat(batch.sellingPrice) || 0 : parseFloat(product.sellingPrice) || 0,
                     minimumSellPrice: batch.minimumSellPrice != null ? parseFloat(batch.minimumSellPrice) || 0 : parseFloat(product.minimumSellPrice) || parseFloat(product.buyingPrice) || 0
                 }))
-                .filter(batch => batch.quantity > 0 || batch.expiryDate || batch.batchNumber);
+                .filter(batch => batch.quantity > 0);
 
             return batches.sort((a, b) => {
                 const da = a.expiryDate ? (a.expiryDate.toDate ? a.expiryDate.toDate() : new Date(a.expiryDate)) : new Date('9999-12-31');
@@ -1401,8 +1476,8 @@
                     <td colspan="8" class="inv-empty-cell">
                         <div class="inv-empty">
                             <i class="fas fa-layer-group"></i>
-                            <p>No batch records found</p>
-                            <span>Add stock to start tracking this product by batch.</span>
+                            <p>No sellable batches</p>
+                            <span>Depleted, expired, damaged, quarantined, and disposed stock is excluded.</span>
                         </div>
                     </td>
                 </tr>
@@ -1495,17 +1570,23 @@
             modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
 
             const businessId = this.getBusinessId();
-            if (!businessId || !window.db) return;
+            if (!window.db) return;
 
             const body = document.getElementById('inv-batch-tracker-body');
-            const ref = getBusinessCollection(businessId, 'inventory').doc(productId);
+            const ref = product._documentRef ||
+                (businessId ? getBusinessCollection(businessId, 'inventory').doc(productId) : null);
+            if (!ref) return;
+
             unsubBatchTracker = ref.onSnapshot(snapshot => {
                 if (!body) return;
                 if (!snapshot.exists) {
-                    body.innerHTML = '<div class="inv-empty-cell">This product no longer exists.</div>';
+                    if (!body.querySelector('.inv-batch-sync-warning')) {
+                        body.insertAdjacentHTML('afterbegin',
+                            '<div class="alert alert-warning inv-batch-sync-warning"><i class="fas fa-triangle-exclamation"></i> Live batch sync is temporarily unavailable. Refresh Inventory and reopen the tracker.</div>');
+                    }
                     return;
                 }
-                const liveProduct = { id: snapshot.id, ...snapshot.data() };
+                const liveProduct = { id: snapshot.id, ...snapshot.data(), _documentRef: snapshot.ref };
                 body.innerHTML = this.renderBatchTrackerContent(liveProduct);
             }, err => {
                 console.error('Batch tracker listener error:', err);
@@ -1544,24 +1625,27 @@
         },
 
         exportExcel: function () {
-            const data = (filteredProducts.length ? filteredProducts : allProducts).map(p => ({
-                'SKU': p.sku || '',
-                'Brand / trade name': p.name || '',
-                'Generic name': p.genericName || '',
-                'Category': p.category || '',
-                'Drug Type': p.drugType || '',
-                'Batch Number': p.batchNumber || '',
-                'Quantity': this.getSellableQuantity(p),
-                'Buying Price': p.buyingPrice || 0,
-                'Selling Price': p.sellingPrice || 0,
-                'VAT': p.vatEnabled ? (p.vatType === 'amount' ? (p.vatValue || 0) : ((p.vatValue || 0) + '%')) : '',
-                'Expiry Date': p.expiryDate ? (p.expiryDate.toDate ? p.expiryDate.toDate() : new Date(p.expiryDate)).toISOString().split('T')[0] : '',
-                'Manufacturer': p.manufacturer || '',
-                'Supplier': p.supplier || '',
-                'Unit': p.unit || '',
-                'Reorder Level': p.reorderLevel || 0,
-                'Status': this.getProductStatus(p).replace(/-/g, ' ')
-            }));
+            const data = (filteredProducts.length ? filteredProducts : allProducts).map(p => {
+                const expiry = this.getSellableExpiry(p);
+                return {
+                    'SKU': p.sku || '',
+                    'Brand / trade name': p.name || '',
+                    'Generic name': p.genericName || '',
+                    'Category': p.category || '',
+                    'Drug Type': p.drugType || '',
+                    'Batch Number': this.getBatchLabel(p),
+                    'Quantity': this.getSellableQuantity(p),
+                    'Buying Price': p.buyingPrice || 0,
+                    'Selling Price': p.sellingPrice || 0,
+                    'VAT': p.vatEnabled ? (p.vatType === 'amount' ? (p.vatValue || 0) : ((p.vatValue || 0) + '%')) : '',
+                    'Expiry Date': expiry ? (expiry.toDate ? expiry.toDate() : new Date(expiry)).toISOString().split('T')[0] : '',
+                    'Manufacturer': p.manufacturer || '',
+                    'Supplier': p.supplier || '',
+                    'Unit': p.unit || '',
+                    'Reorder Level': p.reorderLevel || 0,
+                    'Status': this.getProductStatus(p).replace(/-/g, ' ')
+                };
+            });
 
             if (typeof XLSX === 'undefined') {
                 this.showToast('Excel library loading... try again in a moment.', 'error');
@@ -1599,20 +1683,23 @@
 
             const products = filteredProducts.length ? filteredProducts : allProducts;
             const headers = ['SKU', 'Brand', 'Generic', 'Category', 'Type', 'Batch', 'Qty', 'Buy Price', 'Sell Price', 'VAT', 'Expiry', 'Status'];
-            const rows = products.map(p => [
-                p.sku || '',
-                p.name || '',
-                p.genericName || '',
-                p.category || '',
-                p.drugType || '',
-                p.batchNumber || '',
-                String(this.getSellableQuantity(p)),
-                this.formatCurrency(p.buyingPrice || 0),
-                this.formatCurrency(p.sellingPrice || 0),
-                this.getVatDisplay(p),
-                p.expiryDate ? (p.expiryDate.toDate ? p.expiryDate.toDate() : new Date(p.expiryDate)).toISOString().split('T')[0] : '',
-                this.getProductStatus(p).replace(/-/g, ' ')
-            ]);
+            const rows = products.map(p => {
+                const expiry = this.getSellableExpiry(p);
+                return [
+                    p.sku || '',
+                    p.name || '',
+                    p.genericName || '',
+                    p.category || '',
+                    p.drugType || '',
+                    this.getBatchLabel(p),
+                    String(this.getSellableQuantity(p)),
+                    this.formatCurrency(p.buyingPrice || 0),
+                    this.formatCurrency(p.sellingPrice || 0),
+                    this.getVatDisplay(p),
+                    expiry ? (expiry.toDate ? expiry.toDate() : new Date(expiry)).toISOString().split('T')[0] : '',
+                    this.getProductStatus(p).replace(/-/g, ' ')
+                ];
+            });
 
             doc.autoTable({
                 head: [headers],
@@ -2147,7 +2234,9 @@
 
             let imported = 0;
             let failed = 0;
-            const BATCH_SIZE = 400;
+            // Each product uses two writes (inventory + stock history).
+            // Keep the combined batch below Firestore's 500-write limit.
+            const BATCH_SIZE = 200;
             const total = products.length;
 
             for (let i = 0; i < total; i += BATCH_SIZE) {
@@ -2155,38 +2244,26 @@
                 const batch = window.db.batch();
                 chunk.forEach(p => {
                     const ref = colRef.doc();
-                    p._importProductId = ref.id;
-                    const productData = Object.assign({}, p);
-                    delete productData._importProductId;
-                    batch.set(ref, productData);
+                    batch.set(ref, p);
+                    const historyRef = getBusinessCollection(businessId, 'stock_history').doc();
+                    batch.set(historyRef, {
+                        productId: ref.id,
+                        productName: p.name || '',
+                        sku: p.sku || '',
+                        category: p.category || '',
+                        type: 'bulk_import',
+                        previousQty: 0,
+                        addedQty: p.quantity || 0,
+                        newQty: p.quantity || 0,
+                        unitCost: p.buyingPrice || 0,
+                        batchNumber: p.batchNumber || '',
+                        expiryDate: p.expiryDate || null,
+                        addedBy: PharmaFlow.Auth?.userProfile?.displayName || PharmaFlow.Auth?.userProfile?.email || 'Unknown',
+                        createdAt: new Date().toISOString()
+                    });
                 });
                 try {
                     await batch.commit();
-                    try {
-                        const stockBatch = window.db.batch();
-                        chunk.forEach(p => {
-                            const historyRef = getBusinessCollection(businessId, 'stock_history').doc();
-                            stockBatch.set(historyRef, {
-                                productId: p._importProductId,
-                                productName: p.name || '',
-                                sku: p.sku || '',
-                                category: p.category || '',
-                                type: 'bulk_import',
-                                previousQty: 0,
-                                addedQty: p.quantity || 0,
-                                newQty: p.quantity || 0,
-                                unitCost: p.buyingPrice || 0,
-                                batchNumber: p.batchNumber || '',
-                                expiryDate: p.expiryDate || null,
-                                addedBy: PharmaFlow.Auth?.userProfile?.displayName || PharmaFlow.Auth?.userProfile?.email || 'Unknown',
-                                createdAt: new Date().toISOString()
-                            });
-                            delete p._importProductId;
-                        });
-                        await stockBatch.commit();
-                    } catch (historyErr) {
-                        console.warn('Inventory import succeeded but stock history logging failed:', historyErr);
-                    }
                     imported += chunk.length;
                 } catch (err) {
                     console.error('Batch import error at chunk ' + Math.floor(i / BATCH_SIZE) + ':', err);
@@ -2541,6 +2618,11 @@
                 return;
             }
 
+            if (PharmaFlow.InventoryBatchEngine?.isExpired(expiryStr)) {
+                this.showToast('Expiry date cannot be in the past.', 'error');
+                return;
+            }
+
             if (sellingPrice < buyingPrice) {
                 this.showToast('Selling price should not be less than buying price.', 'error');
                 return;
@@ -2616,8 +2698,11 @@
 
             try {
                 const colRef = getBusinessCollection(businessId, 'inventory');
-                const docRef = await colRef.add(product);
-                await getBusinessCollection(businessId, 'stock_history').add({
+                const docRef = colRef.doc();
+                const historyRef = getBusinessCollection(businessId, 'stock_history').doc();
+                const writeBatch = window.db.batch();
+                writeBatch.set(docRef, product);
+                writeBatch.set(historyRef, {
                     productId: docRef.id,
                     productName: name,
                     sku: sku,
@@ -2632,6 +2717,14 @@
                     addedBy: PharmaFlow.Auth?.userProfile?.displayName || PharmaFlow.Auth?.userProfile?.email || 'Unknown',
                     createdAt: new Date().toISOString()
                 });
+                await writeBatch.commit();
+                window.dispatchEvent(new CustomEvent('pharmaflow:inventory-patched', {
+                    detail: {
+                        businessId: businessId,
+                        source: 'Product added',
+                        patches: [{ id: docRef.id, data: product }]
+                    }
+                }));
 
                 // Log activity
                 if (PharmaFlow.ActivityLog) {
@@ -2773,6 +2866,11 @@
                     return;
                 }
 
+                if (PharmaFlow.InventoryBatchEngine?.isExpired(expiryValue)) {
+                    this.showToast('Cannot add stock with an expiry date in the past.', 'error');
+                    return;
+                }
+
                 if (batchSellingPrice < batchBuyingPrice) {
                     this.showToast('Selling price should not be less than buying price.', 'error');
                     return;
@@ -2797,9 +2895,11 @@
                     if (!businessId) throw new Error('No business assigned');
 
                     const docRef = getBusinessCollection(businessId, 'inventory').doc(productId);
+                    const historyRef = getBusinessCollection(businessId, 'stock_history').doc();
                     let previousQtyForHistory = 0;
                     let newQtyForHistory = 0;
                     let batchNumberForHistory = newBatchNumber;
+                    let localStockPatch = null;
 
                     await window.db.runTransaction(async (transaction) => {
                         const snapshot = await transaction.get(docRef);
@@ -2826,7 +2926,7 @@
                         newQtyForHistory = appended.quantityAfter;
                         batchNumberForHistory = batchRecord.batchNumber;
 
-                        transaction.update(docRef, {
+                        localStockPatch = {
                             quantity: newQtyForHistory,
                             buyingPrice: batchBuyingPrice,
                             sellingPrice: batchSellingPrice,
@@ -2835,24 +2935,32 @@
                             expiryDate: primary.expiryDate || expiryTimestamp,
                             stockBatches: appended.updatedBatches,
                             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                        };
+                        transaction.update(docRef, localStockPatch);
+                        transaction.set(historyRef, {
+                            productId: productId,
+                            productName: product.name || '',
+                            sku: product.sku || '',
+                            category: product.category || '',
+                            type: 'restock',
+                            previousQty: previousQtyForHistory,
+                            addedQty: addQty,
+                            newQty: newQtyForHistory,
+                            unitCost: batchBuyingPrice,
+                            sellingPrice: batchSellingPrice,
+                            batchNumber: batchNumberForHistory,
+                            expiryDate: expiryValue,
+                            addedBy: PharmaFlow.Auth?.userProfile?.displayName || PharmaFlow.Auth?.userProfile?.email || 'Unknown',
+                            createdAt: new Date().toISOString()
                         });
                     });
-                    await getBusinessCollection(businessId, 'stock_history').add({
-                        productId: productId,
-                        productName: product.name || '',
-                        sku: product.sku || '',
-                        category: product.category || '',
-                        type: 'restock',
-                        previousQty: previousQtyForHistory,
-                        addedQty: addQty,
-                        newQty: newQtyForHistory,
-                        unitCost: batchBuyingPrice,
-                        sellingPrice: batchSellingPrice,
-                        batchNumber: batchNumberForHistory,
-                        expiryDate: expiryValue,
-                        addedBy: PharmaFlow.Auth?.userProfile?.displayName || PharmaFlow.Auth?.userProfile?.email || 'Unknown',
-                        createdAt: new Date().toISOString()
-                    });
+                    window.dispatchEvent(new CustomEvent('pharmaflow:inventory-patched', {
+                        detail: {
+                            businessId: businessId,
+                            source: 'Stock added',
+                            patches: [{ id: productId, data: localStockPatch }]
+                        }
+                    }));
 
                     // Log activity
                     if (PharmaFlow.ActivityLog) {
@@ -3093,6 +3201,13 @@
             try {
                 const docRef = getBusinessCollection(businessId, 'inventory').doc(productId);
                 await docRef.update(updates);
+                window.dispatchEvent(new CustomEvent('pharmaflow:inventory-patched', {
+                    detail: {
+                        businessId: businessId,
+                        source: 'Product updated',
+                        patches: [{ id: productId, data: updates }]
+                    }
+                }));
 
                 // Log activity
                 if (PharmaFlow.ActivityLog) {
@@ -3168,6 +3283,13 @@
 
             try {
                 await getBusinessCollection(businessId, 'inventory').doc(productId).delete();
+                window.dispatchEvent(new CustomEvent('pharmaflow:inventory-patched', {
+                    detail: {
+                        businessId: businessId,
+                        source: 'Product deleted',
+                        patches: [{ id: productId, deleted: true }]
+                    }
+                }));
 
                 // Log activity
                 if (PharmaFlow.ActivityLog) {
@@ -3214,8 +3336,21 @@
             reconciliationSales = [];
             reconciliationStockHistory = [];
             quarantinedByProduct = {};
+            allProducts = [];
+            filteredProducts = [];
+            currentPage = 1;
+            inventorySnapshotReady = false;
+            lastInventorySyncAt = 0;
+            refreshPromise = null;
         }
     };
+
+    window.addEventListener('pharmaflow:inventory-patched', event => {
+        const detail = event.detail || {};
+        const currentBusinessId = Inventory.getBusinessId();
+        if (detail.businessId && currentBusinessId && detail.businessId !== currentBusinessId) return;
+        Inventory.applyLocalInventoryPatches(detail.patches, detail.source);
+    });
 
     window.PharmaFlow.Inventory = Inventory;
 })();

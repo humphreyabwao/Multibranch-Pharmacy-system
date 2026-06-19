@@ -246,8 +246,11 @@
         },
 
         updateSaleInventoryStatus: async function (businessId, saleId, mode, restoreTo) {
+            const engine = PharmaFlow.InventoryBatchEngine;
+            if (!engine) throw new Error('Inventory batch engine is unavailable.');
             const inventoryCol = getBusinessCollection(businessId, 'inventory');
             const salesCol = getBusinessCollection(businessId, 'sales');
+            const historyCol = getBusinessCollection(businessId, 'stock_history');
             const saleRef = salesCol.doc(saleId);
             const actor = PharmaFlow.Auth?.userProfile?.displayName || PharmaFlow.Auth?.userProfile?.email || 'Unknown';
 
@@ -278,16 +281,43 @@
                         }
 
                         const product = snapshot.data() || {};
-                        const currentQty = Math.max(0, parseInt(product.quantity, 10) || 0);
-                        const nextQty = currentQty + itemQty;
-                        const nextBatches = this.addBackToStockBatches(product, itemQty, item, saleId);
-                        const primaryBatch = this.getPrimaryBatchAfterAdjustment(nextBatches);
+                        const allocations = Array.isArray(item.batchAllocations) && item.batchAllocations.length
+                            ? item.batchAllocations
+                            : [{
+                                batchNumber: item.batchNumber || item.stockBatchNumber || product.batchNumber || product.sku || '',
+                                quantity: itemQty,
+                                expiryDate: item.expiryDate || product.expiryDate || null,
+                                buyingPrice: item.buyingPrice || product.buyingPrice || 0,
+                                sellingPrice: item.unitPrice || product.sellingPrice || 0,
+                                minimumSellPrice: item.minimumSellPrice || product.minimumSellPrice || product.buyingPrice || 0
+                            }];
+                        const previousQty = engine.quantityOf(engine.normalize(product));
+                        const restored = engine.restore(product, allocations, {
+                            source: 'sale_cancel',
+                            sourceId: saleId
+                        });
+                        const primaryBatch = restored.primaryBatch || {};
 
                         stockUpdates.push({
                             ref: ref,
+                            historyRef: historyCol.doc(),
+                            historyData: {
+                                productId: item.productId,
+                                productName: product.name || item.name || '',
+                                sku: product.sku || item.sku || '',
+                                category: product.category || item.category || '',
+                                type: 'sale_cancel_restore',
+                                saleId: saleId,
+                                previousQty: previousQty,
+                                addedQty: itemQty,
+                                newQty: restored.quantityAfter,
+                                batchAllocations: allocations,
+                                addedBy: actor,
+                                createdAt: new Date().toISOString()
+                            },
                             data: {
-                                quantity: nextQty,
-                                stockBatches: nextBatches,
+                                quantity: restored.quantityAfter,
+                                stockBatches: restored.updatedBatches,
                                 batchNumber: primaryBatch.batchNumber || '',
                                 expiryDate: primaryBatch.expiryDate || null,
                                 updatedAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -322,20 +352,30 @@
                             }
 
                             const product = snapshot.data() || {};
-                            const currentQty = Math.max(0, parseInt(product.quantity, 10) || 0);
-                            if (currentQty < itemQty) {
-                                throw new Error('Only ' + currentQty + ' left in stock for ' + (product.name || item.name || 'selected product'));
-                            }
-
-                            const nextQty = currentQty - itemQty;
-                            const nextBatches = this.reduceStockBatches(product, itemQty, item.name);
-                            const primaryBatch = this.getPrimaryBatchAfterAdjustment(nextBatches);
+                            const previousQty = engine.quantityOf(engine.normalize(product));
+                            const reduction = engine.consume(product, itemQty);
+                            const primaryBatch = reduction.primaryBatch || {};
 
                             stockUpdates.push({
                                 ref: ref,
+                                historyRef: historyCol.doc(),
+                                historyData: {
+                                    productId: item.productId,
+                                    productName: product.name || item.name || '',
+                                    sku: product.sku || item.sku || '',
+                                    category: product.category || item.category || '',
+                                    type: 'sale_restore_deduction',
+                                    saleId: saleId,
+                                    previousQty: previousQty,
+                                    removedQty: itemQty,
+                                    newQty: reduction.quantityAfter,
+                                    batchAllocations: reduction.allocations,
+                                    addedBy: actor,
+                                    createdAt: new Date().toISOString()
+                                },
                                 data: {
-                                    quantity: nextQty,
-                                    stockBatches: nextBatches,
+                                    quantity: reduction.quantityAfter,
+                                    stockBatches: reduction.updatedBatches,
                                     batchNumber: primaryBatch.batchNumber || '',
                                     expiryDate: primaryBatch.expiryDate || null,
                                     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -357,7 +397,10 @@
                     inventoryAdjusted = shouldAdjustInventory;
                 }
 
-                stockUpdates.forEach(update => transaction.update(update.ref, update.data));
+                stockUpdates.forEach(update => {
+                    transaction.update(update.ref, update.data);
+                    transaction.set(update.historyRef, update.historyData);
+                });
                 return { status: resultingStatus, inventoryAdjusted: inventoryAdjusted };
             });
         },

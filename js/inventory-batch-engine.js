@@ -31,9 +31,17 @@
         return time;
     }
 
+    function expiryCutoff(value, fallback) {
+        if (!value) return fallback;
+        const date = value.toDate ? value.toDate() : new Date(value);
+        if (!date || Number.isNaN(date.getTime())) return fallback;
+        date.setHours(23, 59, 59, 999);
+        return date.getTime();
+    }
+
     function isExpired(value, now) {
         if (!value) return false;
-        return dateValue(value, Number.POSITIVE_INFINITY) <= (now || Date.now());
+        return expiryCutoff(value, Number.POSITIVE_INFINITY) < (now == null ? Date.now() : now);
     }
 
     function compareFefoFifo(a, b) {
@@ -170,7 +178,7 @@
     }
 
     function appendBatch(product, batch) {
-        const batches = canonicalBatches(product);
+        const batches = normalize(product);
         const normalized = {
             ...batch,
             batchNumber: String(batch.batchNumber || product.sku || ''),
@@ -182,6 +190,7 @@
         };
         if (!normalized.batchNumber) throw new Error('Batch number is required.');
         if (normalized.quantity < 1) throw new Error('Batch quantity must be at least 1.');
+        if (isExpired(normalized.expiryDate)) throw new Error('Cannot add a batch that has already expired.');
         const expiry = dateValue(normalized.expiryDate, null);
         const matching = batches.find(function (existing) {
             return String(existing.batchNumber || '') === normalized.batchNumber
@@ -204,7 +213,7 @@
     }
 
     function restore(product, allocations, metadata) {
-        const batches = canonicalBatches(product);
+        const batches = normalize(product);
         (allocations || []).forEach(function (allocation) {
             const qty = integer(allocation.quantity);
             if (!qty) return;
@@ -267,6 +276,7 @@
 
     return {
         integer: integer,
+        expiryCutoff: expiryCutoff,
         isExpired: isExpired,
         compareFefoFifo: compareFefoFifo,
         normalize: normalize,

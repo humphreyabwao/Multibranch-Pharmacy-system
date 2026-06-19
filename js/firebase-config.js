@@ -26,46 +26,55 @@ function isFirebaseConfigured() {
 
 (function loadFirebaseSDK() {
     const scripts = [
-        'https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js',
-        'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js',
-        'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js',
-        'https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js'
+        {
+            src: 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js',
+            ready: function () { return typeof firebase !== 'undefined' && typeof firebase.initializeApp === 'function'; }
+        },
+        {
+            src: 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js',
+            ready: function () { return typeof firebase !== 'undefined' && typeof firebase.auth === 'function'; }
+        },
+        {
+            src: 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js',
+            ready: function () { return typeof firebase !== 'undefined' && typeof firebase.firestore === 'function'; }
+        },
+        {
+            src: 'https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js',
+            ready: function () { return typeof firebase !== 'undefined' && typeof firebase.storage === 'function'; }
+        }
     ];
 
-    let loaded = 0;
-
-    function onScriptLoad() {
-        loaded++;
-        if (loaded === scripts.length) {
+    function loadNext(index) {
+        if (index >= scripts.length) {
             initializeFirebase();
-        }
-    }
-
-    // Check if already loaded
-    if (typeof firebase !== 'undefined' && firebase.apps && firebase.apps.length > 0) {
-        return;
-    }
-
-    if (typeof firebase !== 'undefined' && firebase.initializeApp) {
-        initializeFirebase();
-        return;
-    }
-
-    scripts.forEach(function(src) {
-        const existing = document.querySelector('script[src="' + src + '"]');
-        if (existing) {
-            loaded++;
-            if (loaded === scripts.length) initializeFirebase();
             return;
         }
+
+        const dependency = scripts[index];
+        if (dependency.ready()) {
+            loadNext(index + 1);
+            return;
+        }
+
+        const existing = document.querySelector('script[src="' + dependency.src + '"]');
+        if (existing) {
+            existing.addEventListener('load', function () { loadNext(index + 1); }, { once: true });
+            existing.addEventListener('error', function () {
+                console.error('Failed to load Firebase SDK:', dependency.src);
+            }, { once: true });
+            return;
+        }
+
         const script = document.createElement('script');
-        script.src = src;
-        script.onload = onScriptLoad;
+        script.src = dependency.src;
+        script.onload = function () { loadNext(index + 1); };
         script.onerror = function() {
-            console.error('Failed to load Firebase SDK:', src);
+            console.error('Failed to load Firebase SDK:', dependency.src);
         };
         document.head.appendChild(script);
-    });
+    }
+
+    loadNext(0);
 })();
 
 function initializeFirebase() {

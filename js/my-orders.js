@@ -1783,6 +1783,9 @@
                 if (!expiryDate) {
                     return { ok: false, message: 'Expiry date is required for ' + (fallback.name || 'an item') + '.' };
                 }
+                if (PharmaFlow.InventoryBatchEngine?.isExpired(expiryDate)) {
+                    return { ok: false, message: 'Expiry date cannot be in the past for ' + (fallback.name || 'an item') + '.' };
+                }
                 if (sellingPrice < unitCost) {
                     return { ok: false, message: 'Selling price cannot be below unit cost for ' + (fallback.name || 'an item') + '.' };
                 }

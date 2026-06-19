@@ -218,6 +218,9 @@
 
         isBatchExpired: function (value) {
             if (!value) return false;
+            if (PharmaFlow.InventoryBatchEngine) {
+                return PharmaFlow.InventoryBatchEngine.isExpired(value);
+            }
             return this.getBatchDateValue(value) <= Date.now();
         },
 
@@ -1789,7 +1792,7 @@
                 const historyCol = getBusinessCollection(businessId, 'stock_history');
                 const saleRef = salesCol.doc(saleId);
 
-                await window.db.runTransaction(async (transaction) => {
+                const committedStockPatches = await window.db.runTransaction(async (transaction) => {
                     const stockUpdates = [];
                     const saleSnapshot = await transaction.get(saleRef);
                     if (saleSnapshot.exists) {
@@ -1902,7 +1905,23 @@
                         transaction.update(update.ref, update.data);
                         transaction.set(update.historyRef, update.historyData);
                     });
+                    return stockUpdates.map(update => ({
+                        id: update.ref.id,
+                        data: update.data
+                    }));
                 });
+
+                (committedStockPatches || []).forEach(patch => {
+                    const index = inventoryCache.findIndex(product => product.id === patch.id);
+                    if (index >= 0) inventoryCache[index] = { ...inventoryCache[index], ...patch.data, id: patch.id };
+                });
+                window.dispatchEvent(new CustomEvent('pharmaflow:inventory-patched', {
+                    detail: {
+                        businessId: businessId,
+                        source: 'Sale',
+                        patches: committedStockPatches || []
+                    }
+                }));
 
                 // Record DDA sales in DDA register after the sale + stock transaction commits.
                 const ddaItems = saleData.items.filter(item => item.drugType === 'DDA');
