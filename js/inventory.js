@@ -16,7 +16,9 @@
     let unsubInventory = null;
     let unsubReconciliationSales = null;
     let unsubReconciliationStock = null;
+    let unsubInventoryDisposals = null;
     let allProducts = [];
+    let quarantinedByProduct = {};
     let reconciliationSales = [];
     let reconciliationStockHistory = [];
     let unsubBatchTracker = null;
@@ -434,7 +436,8 @@
                                         <th>Category</th>
                                         <th>Drug Type</th>
                                         <th>Batch No.</th>
-                                        <th>Qty</th>
+                                        <th>Clean Qty</th>
+                                        <th>Broken / Quarantined</th>
                                         <th>Buying Price</th>
                                         <th>Selling Price</th>
                                         <th>VAT</th>
@@ -445,7 +448,7 @@
                                 </thead>
                                 <tbody id="inv-table-body">
                                     <tr>
-                                        <td colspan="12" class="inv-loading-cell">
+                                        <td colspan="13" class="inv-loading-cell">
                                             <i class="fas fa-spinner fa-spin"></i> Loading inventory...
                                         </td>
                                     </tr>
@@ -473,6 +476,7 @@
 
             if (businessId) {
                 this.subscribeToInventory(businessId);
+                this.subscribeToDisposalSummary(businessId);
             }
         },
 
@@ -638,15 +642,44 @@
                         const time = new Date().toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
                         text.textContent = 'Live inventory sync active • updated ' + time;
                     }
+                    if (PharmaFlow.Disposals) {
+                        PharmaFlow.Disposals.syncExpiredInventory(businessId).catch(err => {
+                            console.error('Automatic expired stock sync failed:', err);
+                        });
+                    }
                 },
                 (err) => {
                     console.error('Inventory listener error:', err);
                     const tbody = document.getElementById('inv-table-body');
                     if (tbody) {
-                        tbody.innerHTML = '<tr><td colspan="12" class="inv-loading-cell" style="color:var(--danger)"><i class="fas fa-exclamation-triangle"></i> Failed to load inventory</td></tr>';
+                        tbody.innerHTML = '<tr><td colspan="13" class="inv-loading-cell" style="color:var(--danger)"><i class="fas fa-exclamation-triangle"></i> Failed to load inventory</td></tr>';
                     }
                 }
             );
+        },
+
+        subscribeToDisposalSummary: function (businessId) {
+            if (unsubInventoryDisposals) {
+                unsubInventoryDisposals();
+                unsubInventoryDisposals = null;
+            }
+            const ref = getBusinessCollection(businessId, 'disposals');
+            if (!ref) return;
+            unsubInventoryDisposals = ref.onSnapshot(snapshot => {
+                const summary = {};
+                snapshot.docs.forEach(doc => {
+                    const item = doc.data() || {};
+                    if (!item.productId || (item.status || 'pending') !== 'pending') return;
+                    if (!summary[item.productId]) summary[item.productId] = { total: 0, broken: 0, expired: 0, other: 0 };
+                    const qty = parseInt(item.quantity, 10) || 0;
+                    summary[item.productId].total += qty;
+                    if (item.reason === 'broken' || item.reason === 'damaged') summary[item.productId].broken += qty;
+                    else if (item.reason === 'expired') summary[item.productId].expired += qty;
+                    else summary[item.productId].other += qty;
+                });
+                quarantinedByProduct = summary;
+                this.renderCurrentPage();
+            }, err => console.error('Inventory disposal summary listener error:', err));
         },
 
         renderReconciliation: function (container) {
@@ -1135,7 +1168,7 @@
             if (totalFiltered === 0) {
                 tbody.innerHTML = `
                     <tr>
-                        <td colspan="12" class="inv-empty-cell">
+                        <td colspan="13" class="inv-empty-cell">
                             <div class="inv-empty">
                                 <i class="fas fa-box-open"></i>
                                 <p>No products found</p>
@@ -1151,6 +1184,7 @@
 
             tbody.innerHTML = pageProducts.map(p => {
                 const status = this.getProductStatus(p);
+                const quarantine = quarantinedByProduct[p.id] || { total: 0, broken: 0, expired: 0, other: 0 };
                 const statusLabel = {
                     'in-stock': 'In Stock',
                     'low-stock': 'Low Stock',
@@ -1179,7 +1213,11 @@
                         <td>${this.escapeHtml(p.category || '—')}</td>
                         <td>${this.getDrugTypeBadge(p.drugType)}</td>
                         <td><code>${this.escapeHtml(this.getBatchLabel(p))}</code></td>
-                        <td class="${(p.quantity || 0) <= (p.reorderLevel || 10) ? 'inv-qty-warn' : ''}">${p.quantity || 0}</td>
+                        <td class="inv-clean-qty ${(p.quantity || 0) <= (p.reorderLevel || 10) ? 'inv-qty-warn' : ''}"><strong>${p.quantity || 0}</strong><small>sellable</small></td>
+                        <td class="inv-quarantine-qty ${quarantine.total ? 'has-quarantine' : ''}">
+                            <strong>${quarantine.total}</strong>
+                            <small>${quarantine.broken ? quarantine.broken + ' broken' : ''}${quarantine.broken && quarantine.expired ? ' · ' : ''}${quarantine.expired ? quarantine.expired + ' expired' : ''}${!quarantine.broken && !quarantine.expired && quarantine.other ? quarantine.other + ' other' : (!quarantine.total ? 'none' : '')}</small>
+                        </td>
                         <td>${this.formatCurrency(p.buyingPrice || 0)}</td>
                         <td>${this.formatCurrency(p.sellingPrice || 0)}</td>
                         <td>${this.getVatDisplay(p)}</td>
@@ -3154,12 +3192,17 @@
                 unsubReconciliationStock();
                 unsubReconciliationStock = null;
             }
+            if (unsubInventoryDisposals) {
+                unsubInventoryDisposals();
+                unsubInventoryDisposals = null;
+            }
             if (unsubBatchTracker) {
                 unsubBatchTracker();
                 unsubBatchTracker = null;
             }
             reconciliationSales = [];
             reconciliationStockHistory = [];
+            quarantinedByProduct = {};
         }
     };
 

@@ -54,6 +54,17 @@
             ]
         },
         {
+            id: 'disposals',
+            label: 'Disposals',
+            icon: 'fas fa-trash-can-arrow-up',
+            roles: [],
+            children: [
+                { id: 'expired-stock', label: 'Expired & Pending', icon: 'fas fa-calendar-xmark' },
+                { id: 'record-damage', label: 'Record Damage', icon: 'fas fa-box-open' },
+                { id: 'disposal-history', label: 'Disposal History', icon: 'fas fa-clock-rotate-left' }
+            ]
+        },
+        {
             id: 'dda-register',
             label: 'DDA Register',
             icon: 'fas fa-book-medical',

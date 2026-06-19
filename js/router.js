@@ -32,6 +32,7 @@
             switch (modId) {
                 case 'dashboard': if (PharmaFlow.Dashboard) PharmaFlow.Dashboard.cleanup(); break;
                 case 'inventory': if (PharmaFlow.Inventory) PharmaFlow.Inventory.cleanup(); break;
+                case 'disposals': if (PharmaFlow.Disposals) PharmaFlow.Disposals.cleanup(); break;
                 case 'pharmacy':
                     if (PharmaFlow.POS) PharmaFlow.POS.cleanup();
                     if (PharmaFlow.TodaysSales) PharmaFlow.TodaysSales.cleanup();
@@ -173,6 +174,16 @@
                 } else {
                     PharmaFlow.Inventory.renderView(contentBody);
                 }
+                return;
+            }
+
+            // Inventory Disposals module
+            if (moduleConfig.id === 'disposals' && PharmaFlow.Disposals) {
+                const subId = subModule ? subModule.id : 'expired-stock';
+                PharmaFlow.Disposals.cleanup();
+                if (subId === 'record-damage') { PharmaFlow.Disposals.renderRecord(contentBody); return; }
+                if (subId === 'disposal-history') { PharmaFlow.Disposals.renderHistory(contentBody); return; }
+                PharmaFlow.Disposals.renderOverview(contentBody);
                 return;
             }
 

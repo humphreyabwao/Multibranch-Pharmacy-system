@@ -20,6 +20,7 @@
         _messagePreviewItems: [],
         _businessStatusListener: null,
         _regionalRefreshTimer: null,
+        _expiryScanTimer: null,
 
         /**
          * Initialize the application
@@ -80,6 +81,7 @@
                     this.startNotifications(activeBizId, user.uid);
                     this.startMessages(activeBizId, user.uid);
                     this.startBusinessStatusWatcher(activeBizId);
+                    this.startExpiryMonitor(activeBizId);
 
                     // Run scheduled activity log cleanup
                     if (PharmaFlow.ActivityLog) PharmaFlow.ActivityLog.runScheduledCleanup();
@@ -96,8 +98,24 @@
                     this.startNotifications(businessId, uid);
                     this.startMessages(businessId, uid);
                     this.startBusinessStatusWatcher(businessId);
+                    this.startExpiryMonitor(businessId);
                 }
             });
+        },
+
+        startExpiryMonitor: function (businessId) {
+            if (this._expiryScanTimer) {
+                clearInterval(this._expiryScanTimer);
+                this._expiryScanTimer = null;
+            }
+            if (!businessId || !PharmaFlow.Disposals) return;
+            const scan = (force) => {
+                PharmaFlow.Disposals.syncExpiredInventory(businessId, force ? { force: true } : undefined).catch(err => {
+                    console.error('Automatic expired stock sync failed:', err);
+                });
+            };
+            scan(true);
+            this._expiryScanTimer = setInterval(() => scan(true), 15 * 60 * 1000);
         },
 
         startBusinessStatusWatcher: function (businessId) {

@@ -256,6 +256,42 @@ service cloud.firestore {
         allow delete: if canAccessBusiness(businessId) && isSuperAdmin();
       }
 
+      // Inventory disposals — expired batches are quarantined automatically;
+      // staff can record damage and complete physical disposal.
+      match /disposals/{disposalId} {
+        allow read: if canAccessBusiness(businessId);
+        allow create: if canAccessBusiness(businessId)
+          && request.resource.data.productId is string
+          && request.resource.data.productName is string
+          && request.resource.data.quantity is int
+          && request.resource.data.quantity > 0
+          && request.resource.data.reason in [
+            'expired',
+            'broken',
+            'damaged',
+            'contaminated',
+            'recalled',
+            'spillage',
+            'other'
+          ]
+          && request.resource.data.source in ['automatic', 'manual']
+          && request.resource.data.status == 'pending';
+        allow update: if canAccessBusiness(businessId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status',
+            'disposalMethod',
+            'disposalDate',
+            'disposalNotes',
+            'disposedBy',
+            'disposedAt',
+            'updatedAt'
+          ])
+          && request.resource.data.status == 'disposed'
+          && request.resource.data.disposedBy is string
+          && request.resource.data.disposedAt is string;
+        allow delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+      }
+
       // ── Client Leads — wholesale client management ──
       match /client_leads/{clientId} {
         allow read: if canAccessBusiness(businessId);

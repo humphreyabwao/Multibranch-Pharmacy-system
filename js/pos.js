@@ -216,15 +216,21 @@
             return time;
         },
 
+        isBatchExpired: function (value) {
+            if (!value) return false;
+            return this.getBatchDateValue(value) <= Date.now();
+        },
+
         getProductStockBatches: function (product) {
             if (!product) return [];
             const productQty = Math.max(0, parseInt(product.quantity, 10) || 0);
             let batches = [];
+            const hasExplicitBatches = Array.isArray(product.stockBatches) && product.stockBatches.length > 0;
             const productBuyingPrice = parseFloat(product.buyingPrice) || 0;
             const productSellingPrice = parseFloat(product.sellingPrice) || 0;
             const productMinimumSellPrice = parseFloat(product.minimumSellPrice) || productBuyingPrice;
 
-            if (Array.isArray(product.stockBatches) && product.stockBatches.length) {
+            if (hasExplicitBatches) {
                 batches = product.stockBatches
                     .map(batch => ({
                         ...batch,
@@ -233,8 +239,8 @@
                         sellingPrice: parseFloat(batch.sellingPrice) || productSellingPrice,
                         minimumSellPrice: parseFloat(batch.minimumSellPrice) || productMinimumSellPrice
                     }))
-                    .filter(batch => batch.quantity > 0);
-            } else if (productQty > 0 || product.expiryDate || product.batchNumber) {
+                    .filter(batch => batch.quantity > 0 && !this.isBatchExpired(batch.expiryDate));
+            } else if ((productQty > 0 || product.expiryDate || product.batchNumber) && !this.isBatchExpired(product.expiryDate)) {
                 batches = [{
                     batchNumber: product.batchNumber || '',
                     quantity: productQty,
@@ -247,23 +253,26 @@
                 }];
             }
 
-            if (!productQty) return [];
+            if (!batches.length) return [];
 
             batches.sort((a, b) => this.getBatchDateValue(a.expiryDate) - this.getBatchDateValue(b.expiryDate));
 
             const normalized = [];
             let assigned = 0;
+            const targetQty = hasExplicitBatches
+                ? batches.reduce((sum, batch) => sum + (parseInt(batch.quantity, 10) || 0), 0)
+                : productQty;
             batches.forEach(batch => {
-                if (assigned >= productQty) return;
+                if (assigned >= targetQty) return;
                 const available = Math.max(0, parseInt(batch.quantity, 10) || 0);
-                const qty = Math.min(available, productQty - assigned);
+                const qty = Math.min(available, targetQty - assigned);
                 if (qty > 0) {
                     normalized.push({ ...batch, quantity: qty });
                     assigned += qty;
                 }
             });
 
-            if (assigned < productQty) {
+            if (!hasExplicitBatches && assigned < productQty && !this.isBatchExpired(product.expiryDate)) {
                 normalized.push({
                     batchNumber: product.batchNumber || '',
                     quantity: productQty - assigned,
@@ -277,6 +286,10 @@
             }
 
             return normalized;
+        },
+
+        getSellableQuantity: function (product) {
+            return this.getProductStockBatches(product).reduce((sum, batch) => sum + (parseInt(batch.quantity, 10) || 0), 0);
         },
 
         getNextSellableBatch: function (product) {
@@ -320,7 +333,7 @@
             item.price = this.getWeightedBatchValue(allocations, 'sellingPrice');
             item.buyingPrice = this.getWeightedBatchValue(allocations, 'buyingPrice');
             item.minimumSellPrice = this.getWeightedBatchValue(allocations, 'minimumSellPrice') || item.buyingPrice || 0;
-            item.maxQty = product.quantity || item.maxQty || qty;
+            item.maxQty = this.getSellableQuantity(product) || item.maxQty || qty;
             return item;
         },
 
@@ -370,6 +383,7 @@
             const sorted = batches
                 .slice()
                 .filter(batch => (parseInt(batch.quantity, 10) || 0) > 0)
+                .filter(batch => !this.isBatchExpired(batch.expiryDate))
                 .sort((a, b) => this.getBatchDateValue(a.expiryDate) - this.getBatchDateValue(b.expiryDate));
             if (!sorted.length) return { batchNumber: '', expiryDate: null };
             return {
@@ -400,10 +414,24 @@
         reduceStockBatchesWithAllocations: function (product, soldQty) {
             let remaining = Math.max(0, parseInt(soldQty, 10) || 0);
             const allocations = [];
-            const sortedBatches = this.getProductStockBatches(product)
+            const productBuyingPrice = parseFloat(product.buyingPrice) || 0;
+            const productSellingPrice = parseFloat(product.sellingPrice) || 0;
+            const productMinimumSellPrice = parseFloat(product.minimumSellPrice) || productBuyingPrice;
+            const sourceBatches = Array.isArray(product.stockBatches) && product.stockBatches.length
+                ? product.stockBatches.map(batch => ({
+                    ...batch,
+                    quantity: Math.max(0, parseInt(batch.quantity, 10) || 0),
+                    buyingPrice: parseFloat(batch.buyingPrice) || productBuyingPrice,
+                    sellingPrice: parseFloat(batch.sellingPrice) || productSellingPrice,
+                    minimumSellPrice: parseFloat(batch.minimumSellPrice) || productMinimumSellPrice
+                }))
+                : this.getProductStockBatches(product).map(batch => ({ ...batch }));
+
+            const sellableBatches = sourceBatches
+                .filter(batch => batch.quantity > 0 && !this.isBatchExpired(batch.expiryDate))
                 .sort((a, b) => this.getBatchDateValue(a.expiryDate) - this.getBatchDateValue(b.expiryDate));
 
-            const updatedBatches = sortedBatches.map(batch => {
+            sellableBatches.forEach(batch => {
                 const available = Math.max(0, parseInt(batch.quantity, 10) || 0);
                 const used = Math.min(available, remaining);
                 if (used > 0) {
@@ -417,13 +445,14 @@
                     });
                 }
                 remaining -= used;
-                return { ...batch, quantity: available - used };
-            }).filter(batch => (parseInt(batch.quantity, 10) || 0) > 0);
+                batch.quantity = available - used;
+            });
 
             if (remaining > 0) {
                 throw new Error('Insufficient stock for ' + (product.name || 'selected product'));
             }
 
+            const updatedBatches = sourceBatches.filter(batch => (parseInt(batch.quantity, 10) || 0) > 0);
             return { updatedBatches, allocations };
         },
 
@@ -1133,7 +1162,7 @@
 
             grid.innerHTML = products.map(p => {
                 const inCart = cart.find(c => c.id === p.id);
-                const stock = p.quantity || 0;
+                const stock = this.getSellableQuantity(p);
                 const outOfStock = stock <= 0;
                 const lowStock = stock > 0 && stock <= 10;
                 const drugBadge = this.getDrugTypeBadge(p.drugType);
@@ -1274,7 +1303,8 @@
 
             const existing = cart.find(c => c.id === productId);
             if (existing) {
-                if (existing.qty >= (product.quantity || 0)) {
+                const sellableQty = this.getSellableQuantity(product);
+                if (existing.qty >= sellableQty) {
                     this.showToast('Maximum stock reached for ' + product.name, 'error');
                     return;
                 }
@@ -1287,8 +1317,9 @@
                     return;
                 }
             } else {
-                if ((product.quantity || 0) <= 0) {
-                    this.showToast(product.name + ' is out of stock', 'error');
+                const sellableQty = this.getSellableQuantity(product);
+                if (sellableQty <= 0) {
+                    this.showToast(product.name + ' has no unexpired stock available', 'error');
                     return;
                 }
                 const item = {
@@ -1302,7 +1333,7 @@
                         return Number.isFinite(m) && m > 0 ? m : null;
                     })(),
                     qty: 1,
-                    maxQty: product.quantity || 0,
+                    maxQty: sellableQty,
                     drugType: product.drugType || '',
                     category: product.category || '',
                     vatEnabled: !!product.vatEnabled,
@@ -1333,7 +1364,7 @@
             if (!item) return;
 
             const product = inventoryCache.find(p => p.id === productId);
-            const max = product ? (product.quantity || 0) : item.maxQty;
+            const max = product ? this.getSellableQuantity(product) : item.maxQty;
 
             if (newQty < 1) {
                 this.removeFromCart(productId);
@@ -1723,8 +1754,9 @@
 
                         const product = snapshot.data() || {};
                         const currentQty = Math.max(0, parseInt(product.quantity, 10) || 0);
-                        if (currentQty < itemQty) {
-                            throw new Error('Only ' + currentQty + ' left in stock for ' + (product.name || item.name));
+                        const sellableQty = this.getSellableQuantity(product);
+                        if (sellableQty < itemQty) {
+                            throw new Error('Only ' + sellableQty + ' unexpired unit(s) left for ' + (product.name || item.name));
                         }
 
                         const nextQty = currentQty - itemQty;
