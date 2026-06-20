@@ -29,6 +29,7 @@
     let refreshPromise = null;
     let lastExpiryScanAt = 0;
     let inventorySnapshotReady = false;
+    let batchProfitMetric = 'markup';
 
     // Pagination state
     let currentPage = 1;
@@ -312,20 +313,75 @@
             return sell > 0 ? ((sell - buy) / sell) * 100 : 0;
         },
 
+        getBatchMarkupPercentage: function (buyingPrice, sellingPrice) {
+            if (PharmaFlow.InventoryBatchEngine?.markupPercentage) {
+                return PharmaFlow.InventoryBatchEngine.markupPercentage(buyingPrice, sellingPrice);
+            }
+            const buy = parseFloat(buyingPrice) || 0;
+            const sell = parseFloat(sellingPrice) || 0;
+            return buy > 0 ? ((sell - buy) / buy) * 100 : 0;
+        },
+
+        setBatchProfitMetric: function (metric) {
+            batchProfitMetric = metric === 'margin' ? 'margin' : 'markup';
+            try { localStorage.setItem('pf_inventory_batch_profit_metric', batchProfitMetric); } catch (e) { /* ignore */ }
+        },
+
+        getBatchProfitMetric: function () {
+            try {
+                const saved = localStorage.getItem('pf_inventory_batch_profit_metric');
+                if (saved === 'margin' || saved === 'markup') batchProfitMetric = saved;
+            } catch (e) { /* ignore */ }
+            return batchProfitMetric;
+        },
+
         updateMarginPreview: function (buyingInputId, sellingInputId, outputId) {
             const buy = parseFloat(document.getElementById(buyingInputId)?.value) || 0;
             const sell = parseFloat(document.getElementById(sellingInputId)?.value) || 0;
             const marginEl = document.getElementById(outputId);
             if (!marginEl) return;
             if (sell > 0) {
-                const margin = this.getBatchMarginPercentage(buy, sell);
+                const metric = this.getBatchProfitMetric();
+                const percentage = metric === 'markup'
+                    ? this.getBatchMarkupPercentage(buy, sell)
+                    : this.getBatchMarginPercentage(buy, sell);
                 const profit = sell - buy;
-                marginEl.textContent = margin.toFixed(1) + '% (' + this.formatCurrency(profit) + ' profit per unit)';
+                marginEl.textContent = percentage.toFixed(1) + '% (' + this.formatCurrency(profit) + ' profit per unit)';
                 marginEl.className = 'inv-margin-display ' + (profit >= 0 ? 'inv-margin--positive' : 'inv-margin--negative');
             } else {
                 marginEl.textContent = '—';
                 marginEl.className = 'inv-margin-display';
             }
+        },
+
+        syncProfitMetricControls: function (root) {
+            if (!root) return;
+            const metric = this.getBatchProfitMetric();
+            root.querySelectorAll('[data-inventory-profit-metric]').forEach(button => {
+                const active = button.dataset.inventoryProfitMetric === metric;
+                button.classList.toggle('active', active);
+                button.setAttribute('aria-pressed', String(active));
+            });
+            root.querySelectorAll('[data-inventory-profit-label]').forEach(label => {
+                label.textContent = metric === 'markup' ? 'Profit Markup' : 'Gross Margin';
+            });
+            root.querySelectorAll('[data-inventory-profit-formula]').forEach(label => {
+                label.textContent = metric === 'markup'
+                    ? 'Markup = (selling price − cost price) ÷ cost price × 100'
+                    : 'Gross margin = (selling price − cost price) ÷ selling price × 100';
+            });
+        },
+
+        bindProfitMetricControls: function (root, refreshPreview) {
+            if (!root) return;
+            this.syncProfitMetricControls(root);
+            root.querySelectorAll('[data-inventory-profit-metric]').forEach(button => {
+                button.addEventListener('click', () => {
+                    this.setBatchProfitMetric(button.dataset.inventoryProfitMetric);
+                    this.syncProfitMetricControls(root);
+                    if (refreshPreview) refreshPreview();
+                });
+            });
         },
 
         updateAddFormVatTotalPreview: function () {
@@ -1650,6 +1706,7 @@
             const totalQty = batches.reduce((sum, batch) => sum + (parseInt(batch.quantity, 10) || 0), 0);
             const costValue = batches.reduce((sum, batch) => sum + ((parseFloat(batch.buyingPrice) || 0) * (parseInt(batch.quantity, 10) || 0)), 0);
             const retailValue = batches.reduce((sum, batch) => sum + ((parseFloat(batch.sellingPrice) || 0) * (parseInt(batch.quantity, 10) || 0)), 0);
+            const profitValue = retailValue - costValue;
             const productQty = this.getSellableQuantity(product);
             return {
                 totalQty: totalQty,
@@ -1657,6 +1714,9 @@
                 batchCount: batches.length,
                 costValue: costValue,
                 retailValue: retailValue,
+                profitValue: profitValue,
+                marginPercentage: retailValue > 0 ? (profitValue / retailValue) * 100 : 0,
+                markupPercentage: costValue > 0 ? (profitValue / costValue) * 100 : 0,
                 qtyDiff: totalQty - productQty
             };
         },
@@ -1664,6 +1724,10 @@
         renderBatchTrackerContent: function (product) {
             const batches = this.getBatchTrackerRows(product);
             const stats = this.getBatchTrackerStats(product, batches);
+            const metric = this.getBatchProfitMetric();
+            const metricLabel = metric === 'markup' ? 'Markup' : 'Gross Margin';
+            const alternateLabel = metric === 'markup' ? 'Margin' : 'Markup';
+            const overallMetric = metric === 'markup' ? stats.markupPercentage : stats.marginPercentage;
             const updated = product.updatedAt || product.createdAt || null;
             const diffClass = stats.qtyDiff === 0 ? 'inv-batch-tracker-ok' : 'inv-batch-tracker-warn';
             const diffText = stats.qtyDiff === 0 ? 'Matches sellable stock' : (stats.qtyDiff > 0 ? '+' : '') + stats.qtyDiff + ' vs sellable stock';
@@ -1673,6 +1737,9 @@
                 const costValue = qty * (parseFloat(batch.buyingPrice) || 0);
                 const retailValue = qty * (parseFloat(batch.sellingPrice) || 0);
                 const margin = this.getBatchMarginPercentage(batch.buyingPrice, batch.sellingPrice);
+                const markup = this.getBatchMarkupPercentage(batch.buyingPrice, batch.sellingPrice);
+                const primaryPercentage = metric === 'markup' ? markup : margin;
+                const alternatePercentage = metric === 'markup' ? margin : markup;
                 const source = batch.source || (batch.legacy ? 'legacy' : 'manual');
                 return `
                     <tr>
@@ -1682,7 +1749,10 @@
                         <td>${this.formatCurrency(batch.sellingPrice || 0)}</td>
                         <td>${this.formatCurrency(costValue)}</td>
                         <td>${this.formatCurrency(retailValue)}</td>
-                        <td>${Number.isFinite(margin) ? margin.toFixed(1) + '%' : '—'}</td>
+                        <td class="inv-profit-metric-value">
+                            <strong>${Number.isFinite(primaryPercentage) ? primaryPercentage.toFixed(1) + '%' : '—'}</strong>
+                            <small>${alternateLabel}: ${Number.isFinite(alternatePercentage) ? alternatePercentage.toFixed(1) + '%' : '—'}</small>
+                        </td>
                         <td>${this.formatExpiryDate(batch.expiryDate)}</td>
                     </tr>
                 `;
@@ -1714,6 +1784,18 @@
                     <div><span>${this.formatCurrency(stats.costValue)}</span><small>Cost Value</small></div>
                     <div><span>${this.formatCurrency(stats.retailValue)}</span><small>Retail Value</small></div>
                 </div>
+                <div class="inv-profit-metric-bar">
+                    <div class="inv-profit-metric-copy">
+                        <strong>${metricLabel}: ${Number.isFinite(overallMetric) ? overallMetric.toFixed(1) + '%' : '—'}</strong>
+                        <span>${metric === 'markup'
+                            ? 'Markup = (selling price − cost price) ÷ cost price × 100'
+                            : 'Gross margin = (selling price − cost price) ÷ selling price × 100'}</span>
+                    </div>
+                    <div class="inv-profit-metric-toggle" role="group" aria-label="Profit percentage formula">
+                        <button type="button" data-batch-profit-metric="markup" class="${metric === 'markup' ? 'active' : ''}" aria-pressed="${metric === 'markup'}">Markup</button>
+                        <button type="button" data-batch-profit-metric="margin" class="${metric === 'margin' ? 'active' : ''}" aria-pressed="${metric === 'margin'}">Margin</button>
+                    </div>
+                </div>
                 <div class="inv-batch-tracker-meta">
                     <span><i class="fas fa-signal"></i> Live sellable quantities only</span>
                     <span>Last update: ${this.escapeHtml(updated ? this.formatDateTime(updated) : '—')}</span>
@@ -1728,7 +1810,7 @@
                                 <th>Sell</th>
                                 <th>Cost Value</th>
                                 <th>Retail Value</th>
-                                <th>Margin</th>
+                                <th>${metricLabel}</th>
                                 <th>Expiry</th>
                             </tr>
                         </thead>
@@ -1784,10 +1866,18 @@
             document.getElementById('inv-batch-tracker-done').addEventListener('click', closeModal);
             modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
 
+            const body = document.getElementById('inv-batch-tracker-body');
+            let trackerProduct = product;
+            body.addEventListener('click', (e) => {
+                const metricButton = e.target.closest('[data-batch-profit-metric]');
+                if (!metricButton) return;
+                this.setBatchProfitMetric(metricButton.dataset.batchProfitMetric);
+                body.innerHTML = this.renderBatchTrackerContent(trackerProduct);
+            });
+
             const businessId = this.getBusinessId();
             if (!window.db) return;
 
-            const body = document.getElementById('inv-batch-tracker-body');
             const ref = product._documentRef ||
                 (businessId ? getBusinessCollection(businessId, 'inventory').doc(productId) : null);
             if (!ref) return;
@@ -1802,6 +1892,7 @@
                     return;
                 }
                 const liveProduct = { id: snapshot.id, ...snapshot.data(), _documentRef: snapshot.ref };
+                trackerProduct = liveProduct;
                 body.innerHTML = this.renderBatchTrackerContent(liveProduct);
             }, err => {
                 console.error('Batch tracker listener error:', err);
@@ -2694,8 +2785,15 @@
                                     </div>
                                     <div class="inv-form-row">
                                         <div class="inv-form-group">
-                                            <label>Profit Margin</label>
+                                            <div class="inv-profit-field-heading">
+                                                <label data-inventory-profit-label>Profit Markup</label>
+                                                <div class="inv-profit-metric-toggle inv-profit-metric-toggle--compact" role="group" aria-label="Profit percentage formula">
+                                                    <button type="button" data-inventory-profit-metric="markup">Markup</button>
+                                                    <button type="button" data-inventory-profit-metric="margin">Margin</button>
+                                                </div>
+                                            </div>
                                             <div class="inv-margin-display" id="inv-margin">—</div>
+                                            <small data-inventory-profit-formula>Markup = (selling price − cost price) ÷ cost price × 100</small>
                                         </div>
                                         <div class="inv-form-group">
                                             <label for="inv-expiry">Expiry Date <span class="req">*</span></label>
@@ -2772,9 +2870,12 @@
                 const marginEl = document.getElementById('inv-margin');
                 if (!marginEl) return;
                 if (buy > 0 && sell > 0) {
-                    const margin = this.getBatchMarginPercentage(buy, sell).toFixed(1);
+                    const metric = this.getBatchProfitMetric();
+                    const percentage = metric === 'markup'
+                        ? this.getBatchMarkupPercentage(buy, sell)
+                        : this.getBatchMarginPercentage(buy, sell);
                     const profit = sell - buy;
-                    marginEl.textContent = margin + '% (KSH ' + profit.toFixed(2) + ' per unit)';
+                    marginEl.textContent = percentage.toFixed(1) + '% (KSH ' + profit.toFixed(2) + ' per unit)';
                     marginEl.className = 'inv-margin-display ' + (profit >= 0 ? 'inv-margin--positive' : 'inv-margin--negative');
                 } else {
                     marginEl.textContent = '—';
@@ -2793,6 +2894,8 @@
             if (vatEn) vatEn.addEventListener('change', vatUpd);
             if (vatVal) vatVal.addEventListener('input', vatUpd);
             if (vatTyp) vatTyp.addEventListener('change', vatUpd);
+            this.bindProfitMetricControls(container, updateMargin);
+            updateMargin();
             this.updateAddFormVatTotalPreview();
 
             // Form submit
@@ -3275,9 +3378,15 @@
                             </div>
                             <div class="inv-form-row">
                                 <div class="inv-form-group full-width">
-                                    <label>Current Batch Profit Margin</label>
+                                    <div class="inv-profit-field-heading">
+                                        <label data-inventory-profit-label>Profit Markup</label>
+                                        <div class="inv-profit-metric-toggle inv-profit-metric-toggle--compact" role="group" aria-label="Profit percentage formula">
+                                            <button type="button" data-inventory-profit-metric="markup">Markup</button>
+                                            <button type="button" data-inventory-profit-metric="margin">Margin</button>
+                                        </div>
+                                    </div>
                                     <div class="inv-margin-display" id="edit-margin">—</div>
-                                    <small>Calculated from this batch's buying and selling prices.</small>
+                                    <small data-inventory-profit-formula>Markup = (selling price − cost price) ÷ cost price × 100</small>
                                 </div>
                             </div>
                             <div class="inv-form-row">
@@ -3384,6 +3493,7 @@
             document.getElementById('edit-vat-enabled')?.addEventListener('change', editVatUpd);
             document.getElementById('edit-vat-value')?.addEventListener('input', editVatUpd);
             document.getElementById('edit-vat-type')?.addEventListener('change', editVatUpd);
+            this.bindProfitMetricControls(modal, editMarginUpd);
             editMarginUpd();
             this.updateEditFormVatTotalPreview();
         },

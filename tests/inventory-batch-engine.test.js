@@ -146,6 +146,15 @@ function product(batches) {
     assert.strictEqual(engine.marginPercentage(10, 0), 0);
 }
 
+// Markup is calculated against cost, matching the common pharmacy interpretation.
+{
+    assert.strictEqual(engine.markupPercentage(100, 150), 50);
+    assert.strictEqual(engine.markupPercentage(100, 80), -20);
+    assert.strictEqual(engine.markupPercentage(0, 100), 0);
+    assert.strictEqual(engine.markupPercentage(245.39, 330).toFixed(1), '34.5');
+    assert.strictEqual(engine.marginPercentage(245.39, 330).toFixed(1), '25.6');
+}
+
 // Editing a product updates the current FEFO batch expiry and prices.
 {
     const changedExpiry = '2098-06-30T00:00:00.000Z';

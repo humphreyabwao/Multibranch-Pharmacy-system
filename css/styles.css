@@ -4047,6 +4047,95 @@ input, select, textarea {
     font-size: 0.8rem;
 }
 
+.inv-profit-metric-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 11px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+}
+
+.inv-profit-metric-copy {
+    display: grid;
+    gap: 2px;
+}
+
+.inv-profit-metric-copy strong {
+    color: var(--text-primary);
+    font-size: 0.88rem;
+}
+
+.inv-profit-metric-copy span {
+    color: var(--text-tertiary);
+    font-size: 0.76rem;
+}
+
+.inv-profit-metric-toggle {
+    display: inline-flex;
+    flex: 0 0 auto;
+    gap: 4px;
+}
+
+.inv-profit-metric-toggle button {
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 6px 11px;
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 0.76rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.inv-profit-metric-toggle button:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.inv-profit-metric-toggle button.active {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+}
+
+.inv-profit-field-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 6px;
+}
+
+.inv-profit-field-heading label {
+    margin-bottom: 0;
+}
+
+.inv-profit-metric-toggle--compact {
+    gap: 3px;
+}
+
+.inv-profit-metric-toggle--compact button {
+    padding: 4px 7px;
+    font-size: 0.7rem;
+}
+
+.inv-profit-metric-value strong,
+.inv-profit-metric-value small {
+    display: block;
+}
+
+.inv-profit-metric-value small {
+    margin-top: 2px;
+    color: var(--text-tertiary);
+    font-size: 0.7rem;
+    white-space: nowrap;
+}
+
 .inv-batch-tracker-table-wrap {
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
@@ -4077,6 +4166,7 @@ input, select, textarea {
 
 [data-theme="dark"] .inv-batch-tracker-product,
 [data-theme="dark"] .inv-batch-tracker-stats > div,
+[data-theme="dark"] .inv-profit-metric-bar,
 [data-theme="dark"] .inv-batch-tracker-table-wrap {
     background: rgba(15, 23, 42, 0.28);
 }
@@ -4123,6 +4213,15 @@ input, select, textarea {
 
     .inv-batch-tracker-meta {
         display: grid;
+    }
+
+    .inv-profit-metric-bar {
+        align-items: stretch;
+        display: grid;
+    }
+
+    .inv-profit-metric-toggle {
+        justify-self: start;
     }
 }
 

@@ -31,6 +31,13 @@
         return ((selling - cost) / selling) * 100;
     }
 
+    function markupPercentage(buyingPrice, sellingPrice) {
+        const cost = money(buyingPrice);
+        const selling = money(sellingPrice);
+        if (cost <= 0) return 0;
+        return ((selling - cost) / cost) * 100;
+    }
+
     function dateValue(value, fallback) {
         if (!value) return fallback;
         const date = value.toDate ? value.toDate() : new Date(value);
@@ -374,6 +381,7 @@
     return {
         integer: integer,
         marginPercentage: marginPercentage,
+        markupPercentage: markupPercentage,
         expiryCutoff: expiryCutoff,
         isExpired: isExpired,
         compareFefoFifo: compareFefoFifo,
