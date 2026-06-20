@@ -21,6 +21,26 @@
             return PharmaFlow.Settings && PharmaFlow.Settings.formatCurrency ? PharmaFlow.Settings.formatCurrency(amount) : 'KSH ' + new Intl.NumberFormat('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount || 0);
         },
 
+        getRecordedSaleDate: function (sale) {
+            if (!sale) return null;
+            const value = sale.saleDate || sale.createdAt;
+            if (!value) return null;
+            const date = value.toDate
+                ? value.toDate()
+                : (value.seconds ? new Date(value.seconds * 1000) : new Date(value));
+            return date && !isNaN(date.getTime()) ? date : null;
+        },
+
+        formatRecordedSaleTime: function (sale) {
+            const date = this.getRecordedSaleDate(sale);
+            if (!date) return '—';
+            return date.toLocaleTimeString('en-KE', {
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+        },
+
         escapeHtml: function (str) {
             const div = document.createElement('div');
             div.textContent = str || '';
@@ -115,7 +135,7 @@
                                 <tr>
                                     <th>#</th>
                                     <th>Receipt #</th>
-                                    <th>Time</th>
+                                    <th>Sale Time</th>
                                     <th>Items</th>
                                     <th>Subtotal</th>
                                     <th>Discount</th>
@@ -183,10 +203,10 @@
                 .onSnapshot(snapshot => {
                     todaySalesData = [];
                     snapshot.forEach(doc => todaySalesData.push({ id: doc.id, ...doc.data() }));
-                    // Sort client-side by createdAt desc (avoids composite index)
+                    // Sort by the actual recorded transaction time.
                     todaySalesData.sort((a, b) => {
-                        const ta = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
-                        const tb = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
+                        const ta = this.getRecordedSaleDate(a)?.getTime() || 0;
+                        const tb = this.getRecordedSaleDate(b)?.getTime() || 0;
                         return tb - ta;
                     });
                     this.updateStats();
@@ -248,7 +268,7 @@
             }
 
             tbody.innerHTML = filtered.map((sale, i) => {
-                const time = sale.saleDate?.toDate ? sale.saleDate.toDate().toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' }) : '—';
+                const time = this.formatRecordedSaleTime(sale);
                 const payBadge = this.getPaymentBadge(sale);
                 const status = sale.status || 'completed';
                 const statusBadge = this.getStatusBadge(status);

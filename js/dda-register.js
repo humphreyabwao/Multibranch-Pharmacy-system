@@ -45,6 +45,44 @@
             return PharmaFlow.Settings && PharmaFlow.Settings.formatCurrency ? PharmaFlow.Settings.formatCurrency(val) : 'KSH ' + new Intl.NumberFormat('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(val || 0);
         },
 
+        getSaleDate: function (sale) {
+            if (!sale) return null;
+            const value = sale.saleDate || sale.createdAt || sale.saleDateStr;
+            if (!value) return null;
+            const date = value.toDate
+                ? value.toDate()
+                : (value.seconds ? new Date(value.seconds * 1000) : new Date(value));
+            return date && !isNaN(date.getTime()) ? date : null;
+        },
+
+        getSaleDateKey: function (sale) {
+            const date = this.getSaleDate(sale);
+            if (date) {
+                const year = date.getFullYear();
+                const month = String(date.getMonth() + 1).padStart(2, '0');
+                const day = String(date.getDate()).padStart(2, '0');
+                return year + '-' + month + '-' + day;
+            }
+            return sale?.saleDateStr && /^\d{4}-\d{2}-\d{2}$/.test(sale.saleDateStr)
+                ? sale.saleDateStr
+                : '';
+        },
+
+        formatSaleDate: function (sale, includeTime) {
+            const date = this.getSaleDate(sale);
+            if (!date) return '—';
+            const dateText = date.toLocaleDateString('en-KE', {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric'
+            });
+            if (!includeTime) return dateText;
+            return dateText + ' ' + date.toLocaleTimeString('en-KE', {
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        },
+
         escapeHtml: function (str) {
             if (!str) return '';
             const d = document.createElement('div');
@@ -522,8 +560,8 @@
 
                 // Sort client-side by saleDate descending
                 allSales.sort((a, b) => {
-                    const ta = a.saleDate?.toDate ? a.saleDate.toDate().getTime() : 0;
-                    const tb = b.saleDate?.toDate ? b.saleDate.toDate().getTime() : 0;
+                    const ta = this.getSaleDate(a)?.getTime() || 0;
+                    const tb = this.getSaleDate(b)?.getTime() || 0;
                     return tb - ta;
                 });
 
@@ -532,7 +570,7 @@
                 const toStr = document.getElementById('dda-sales-to')?.value || '';
                 if (fromStr || toStr) {
                     allSales = allSales.filter(s => {
-                        const d = s.saleDateStr || '';
+                        const d = this.getSaleDateKey(s);
                         if (fromStr && d < fromStr) return false;
                         if (toStr && d > toStr) return false;
                         return true;
@@ -631,7 +669,7 @@
             }
 
             tbody.innerHTML = pageData.map((s, i) => {
-                const date = s.saleDate?.toDate ? s.saleDate.toDate().toLocaleDateString('en-KE', { year: 'numeric', month: 'short', day: 'numeric' }) : '—';
+                const date = this.formatSaleDate(s, true);
                 const profitCls = (s.profit || 0) >= 0 ? 'sales-profit-pos' : 'sales-profit-neg';
                 return `<tr>
                     <td>${start + i + 1}</td>
@@ -672,7 +710,7 @@
                 doc.text('Period: ' + from + ' to ' + to + '   |   Total Records: ' + allSales.length, 14, 29);
 
                 const rows = allSales.map((s, i) => {
-                    const date = s.saleDate?.toDate ? s.saleDate.toDate().toLocaleDateString('en-KE') : '';
+                    const date = this.formatSaleDate(s, true);
                     return [i + 1, date, s.saleId || '', s.drugName || '', s.quantitySold || 0, this.formatCurrency(s.unitPrice), this.formatCurrency(s.lineTotal), this.formatCurrency(s.profit), s.soldBy || '', s.balanceAfterSale != null ? s.balanceAfterSale : ''];
                 });
 
