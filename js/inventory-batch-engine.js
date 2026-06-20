@@ -274,6 +274,61 @@
         };
     }
 
+    function reconcileHistory(entries, currentQty) {
+        const history = (entries || []).map(function (entry) {
+            return { ...entry };
+        }).sort(function (a, b) {
+            const timeDiff = dateValue(a.createdAt || a.updatedAt, 0) - dateValue(b.createdAt || b.updatedAt, 0);
+            return timeDiff || String(a.id || '').localeCompare(String(b.id || ''));
+        });
+
+        if (!history.length) {
+            const current = integer(currentQty);
+            return {
+                openingQty: current,
+                expectedQty: current,
+                ledgerBreaks: 0,
+                source: 'current baseline'
+            };
+        }
+
+        const first = history[0];
+        const firstPrevious = Number(first.previousQty);
+        const firstNext = Number(first.newQty);
+        const firstAdded = integer(first._addedQty != null ? first._addedQty : first.addedQty);
+        const firstRemoved = integer(first._removedQty != null ? first._removedQty : first.removedQty);
+        let openingQty = Number.isFinite(firstPrevious)
+            ? integer(firstPrevious)
+            : (Number.isFinite(firstNext) ? Math.max(0, integer(firstNext) - firstAdded + firstRemoved) : 0);
+        let runningQty = openingQty;
+        let ledgerBreaks = 0;
+
+        history.forEach(function (entry) {
+            const previous = Number(entry.previousQty);
+            const next = Number(entry.newQty);
+            const hasPrevious = Number.isFinite(previous);
+            const hasNext = Number.isFinite(next);
+            if (hasPrevious && integer(previous) !== runningQty) {
+                ledgerBreaks++;
+                runningQty = integer(previous);
+            }
+            if (hasNext) {
+                runningQty = integer(next);
+            } else {
+                const added = integer(entry._addedQty != null ? entry._addedQty : entry.addedQty);
+                const removed = integer(entry._removedQty != null ? entry._removedQty : entry.removedQty);
+                runningQty = Math.max(0, runningQty + added - removed);
+            }
+        });
+
+        return {
+            openingQty: openingQty,
+            expectedQty: runningQty,
+            ledgerBreaks: ledgerBreaks,
+            source: 'movement ledger'
+        };
+    }
+
     return {
         integer: integer,
         expiryCutoff: expiryCutoff,
@@ -288,6 +343,7 @@
         consume: consume,
         appendBatch: appendBatch,
         restore: restore,
-        inspect: inspect
+        inspect: inspect,
+        reconcileHistory: reconcileHistory
     };
 });

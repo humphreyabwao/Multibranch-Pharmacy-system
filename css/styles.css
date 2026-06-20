@@ -3034,6 +3034,7 @@ input, select, textarea {
     font-size: 0.78rem;
     font-weight: 700;
 }
+.inv-recon-table { min-width: 940px; }
 .inv-recon-table td { vertical-align: middle; }
 .inv-recon-source {
     display: block;

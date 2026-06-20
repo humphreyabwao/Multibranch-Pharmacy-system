@@ -169,4 +169,33 @@ function product(batches) {
     assert.strictEqual(sold.sellableAfter, 0);
 }
 
+// Reconciliation keeps a legacy opening balance and applies every movement in order.
+{
+    const ledger = engine.reconcileHistory([
+        { id: '1', createdAt: '2026-01-01', previousQty: 10, addedQty: 5, newQty: 15 },
+        { id: '2', createdAt: '2026-01-02', previousQty: 15, removedQty: 3, newQty: 12 },
+        { id: '3', createdAt: '2026-01-03', previousQty: 12, removedQty: 2, newQty: 10 }
+    ], 10);
+    assert.strictEqual(ledger.openingQty, 10);
+    assert.strictEqual(ledger.expectedQty, 10);
+    assert.strictEqual(ledger.ledgerBreaks, 0);
+}
+
+// Missing links in stock history are surfaced even when a later checkpoint restores the total.
+{
+    const ledger = engine.reconcileHistory([
+        { id: '1', createdAt: '2026-01-01', previousQty: 5, addedQty: 5, newQty: 10 },
+        { id: '2', createdAt: '2026-01-02', previousQty: 8, removedQty: 1, newQty: 7 }
+    ], 7);
+    assert.strictEqual(ledger.expectedQty, 7);
+    assert.strictEqual(ledger.ledgerBreaks, 1);
+}
+
+// A product without history uses its current stored quantity as a neutral baseline.
+{
+    const ledger = engine.reconcileHistory([], 6);
+    assert.strictEqual(ledger.expectedQty, 6);
+    assert.strictEqual(ledger.source, 'current baseline');
+}
+
 console.log('Inventory batch engine scenarios passed.');

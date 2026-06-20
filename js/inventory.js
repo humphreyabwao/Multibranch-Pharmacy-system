@@ -16,11 +16,13 @@
     let unsubInventory = null;
     let unsubReconciliationSales = null;
     let unsubReconciliationStock = null;
+    let unsubReconciliationOrders = null;
     let unsubInventoryDisposals = null;
     let allProducts = [];
     let quarantinedByProduct = {};
     let reconciliationSales = [];
     let reconciliationStockHistory = [];
+    let reconciliationOrders = [];
     let unsubBatchTracker = null;
     let lastInventorySyncAt = 0;
     let lastServerRefreshAt = 0;
@@ -628,6 +630,9 @@
                 const time = new Date().toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
                 this.setRefreshState('ready', (source || 'Inventory') + ' synced instantly • ' + time);
             }
+            if (changed && document.getElementById('inv-recon-body')) {
+                this.renderReconciliationData();
+            }
             return changed;
         },
 
@@ -784,7 +789,10 @@
                             </div>
                         </div>
                         <div class="page-header-right">
-                            <button class="btn btn-sm btn-outline" id="inv-recon-refresh">
+                            <button class="btn btn-sm btn-outline" id="inv-recon-export-pdf">
+                                <i class="fas fa-file-pdf"></i> Export PDF
+                            </button>
+                            <button class="btn btn-sm btn-outline" id="inv-recon-refresh" disabled>
                                 <i class="fas fa-rotate"></i> Refresh
                             </button>
                         </div>
@@ -792,7 +800,7 @@
 
                     <div class="inv-recon-status">
                         <span class="inv-live-dot"></span>
-                        <span>Live reconciliation of inventory stock, sold items, and stock additions</span>
+                        <span>Expected Left follows the ordered movement ledger. Current Stock is the stored physical quantity; sellable stock is shown separately.</span>
                         <strong id="inv-recon-updated">Waiting for data...</strong>
                     </div>
 
@@ -859,11 +867,12 @@
                                             <th>Expected Left</th>
                                             <th>Current Stock</th>
                                             <th>Batch Check</th>
+                                            <th>Order Check</th>
                                             <th>Status</th>
                                         </tr>
                                     </thead>
                                     <tbody id="inv-recon-body">
-                                        <tr><td colspan="7" class="inv-loading-cell"><i class="fas fa-spinner fa-spin"></i> Loading reconciliation...</td></tr>
+                                        <tr><td colspan="8" class="inv-loading-cell"><i class="fas fa-spinner fa-spin"></i> Loading reconciliation...</td></tr>
                                     </tbody>
                                 </table>
                             </div>
@@ -893,6 +902,7 @@
             document.getElementById('inv-recon-search')?.addEventListener('input', () => this.renderReconciliationData());
             document.getElementById('inv-recon-filter')?.addEventListener('change', () => this.renderReconciliationData());
             document.getElementById('inv-recon-refresh')?.addEventListener('click', () => this.renderReconciliationData());
+            document.getElementById('inv-recon-export-pdf')?.addEventListener('click', () => this.exportReconciliationPdf());
 
             if (businessId) this.subscribeToReconciliation(businessId);
         },
@@ -901,26 +911,55 @@
             if (unsubInventory) { unsubInventory(); unsubInventory = null; }
             if (unsubReconciliationSales) { unsubReconciliationSales(); unsubReconciliationSales = null; }
             if (unsubReconciliationStock) { unsubReconciliationStock(); unsubReconciliationStock = null; }
+            if (unsubReconciliationOrders) { unsubReconciliationOrders(); unsubReconciliationOrders = null; }
 
             const invRef = getBusinessCollection(businessId, 'inventory');
             const salesRef = getBusinessCollection(businessId, 'sales');
             const stockRef = getBusinessCollection(businessId, 'stock_history');
-            if (!invRef || !salesRef || !stockRef) return;
+            const ordersRef = getBusinessCollection(businessId, 'orders');
+            if (!invRef || !salesRef || !stockRef || !ordersRef) return;
 
-            const render = () => this.renderReconciliationData();
+            const ready = { inventory: false, sales: false, stock: false, orders: false };
+            let renderTimer = null;
+            const render = () => {
+                if (ready.inventory && ready.sales && ready.stock && ready.orders) {
+                    const refreshButton = document.getElementById('inv-recon-refresh');
+                    if (refreshButton) refreshButton.disabled = false;
+                    if (renderTimer) clearTimeout(renderTimer);
+                    renderTimer = setTimeout(() => {
+                        renderTimer = null;
+                        this.renderReconciliationData();
+                    }, 80);
+                    return;
+                }
+                const updated = document.getElementById('inv-recon-updated');
+                if (updated) {
+                    const loaded = Object.values(ready).filter(Boolean).length;
+                    updated.textContent = 'Synchronizing live sources ' + loaded + '/4...';
+                }
+            };
 
             unsubInventory = invRef.onSnapshot(snap => {
                 allProducts = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                ready.inventory = true;
                 render();
             }, err => this.showReconciliationError(err));
 
             unsubReconciliationSales = salesRef.onSnapshot(snap => {
                 reconciliationSales = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                ready.sales = true;
                 render();
             }, err => this.showReconciliationError(err));
 
             unsubReconciliationStock = stockRef.onSnapshot(snap => {
                 reconciliationStockHistory = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                ready.stock = true;
+                render();
+            }, err => this.showReconciliationError(err));
+
+            unsubReconciliationOrders = ordersRef.onSnapshot(snap => {
+                reconciliationOrders = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                ready.orders = true;
                 render();
             }, err => this.showReconciliationError(err));
         },
@@ -929,54 +968,85 @@
             console.error('Inventory reconciliation listener error:', err);
             const body = document.getElementById('inv-recon-body');
             if (body) {
-                body.innerHTML = '<tr><td colspan="7" class="inv-loading-cell" style="color:var(--danger)"><i class="fas fa-exclamation-triangle"></i> Failed to load reconciliation data</td></tr>';
+                body.innerHTML = '<tr><td colspan="8" class="inv-loading-cell" style="color:var(--danger)"><i class="fas fa-exclamation-triangle"></i> Failed to load reconciliation data</td></tr>';
             }
         },
 
         buildReconciliationRows: function () {
             const rowsById = new Map();
+            const ensureRow = (productId, fallback) => {
+                if (!rowsById.has(productId)) {
+                    rowsById.set(productId, {
+                        productId: productId,
+                        name: fallback?.name || fallback?.productName || 'Deleted / missing inventory item',
+                        sku: fallback?.sku || '',
+                        category: fallback?.category || '',
+                        currentQty: 0,
+                        sellableQty: 0,
+                        storedQty: 0,
+                        batchQty: 0,
+                        soldQty: 0,
+                        addedQty: 0,
+                        nonSaleRemovedQty: 0,
+                        orderedQty: 0,
+                        orderReceivedQty: 0,
+                        hasStockHistory: false,
+                        hasAdditionHistory: false,
+                        historyEntries: [],
+                        historySaleQty: 0,
+                        historySaleRestoreQty: 0,
+                        ledgerBreaks: 0,
+                        saleRefs: new Set(),
+                        orderRefs: new Set(),
+                        lastMovementAt: ''
+                    });
+                }
+                return rowsById.get(productId);
+            };
 
             allProducts.forEach(product => {
-                const currentQty = this.getSellableQuantity(product);
-                const batchQty = PharmaFlow.InventoryBatchEngine
-                    ? PharmaFlow.InventoryBatchEngine.sellableQuantity(product)
+                const row = ensureRow(product.id, product);
+                const inspection = PharmaFlow.InventoryBatchEngine
+                    ? PharmaFlow.InventoryBatchEngine.inspect(product)
+                    : null;
+                row.name = product.name || 'Unnamed item';
+                row.sku = product.sku || '';
+                row.category = product.category || '';
+                row.sellableQty = this.getSellableQuantity(product);
+                row.storedQty = Math.max(0, parseInt(product.quantity, 10) || 0);
+                row.currentQty = row.storedQty;
+                row.batchQty = inspection
+                    ? inspection.batchQuantity
                     : this.getStockBatches(product).reduce((sum, batch) => sum + (parseInt(batch.quantity, 10) || 0), 0);
-                rowsById.set(product.id, {
-                    productId: product.id,
-                    name: product.name || 'Unnamed item',
-                    sku: product.sku || '',
-                    category: product.category || '',
-                    currentQty: currentQty,
-                    batchQty: batchQty,
-                    soldQty: 0,
-                    addedQty: 0,
-                    hasStockHistory: false,
-                    saleRefs: new Set(),
-                    lastMovementAt: product.updatedAt || product.createdAt || ''
-                });
+                row.lastMovementAt = product.updatedAt || product.createdAt || '';
             });
 
             reconciliationStockHistory.forEach(entry => {
                 const productId = entry.productId;
                 if (!productId) return;
-                if (!rowsById.has(productId)) {
-                    rowsById.set(productId, {
-                        productId: productId,
-                        name: entry.productName || 'Deleted / missing inventory item',
-                        sku: entry.sku || '',
-                        category: entry.category || '',
-                        currentQty: 0,
-                        batchQty: 0,
-                        soldQty: 0,
-                        addedQty: 0,
-                        hasStockHistory: false,
-                        saleRefs: new Set(),
-                        lastMovementAt: ''
-                    });
+                const row = ensureRow(productId, entry);
+                const type = String(entry.type || '').toLowerCase();
+                const saleRelatedAdd = type === 'sale_cancel_restore' || type === 'wholesale_cancel_restore';
+                const saleRelatedRemoval = type === 'pos_sale' || type === 'wholesale_sale' || type === 'sale_restore_deduction';
+                let added = parseInt(entry.addedQty, 10) || 0;
+                let removed = parseInt(entry.removedQty, 10) || 0;
+                if (!added && !removed && entry.previousQty != null && entry.newQty != null) {
+                    const movementDelta = (parseInt(entry.newQty, 10) || 0) - (parseInt(entry.previousQty, 10) || 0);
+                    if (movementDelta > 0) added = movementDelta;
+                    if (movementDelta < 0) removed = Math.abs(movementDelta);
                 }
-                const row = rowsById.get(productId);
-                row.addedQty += parseInt(entry.addedQty, 10) || 0;
+                if (!saleRelatedAdd) row.addedQty += added;
+                if (!saleRelatedRemoval) row.nonSaleRemovedQty += removed;
+                if (type === 'order_received') row.orderReceivedQty += added;
+                if (saleRelatedRemoval) row.historySaleQty += removed;
+                if (saleRelatedAdd) row.historySaleRestoreQty += added;
                 row.hasStockHistory = true;
+                if (!saleRelatedAdd && added > 0) row.hasAdditionHistory = true;
+                row.historyEntries.push({
+                    ...entry,
+                    _addedQty: added,
+                    _removedQty: removed
+                });
                 if (entry.createdAt && String(entry.createdAt) > String(row.lastMovementAt || '')) row.lastMovementAt = entry.createdAt;
             });
 
@@ -986,35 +1056,54 @@
                 (sale.items || []).forEach(item => {
                     const productId = item.productId;
                     if (!productId) return;
-                    if (!rowsById.has(productId)) {
-                        rowsById.set(productId, {
-                            productId: productId,
-                            name: item.name || 'Sold item missing from inventory',
-                            sku: item.sku || '',
-                            category: item.category || '',
-                            currentQty: 0,
-                            batchQty: 0,
-                            soldQty: 0,
-                            addedQty: 0,
-                            hasStockHistory: false,
-                            saleRefs: new Set(),
-                            lastMovementAt: ''
-                        });
-                    }
-                    const row = rowsById.get(productId);
-                    row.soldQty += parseInt(item.quantity, 10) || 0;
+                    const row = ensureRow(productId, item);
+                    row.soldQty += parseInt(item.quantity ?? item.qty, 10) || 0;
                     row.saleRefs.add(sale.saleId || sale.id);
                     if (sale.saleDate && String(sale.saleDate) > String(row.lastMovementAt || '')) row.lastMovementAt = sale.saleDate;
                 });
             });
 
+            reconciliationOrders.forEach(order => {
+                if (!order.inventoryAdded) return;
+                (order.items || []).forEach(item => {
+                    const productId = item.productId || item.inventoryId;
+                    if (!productId) return;
+                    const row = ensureRow(productId, item);
+                    row.orderedQty += parseInt(item.orderQty ?? item.quantity ?? item.qty, 10) || 0;
+                    row.orderRefs.add(order.orderId || order.id);
+                    const date = order.inventoryAddedAt || order.updatedAt || order.createdAt || '';
+                    if (date && String(date) > String(row.lastMovementAt || '')) row.lastMovementAt = date;
+                });
+            });
+
             rowsById.forEach(row => {
-                row.addedSource = row.hasStockHistory ? 'recorded' : 'inferred';
-                if (!row.hasStockHistory) row.addedQty = row.currentQty + row.soldQty;
-                row.expectedQty = row.addedQty - row.soldQty;
+                if (row.historyEntries.length && PharmaFlow.InventoryBatchEngine?.reconcileHistory) {
+                    const ledger = PharmaFlow.InventoryBatchEngine.reconcileHistory(row.historyEntries, row.currentQty);
+                    row.openingQty = ledger.openingQty;
+                    row.expectedQty = ledger.expectedQty;
+                    row.ledgerBreaks = ledger.ledgerBreaks;
+                    row.expectedSource = ledger.source;
+                    row.addedSource = 'recorded';
+                } else {
+                    row.openingQty = row.currentQty;
+                    row.expectedQty = row.currentQty;
+                    row.expectedSource = 'current baseline';
+                    row.addedSource = 'inferred';
+                    row.addedQty = row.currentQty + row.soldQty + row.nonSaleRemovedQty;
+                }
+
                 row.diffQty = row.currentQty - row.expectedQty;
-                row.batchDiff = row.batchQty - row.currentQty;
-                row.matched = row.diffQty === 0 && row.batchDiff === 0;
+                row.batchDiff = row.batchQty - row.storedQty;
+                row.orderDiff = row.orderReceivedQty - row.orderedQty;
+                row.orderMatched = row.orderedQty === 0 || row.orderDiff === 0;
+                row.netHistorySoldQty = Math.max(0, row.historySaleQty - row.historySaleRestoreQty);
+                row.saleDiff = row.netHistorySoldQty - row.soldQty;
+                row.saleMatched = row.saleDiff === 0;
+                row.matched = row.diffQty === 0 &&
+                    row.batchDiff === 0 &&
+                    row.orderMatched &&
+                    row.saleMatched &&
+                    row.ledgerBreaks === 0;
             });
 
             return Array.from(rowsById.values()).sort((a, b) => {
@@ -1023,18 +1112,20 @@
             });
         },
 
-        renderReconciliationData: function () {
-            const body = document.getElementById('inv-recon-body');
-            if (!body) return;
-
+        getFilteredReconciliationRows: function (baseRows) {
             const query = (document.getElementById('inv-recon-search')?.value || '').toLowerCase().trim();
             const filter = document.getElementById('inv-recon-filter')?.value || '';
-            let rows = this.buildReconciliationRows();
-            const allRows = rows.slice();
+            let rows = Array.isArray(baseRows) ? baseRows.slice() : this.buildReconciliationRows();
 
             if (query) {
                 rows = rows.filter(row => {
-                    const haystack = [row.name, row.sku, row.category, Array.from(row.saleRefs || []).join(' ')].join(' ').toLowerCase();
+                    const haystack = [
+                        row.name,
+                        row.sku,
+                        row.category,
+                        Array.from(row.saleRefs || []).join(' '),
+                        Array.from(row.orderRefs || []).join(' ')
+                    ].join(' ').toLowerCase();
                     return haystack.indexOf(query) !== -1;
                 });
             }
@@ -1042,6 +1133,15 @@
             if (filter === 'matched') rows = rows.filter(row => row.matched);
             if (filter === 'sold') rows = rows.filter(row => row.soldQty > 0);
             if (filter === 'added') rows = rows.filter(row => row.addedQty > 0);
+            return rows;
+        },
+
+        renderReconciliationData: function () {
+            const body = document.getElementById('inv-recon-body');
+            if (!body) return;
+
+            const allRows = this.buildReconciliationRows();
+            const rows = this.getFilteredReconciliationRows(allRows);
 
             const matched = allRows.filter(row => row.matched).length;
             const mismatched = allRows.length - matched;
@@ -1056,22 +1156,34 @@
             if (updated) updated.textContent = 'Updated ' + this.formatDateTime(new Date().toISOString());
 
             if (!rows.length) {
-                body.innerHTML = '<tr><td colspan="7" class="inv-empty-cell"><i class="fas fa-inbox"></i> No reconciliation rows found</td></tr>';
+                body.innerHTML = '<tr><td colspan="8" class="inv-empty-cell"><i class="fas fa-inbox"></i> No reconciliation rows found</td></tr>';
             } else {
                 body.innerHTML = rows.map(row => {
+                    const reviewReasons = [];
+                    if (row.diffQty !== 0) reviewReasons.push('stock ' + (row.diffQty > 0 ? '+' : '') + row.diffQty);
+                    if (row.batchDiff !== 0) reviewReasons.push('batch ' + (row.batchDiff > 0 ? '+' : '') + row.batchDiff);
+                    if (!row.orderMatched) reviewReasons.push('order ' + (row.orderDiff > 0 ? '+' : '') + row.orderDiff);
+                    if (!row.saleMatched) reviewReasons.push('sales ledger ' + (row.saleDiff > 0 ? '+' : '') + row.saleDiff);
+                    if (row.ledgerBreaks) reviewReasons.push(row.ledgerBreaks + ' ledger gap' + (row.ledgerBreaks === 1 ? '' : 's'));
                     const status = row.matched
                         ? '<span class="inv-recon-badge inv-recon-badge--ok"><i class="fas fa-check"></i> Matched</span>'
-                        : '<span class="inv-recon-badge inv-recon-badge--warn"><i class="fas fa-triangle-exclamation"></i> Review ' + (row.diffQty > 0 ? '+' : '') + row.diffQty + '</span>';
+                        : '<span class="inv-recon-badge inv-recon-badge--warn" title="' + this.escapeHtml(reviewReasons.join(', ')) + '"><i class="fas fa-triangle-exclamation"></i> Review</span>';
                     const batchStatus = row.batchDiff === 0
                         ? '<span class="inv-recon-batch-ok">OK</span>'
                         : '<span class="inv-recon-batch-warn">' + (row.batchDiff > 0 ? '+' : '') + row.batchDiff + '</span>';
+                    const orderStatus = row.orderedQty === 0
+                        ? '<span class="inv-recon-source">No linked order</span>'
+                        : (row.orderMatched
+                            ? '<span class="inv-recon-batch-ok">' + row.orderReceivedQty + ' received</span>'
+                            : '<span class="inv-recon-batch-warn">' + (row.orderDiff > 0 ? '+' : '') + row.orderDiff + '</span>');
                     return '<tr>' +
                         '<td><div class="inv-product-name"><strong>' + this.escapeHtml(row.name) + '</strong><small>' + this.escapeHtml(row.sku || row.category || 'No SKU') + '</small></div></td>' +
                         '<td><strong>' + row.addedQty + '</strong><small class="inv-recon-source">' + row.addedSource + '</small></td>' +
                         '<td>' + row.soldQty + '</td>' +
-                        '<td>' + row.expectedQty + '</td>' +
-                        '<td><strong>' + row.currentQty + '</strong></td>' +
+                        '<td><strong>' + row.expectedQty + '</strong><small class="inv-recon-source">' + row.expectedSource + '</small></td>' +
+                        '<td><strong>' + row.currentQty + '</strong><small class="inv-recon-source">' + row.sellableQty + ' sellable</small></td>' +
                         '<td>' + batchStatus + '</td>' +
+                        '<td>' + orderStatus + '</td>' +
                         '<td>' + status + '</td>' +
                     '</tr>';
                 }).join('');
@@ -1080,17 +1192,83 @@
             this.renderReconciliationMovements();
         },
 
+        exportReconciliationPdf: function () {
+            const rows = this.getFilteredReconciliationRows();
+            if (!rows.length) {
+                this.showToast('No reconciliation rows match the current filters.', 'error');
+                return;
+            }
+            if (!window.jspdf?.jsPDF) {
+                this.showToast('PDF export library is unavailable.', 'error');
+                return;
+            }
+
+            const doc = new window.jspdf.jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+            const businessName = PharmaFlow.Settings?.getBusinessName?.() || 'PharmaFlow';
+            const matched = rows.filter(row => row.matched).length;
+            const review = rows.length - matched;
+            doc.setFontSize(16);
+            doc.text(businessName + ' — Inventory Reconciliation', 14, 14);
+            doc.setFontSize(9);
+            doc.text(
+                'Generated: ' + new Date().toLocaleString('en-KE') +
+                '  |  Rows: ' + rows.length +
+                '  |  Matched: ' + matched +
+                '  |  Needs review: ' + review,
+                14,
+                20
+            );
+            doc.autoTable({
+                startY: 25,
+                head: [[
+                    'Item', 'SKU', 'Added', 'Non-sale Out', 'Sold',
+                    'Expected', 'Current', 'Sellable', 'Batch Diff', 'Sales Diff', 'Order Diff', 'Ledger Gaps', 'Status'
+                ]],
+                body: rows.map(row => [
+                    row.name,
+                    row.sku || '—',
+                    row.addedQty,
+                    row.nonSaleRemovedQty,
+                    row.soldQty,
+                    row.expectedQty,
+                    row.currentQty,
+                    row.sellableQty,
+                    row.batchDiff,
+                    row.saleDiff,
+                    row.orderedQty ? row.orderDiff : 'N/A',
+                    row.ledgerBreaks,
+                    row.matched ? 'Matched' : 'Needs review'
+                ]),
+                styles: { fontSize: 7, cellPadding: 2 },
+                headStyles: { fillColor: [30, 64, 175] },
+                alternateRowStyles: { fillColor: [245, 247, 250] },
+                margin: { left: 10, right: 10 }
+            });
+            doc.save('Inventory_Reconciliation_' + new Date().toISOString().slice(0, 10) + '.pdf');
+            this.showToast('Reconciliation exported to PDF.');
+        },
+
         renderReconciliationMovements: function () {
             const container = document.getElementById('inv-recon-movements');
             if (!container) return;
 
-            const stockMoves = reconciliationStockHistory.map(entry => ({
-                type: 'in',
-                date: entry.createdAt || '',
-                title: entry.productName || 'Stock added',
-                meta: '+' + (entry.addedQty || 0) + ' units' + (entry.orderId ? ' from ' + entry.orderId : ''),
-                icon: 'fa-arrow-down'
-            }));
+            const saleMovementTypes = new Set(['pos_sale', 'wholesale_sale', 'sale_restore_deduction']);
+            const stockMoves = reconciliationStockHistory
+                .filter(entry => !saleMovementTypes.has(String(entry.type || '').toLowerCase()))
+                .map(entry => {
+                    const added = parseInt(entry.addedQty, 10) || 0;
+                    const removed = parseInt(entry.removedQty, 10) || 0;
+                    const isRemoval = removed > 0 && added <= 0;
+                    return {
+                        type: isRemoval ? 'out' : 'in',
+                        date: entry.createdAt || '',
+                        title: entry.productName || (isRemoval ? 'Stock removed' : 'Stock added'),
+                        meta: (isRemoval ? '-' + removed : '+' + added) + ' units' +
+                            (entry.orderId ? ' from ' + entry.orderId : '') +
+                            (entry.reason ? ' • ' + String(entry.reason).replace(/_/g, ' ') : ''),
+                        icon: isRemoval ? 'fa-arrow-up' : 'fa-arrow-down'
+                    };
+                });
             const saleMoves = [];
             reconciliationSales.forEach(sale => {
                 if ((sale.status || 'completed') === 'cancelled') return;
@@ -1099,7 +1277,7 @@
                         type: 'out',
                         date: sale.saleDate || sale.createdAt || '',
                         title: item.name || 'Sold item',
-                        meta: '-' + (item.quantity || 0) + ' units on ' + (sale.saleId || sale.id || 'sale'),
+                        meta: '-' + (item.quantity ?? item.qty ?? 0) + ' units on ' + (sale.saleId || sale.id || 'sale'),
                         icon: 'fa-arrow-up'
                     });
                 });
@@ -3325,6 +3503,10 @@
                 unsubReconciliationStock();
                 unsubReconciliationStock = null;
             }
+            if (unsubReconciliationOrders) {
+                unsubReconciliationOrders();
+                unsubReconciliationOrders = null;
+            }
             if (unsubInventoryDisposals) {
                 unsubInventoryDisposals();
                 unsubInventoryDisposals = null;
@@ -3335,6 +3517,7 @@
             }
             reconciliationSales = [];
             reconciliationStockHistory = [];
+            reconciliationOrders = [];
             quarantinedByProduct = {};
             allProducts = [];
             filteredProducts = [];
