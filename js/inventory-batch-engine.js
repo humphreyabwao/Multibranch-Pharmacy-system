@@ -24,6 +24,13 @@
         return Number.isFinite(parsed) ? parsed : (Number(fallback) || 0);
     }
 
+    function marginPercentage(buyingPrice, sellingPrice) {
+        const cost = money(buyingPrice);
+        const selling = money(sellingPrice);
+        if (selling <= 0) return 0;
+        return ((selling - cost) / selling) * 100;
+    }
+
     function dateValue(value, fallback) {
         if (!value) return fallback;
         const date = value.toDate ? value.toDate() : new Date(value);
@@ -247,6 +254,41 @@
         };
     }
 
+    function updatePrimaryBatch(product, changes, now) {
+        const batches = normalize(product);
+        const sellable = batches.filter(function (batch) {
+            return integer(batch.quantity) > 0 && !isExpired(batch.expiryDate, now);
+        }).sort(compareFefoFifo);
+        const primary = sellable[0] || batches.filter(function (batch) {
+            return integer(batch.quantity) > 0;
+        }).sort(compareFefoFifo)[0];
+        if (!primary) throw new Error('No stock batch is available to update.');
+
+        changes = changes || {};
+        if (Object.prototype.hasOwnProperty.call(changes, 'expiryDate')) {
+            if (!changes.expiryDate) throw new Error('Expiry date is required.');
+            if (isExpired(changes.expiryDate, now)) throw new Error('Expiry date cannot be in the past.');
+            primary.expiryDate = changes.expiryDate;
+        }
+        if (Object.prototype.hasOwnProperty.call(changes, 'buyingPrice')) {
+            primary.buyingPrice = money(changes.buyingPrice);
+        }
+        if (Object.prototype.hasOwnProperty.call(changes, 'sellingPrice')) {
+            primary.sellingPrice = money(changes.sellingPrice);
+        }
+        if (Object.prototype.hasOwnProperty.call(changes, 'minimumSellPrice')) {
+            primary.minimumSellPrice = money(changes.minimumSellPrice, primary.buyingPrice);
+        }
+
+        batches.sort(compareFefoFifo);
+        return {
+            updatedBatches: batches,
+            quantityAfter: quantityOf(batches),
+            updatedBatch: primary,
+            primaryBatch: primaryBatch(batches, now)
+        };
+    }
+
     function inspect(product, now) {
         const batches = normalize(product);
         const batchQuantity = quantityOf(batches);
@@ -331,6 +373,7 @@
 
     return {
         integer: integer,
+        marginPercentage: marginPercentage,
         expiryCutoff: expiryCutoff,
         isExpired: isExpired,
         compareFefoFifo: compareFefoFifo,
@@ -343,6 +386,7 @@
         consume: consume,
         appendBatch: appendBatch,
         restore: restore,
+        updatePrimaryBatch: updatePrimaryBatch,
         inspect: inspect,
         reconcileHistory: reconcileHistory
     };

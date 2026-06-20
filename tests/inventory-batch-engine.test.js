@@ -139,6 +139,42 @@ function product(batches) {
     assert.strictEqual(restored.updatedBatches[0].quantity, 3);
 }
 
+// Gross margin is calculated against selling price, per batch.
+{
+    assert.strictEqual(engine.marginPercentage(60, 100), 40);
+    assert.strictEqual(engine.marginPercentage(100, 80), -25);
+    assert.strictEqual(engine.marginPercentage(10, 0), 0);
+}
+
+// Editing a product updates the current FEFO batch expiry and prices.
+{
+    const changedExpiry = '2098-06-30T00:00:00.000Z';
+    const result = engine.updatePrimaryBatch(product([
+        { batchNumber: 'LATER', quantity: 4, expiryDate: later, buyingPrice: 5, sellingPrice: 10 },
+        { batchNumber: 'CURRENT', quantity: 3, expiryDate: future, buyingPrice: 6, sellingPrice: 12 }
+    ]), {
+        expiryDate: changedExpiry,
+        buyingPrice: 8,
+        sellingPrice: 20,
+        minimumSellPrice: 9
+    });
+    const updated = result.updatedBatches.find(batch => batch.batchNumber === 'CURRENT');
+    assert.strictEqual(updated.expiryDate, changedExpiry);
+    assert.strictEqual(updated.buyingPrice, 8);
+    assert.strictEqual(updated.sellingPrice, 20);
+    assert.strictEqual(updated.minimumSellPrice, 9);
+    assert.strictEqual(result.quantityAfter, 7);
+}
+
+// An expired batch can have an incorrectly entered expiry corrected.
+{
+    const result = engine.updatePrimaryBatch(product([
+        { batchNumber: 'EXPIRED', quantity: 2, expiryDate: expired, buyingPrice: 5, sellingPrice: 10 }
+    ]), { expiryDate: future });
+    assert.strictEqual(result.updatedBatch.expiryDate, future);
+    assert.strictEqual(result.primaryBatch.batchNumber, 'EXPIRED');
+}
+
 // Restoring a cancelled sale also preserves pre-existing batches when totals had drifted.
 {
     const restored = engine.restore({

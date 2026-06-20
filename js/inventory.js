@@ -54,6 +54,18 @@
             return d.toLocaleDateString('en-KE', { year: 'numeric', month: 'short', day: 'numeric' });
         },
 
+        formatExpiryDate: function (ts) {
+            if (!ts) return '—';
+            const d = ts.toDate ? ts.toDate() : new Date(ts);
+            if (isNaN(d.getTime())) return '—';
+            return d.toLocaleDateString('en-KE', {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+                timeZone: 'UTC'
+            });
+        },
+
         formatDateTime: function (val) {
             if (PharmaFlow.Settings && PharmaFlow.Settings.formatDateTime) return PharmaFlow.Settings.formatDateTime(val);
             if (!val) return '—';
@@ -132,7 +144,7 @@
             }
 
             return '<div class="inv-batch-history">' + batches.map((batch, index) => {
-                const expiry = batch.expiryDate ? this.formatDate(batch.expiryDate) : '—';
+                const expiry = batch.expiryDate ? this.formatExpiryDate(batch.expiryDate) : '—';
                 const batchNumber = batch.batchNumber || ('Batch ' + (index + 1));
                 const quantity = batch.quantity || 0;
                 const buyingPrice = batch.buyingPrice != null ? batch.buyingPrice : product.buyingPrice;
@@ -289,6 +301,31 @@
             const pct = Math.min(Math.max(raw, 0), 100);
             const vatAmt = Math.round(base * (pct / 100) * 100) / 100;
             return Math.round((base + vatAmt) * 100) / 100;
+        },
+
+        getBatchMarginPercentage: function (buyingPrice, sellingPrice) {
+            if (PharmaFlow.InventoryBatchEngine?.marginPercentage) {
+                return PharmaFlow.InventoryBatchEngine.marginPercentage(buyingPrice, sellingPrice);
+            }
+            const buy = parseFloat(buyingPrice) || 0;
+            const sell = parseFloat(sellingPrice) || 0;
+            return sell > 0 ? ((sell - buy) / sell) * 100 : 0;
+        },
+
+        updateMarginPreview: function (buyingInputId, sellingInputId, outputId) {
+            const buy = parseFloat(document.getElementById(buyingInputId)?.value) || 0;
+            const sell = parseFloat(document.getElementById(sellingInputId)?.value) || 0;
+            const marginEl = document.getElementById(outputId);
+            if (!marginEl) return;
+            if (sell > 0) {
+                const margin = this.getBatchMarginPercentage(buy, sell);
+                const profit = sell - buy;
+                marginEl.textContent = margin.toFixed(1) + '% (' + this.formatCurrency(profit) + ' profit per unit)';
+                marginEl.className = 'inv-margin-display ' + (profit >= 0 ? 'inv-margin--positive' : 'inv-margin--negative');
+            } else {
+                marginEl.textContent = '—';
+                marginEl.className = 'inv-margin-display';
+            }
         },
 
         updateAddFormVatTotalPreview: function () {
@@ -1489,7 +1526,7 @@
                         <td>${this.formatCurrency(p.buyingPrice || 0)}</td>
                         <td>${this.formatCurrency(p.sellingPrice || 0)}</td>
                         <td>${this.getVatDisplay(p)}</td>
-                        <td>${sellableExpiry ? this.formatDate(sellableExpiry) : '<span class="text-muted">—</span>'}</td>
+                        <td>${sellableExpiry ? this.formatExpiryDate(sellableExpiry) : '<span class="text-muted">—</span>'}</td>
                         <td><span class="status-badge ${statusClass}">${statusLabel}</span></td>
                         <td>
                             <div class="inv-actions">
@@ -1635,7 +1672,7 @@
                 const qty = parseInt(batch.quantity, 10) || 0;
                 const costValue = qty * (parseFloat(batch.buyingPrice) || 0);
                 const retailValue = qty * (parseFloat(batch.sellingPrice) || 0);
-                const margin = retailValue ? ((retailValue - costValue) / retailValue * 100) : 0;
+                const margin = this.getBatchMarginPercentage(batch.buyingPrice, batch.sellingPrice);
                 const source = batch.source || (batch.legacy ? 'legacy' : 'manual');
                 return `
                     <tr>
@@ -1646,7 +1683,7 @@
                         <td>${this.formatCurrency(costValue)}</td>
                         <td>${this.formatCurrency(retailValue)}</td>
                         <td>${Number.isFinite(margin) ? margin.toFixed(1) + '%' : '—'}</td>
-                        <td>${this.formatDate(batch.expiryDate)}</td>
+                        <td>${this.formatExpiryDate(batch.expiryDate)}</td>
                     </tr>
                 `;
             }).join('') : `
@@ -2735,7 +2772,7 @@
                 const marginEl = document.getElementById('inv-margin');
                 if (!marginEl) return;
                 if (buy > 0 && sell > 0) {
-                    const margin = ((sell - buy) / buy * 100).toFixed(1);
+                    const margin = this.getBatchMarginPercentage(buy, sell).toFixed(1);
                     const profit = sell - buy;
                     marginEl.textContent = margin + '% (KSH ' + profit.toFixed(2) + ' per unit)';
                     marginEl.className = 'inv-margin-display ' + (profit >= 0 ? 'inv-margin--positive' : 'inv-margin--negative');
@@ -3172,8 +3209,16 @@
             const existing = document.getElementById('inv-edit-modal');
             if (existing) existing.remove();
 
-            const expiryVal = product.expiryDate
-                ? (product.expiryDate.toDate ? product.expiryDate.toDate() : new Date(product.expiryDate)).toISOString().split('T')[0]
+            const editableBatch = (PharmaFlow.InventoryBatchEngine
+                ? PharmaFlow.InventoryBatchEngine.sellableBatches(product)[0]
+                : null) || this.getStockBatches(product)[0] || product;
+            const expiryVal = editableBatch.expiryDate
+                ? (editableBatch.expiryDate.toDate ? editableBatch.expiryDate.toDate() : new Date(editableBatch.expiryDate)).toISOString().split('T')[0]
+                : '';
+            const editableBuyingPrice = parseFloat(editableBatch.buyingPrice) || 0;
+            const editableSellingPrice = parseFloat(editableBatch.sellingPrice) || 0;
+            const editableMinimumSellPrice = editableBatch.minimumSellPrice != null && editableBatch.minimumSellPrice !== ''
+                ? editableBatch.minimumSellPrice
                 : '';
 
             const modal = document.createElement('div');
@@ -3209,8 +3254,8 @@
                             <div class="inv-form-row">
                                 <div class="inv-form-group">
                                     <label>Batch Number</label>
-                                    <input type="text" id="edit-batch" value="${this.escapeHtml(product.batchNumber || '')}" readonly>
-                                    <small>Managed automatically from the next FEFO batch.</small>
+                                    <input type="text" id="edit-batch" value="${this.escapeHtml(editableBatch.batchNumber || product.batchNumber || '')}" readonly>
+                                    <small>Editing the current FEFO batch.</small>
                                 </div>
                                 <div class="inv-form-group">
                                     <label>Quantity <span class="req">*</span></label>
@@ -3221,17 +3266,24 @@
                             <div class="inv-form-row">
                                 <div class="inv-form-group">
                                     <label>Buying Price (KSH)</label>
-                                    <input type="number" id="edit-buying-price" min="0" step="0.01" value="${product.buyingPrice || 0}">
+                                    <input type="number" id="edit-buying-price" min="0" step="0.01" value="${editableBuyingPrice}">
                                 </div>
                                 <div class="inv-form-group">
                                     <label>Selling Price (KSH)</label>
-                                    <input type="number" id="edit-selling-price" min="0" step="0.01" value="${product.sellingPrice || 0}">
+                                    <input type="number" id="edit-selling-price" min="0" step="0.01" value="${editableSellingPrice}">
+                                </div>
+                            </div>
+                            <div class="inv-form-row">
+                                <div class="inv-form-group full-width">
+                                    <label>Current Batch Profit Margin</label>
+                                    <div class="inv-margin-display" id="edit-margin">—</div>
+                                    <small>Calculated from this batch's buying and selling prices.</small>
                                 </div>
                             </div>
                             <div class="inv-form-row">
                                 <div class="inv-form-group full-width">
                                     <label for="edit-min-sell-price">Minimum sell price — discount floor (KSH)</label>
-                                    <input type="number" id="edit-min-sell-price" min="0" step="0.01" value="${product.minimumSellPrice != null && product.minimumSellPrice !== '' ? product.minimumSellPrice : ''}" placeholder="Blank = buying price">
+                                    <input type="number" id="edit-min-sell-price" min="0" step="0.01" value="${editableMinimumSellPrice}" placeholder="Blank = buying price">
                                     <small>Optional. POS cannot discount below this per unit. Blank uses buying price.</small>
                                 </div>
                             </div>
@@ -3267,8 +3319,8 @@
                                 </div>
                                 <div class="inv-form-group">
                                     <label>Expiry Date</label>
-                                    <input type="date" id="edit-expiry" value="${expiryVal}" readonly>
-                                    <small>Derived automatically from the next FEFO batch.</small>
+                                    <input type="date" id="edit-expiry" value="${expiryVal}" required>
+                                    <small>Updates the current FEFO batch and its inventory expiry.</small>
                                 </div>
                             </div>
                             <div class="inv-form-row">
@@ -3323,10 +3375,16 @@
             });
 
             const editVatUpd = () => this.updateEditFormVatTotalPreview();
-            document.getElementById('edit-selling-price')?.addEventListener('input', editVatUpd);
+            const editMarginUpd = () => this.updateMarginPreview('edit-buying-price', 'edit-selling-price', 'edit-margin');
+            document.getElementById('edit-buying-price')?.addEventListener('input', editMarginUpd);
+            document.getElementById('edit-selling-price')?.addEventListener('input', () => {
+                editMarginUpd();
+                editVatUpd();
+            });
             document.getElementById('edit-vat-enabled')?.addEventListener('change', editVatUpd);
             document.getElementById('edit-vat-value')?.addEventListener('input', editVatUpd);
             document.getElementById('edit-vat-type')?.addEventListener('change', editVatUpd);
+            editMarginUpd();
             this.updateEditFormVatTotalPreview();
         },
 
@@ -3344,6 +3402,22 @@
 
             const sellPrice = parseFloat(document.getElementById('edit-selling-price')?.value) || 0;
             const buyPrice = parseFloat(document.getElementById('edit-buying-price')?.value) || 0;
+            const expiryValue = document.getElementById('edit-expiry')?.value || '';
+            if (!expiryValue) {
+                this.showToast('Expiry date is required.', 'error');
+                if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = '<i class="fas fa-save"></i> Save Changes'; }
+                return;
+            }
+            if (PharmaFlow.InventoryBatchEngine?.isExpired(expiryValue)) {
+                this.showToast('Expiry date cannot be in the past.', 'error');
+                if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = '<i class="fas fa-save"></i> Save Changes'; }
+                return;
+            }
+            if (sellPrice < buyPrice) {
+                this.showToast('Selling price should not be less than buying price.', 'error');
+                if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = '<i class="fas fa-save"></i> Save Changes'; }
+                return;
+            }
             const minSellRaw = parseFloat(document.getElementById('edit-min-sell-price')?.value);
             let minSellPersist = Number.isFinite(minSellRaw) && minSellRaw > 0 ? minSellRaw : null;
             if (minSellPersist != null) {
@@ -3363,8 +3437,6 @@
                 name: document.getElementById('edit-name')?.value?.trim() || '',
                 genericName: document.getElementById('edit-generic-name')?.value?.trim() || '',
                 category: document.getElementById('edit-category')?.value?.trim() || '',
-                buyingPrice: parseFloat(document.getElementById('edit-buying-price')?.value) || 0,
-                sellingPrice: parseFloat(document.getElementById('edit-selling-price')?.value) || 0,
                 vatEnabled: vatEnabled,
                 vatType: vatType,
                 vatValue: vatValue,
@@ -3372,18 +3444,45 @@
                 drugType: document.getElementById('edit-drug-type')?.value || '',
                 manufacturer: document.getElementById('edit-manufacturer')?.value?.trim() || '',
                 supplier: document.getElementById('edit-supplier')?.value?.trim() || '',
-                updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-                minimumSellPrice: minSellPersist != null ? minSellPersist : firebase.firestore.FieldValue.delete()
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
             };
 
             try {
                 const docRef = getBusinessCollection(businessId, 'inventory').doc(productId);
-                await docRef.update(updates);
+                let localPatch = null;
+                await window.db.runTransaction(async transaction => {
+                    const snapshot = await transaction.get(docRef);
+                    if (!snapshot.exists) throw new Error('Product not found');
+
+                    const data = snapshot.data() || {};
+                    const engine = PharmaFlow.InventoryBatchEngine;
+                    if (!engine) throw new Error('Inventory batch engine is unavailable.');
+                    const expiryTimestamp = firebase.firestore.Timestamp.fromDate(new Date(expiryValue));
+                    const batchUpdate = engine.updatePrimaryBatch(data, {
+                        expiryDate: expiryTimestamp,
+                        buyingPrice: buyPrice,
+                        sellingPrice: sellPrice,
+                        minimumSellPrice: minSellPersist != null ? minSellPersist : buyPrice
+                    });
+                    const primary = batchUpdate.primaryBatch || batchUpdate.updatedBatch;
+
+                    localPatch = {
+                        ...updates,
+                        quantity: batchUpdate.quantityAfter,
+                        stockBatches: batchUpdate.updatedBatches,
+                        batchNumber: primary.batchNumber || data.batchNumber || data.sku || '',
+                        expiryDate: primary.expiryDate || expiryTimestamp,
+                        buyingPrice: parseFloat(primary.buyingPrice) || 0,
+                        sellingPrice: parseFloat(primary.sellingPrice) || 0,
+                        minimumSellPrice: parseFloat(primary.minimumSellPrice) || parseFloat(primary.buyingPrice) || 0
+                    };
+                    transaction.update(docRef, localPatch);
+                });
                 window.dispatchEvent(new CustomEvent('pharmaflow:inventory-patched', {
                     detail: {
                         businessId: businessId,
                         source: 'Product updated',
-                        patches: [{ id: productId, data: updates }]
+                        patches: [{ id: productId, data: localPatch }]
                     }
                 }));
 
