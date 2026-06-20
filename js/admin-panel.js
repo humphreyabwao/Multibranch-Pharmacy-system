@@ -497,7 +497,7 @@
                                         <button class="dda-btn dda-btn--sm dda-btn--cancel" id="adm-perm-none">Clear All</button>
                                     </div>
                                 </div>
-                                <p class="adm-perm-hint">Select which modules and sub-modules this user can access. Leave all unchecked for full access (admin/superadmin roles get full access by default).</p>
+                                <p class="adm-perm-hint">Select only the modules and sub-modules this user may access. Clearing all permissions blocks access to every module.</p>
                                 <div class="adm-permissions-grid" id="adm-permissions-grid"></div>
                             </div>
 
@@ -555,12 +555,13 @@
         //  PERMISSIONS GRID
         // ═══════════════════════════════════════════════
 
-        renderPermissionsGrid: function (existingPerms) {
+        renderPermissionsGrid: function (existingPerms, permissionsConfigured) {
             const grid = document.getElementById('adm-permissions-grid');
             if (!grid) return;
 
             const tree = buildPermissionTree();
             const perms = existingPerms || [];
+            const legacyFullAccess = permissionsConfigured !== true && perms.length === 0;
             let currentSection = '';
 
             grid.innerHTML = tree.map(mod => {
@@ -570,10 +571,10 @@
                     sectionHtml = '<div class="adm-perm-section-title">' + this.escapeHtml(mod.section) + '</div>';
                 }
 
-                const moduleChecked = perms.length === 0 || perms.includes(mod.moduleId);
+                const moduleChecked = legacyFullAccess || perms.includes(mod.moduleId);
                 const childrenHtml = mod.children.map(child => {
                     const childKey = mod.moduleId + ':' + child.id;
-                    const childChecked = perms.length === 0 || perms.includes(childKey);
+                    const childChecked = legacyFullAccess || perms.includes(childKey);
                     return '<label class="adm-perm-child"><input type="checkbox" data-perm="' + childKey + '" data-parent="' + mod.moduleId + '" ' + (childChecked ? 'checked' : '') + '> <i class="' + (child.icon || 'fas fa-circle') + '"></i> ' + this.escapeHtml(child.label) + '</label>';
                 }).join('');
 
@@ -623,11 +624,6 @@
             grid.querySelectorAll('input[type="checkbox"]:checked').forEach(cb => {
                 checked.push(cb.dataset.perm);
             });
-
-            // Check if ALL are selected — if so, return empty array (meaning full access)
-            const allCheckboxes = grid.querySelectorAll('input[type="checkbox"]');
-            if (checked.length === allCheckboxes.length) return [];
-
             return checked;
         },
 
@@ -654,7 +650,10 @@
             if (emailField) emailField.readOnly = isEdit;
 
             // Render permissions grid with existing permissions
-            this.renderPermissionsGrid(isEdit ? (user.permissions || []) : []);
+            this.renderPermissionsGrid(
+                isEdit ? (user.permissions || []) : [],
+                isEdit ? user.permissionsConfigured === true : false
+            );
 
             // Load businesses into dropdown
             this.loadBusinessSelectOptions();
@@ -752,6 +751,7 @@
                         businessId: businessId,
                         status: status,
                         permissions: permissions,
+                        permissionsConfigured: true,
                         updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
                         updatedBy: PharmaFlow.Auth.userProfile ? (PharmaFlow.Auth.userProfile.displayName || PharmaFlow.Auth.userProfile.email) : 'Unknown'
                     };
@@ -792,6 +792,7 @@
                         businessId: businessId,
                         status: status,
                         permissions: permissions,
+                        permissionsConfigured: true,
                         createdAt: firebase.firestore.FieldValue.serverTimestamp(),
                         createdBy: PharmaFlow.Auth.userProfile ? (PharmaFlow.Auth.userProfile.displayName || PharmaFlow.Auth.userProfile.email) : 'Unknown'
                     });
@@ -4046,26 +4047,7 @@
          * @returns {boolean}
          */
         hasPermission: function (moduleId, subModuleId) {
-            const profile = PharmaFlow.Auth ? PharmaFlow.Auth.userProfile : null;
-            if (!profile) return false;
-
-            // Superadmins always have full access
-            if (profile.role === 'superadmin') return true;
-
-            // If no permissions array or empty = full access (backward compatible)
-            if (!profile.permissions || profile.permissions.length === 0) return true;
-
-            // Check module permission
-            const hasModule = profile.permissions.includes(moduleId);
-
-            if (subModuleId) {
-                // Check specific sub-module permission
-                return profile.permissions.includes(moduleId + ':' + subModuleId);
-            }
-
-            // Check if user has the module itself OR any of its sub-modules
-            if (hasModule) return true;
-            return profile.permissions.some(p => p.startsWith(moduleId + ':'));
+            return !!(PharmaFlow.Auth && PharmaFlow.Auth.canAccess(moduleId, subModuleId));
         }
     };
 

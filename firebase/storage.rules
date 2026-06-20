@@ -5,14 +5,46 @@ service firebase.storage {
       return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
     }
 
+    function targetUserProfile(userId) {
+      return firestore.get(/databases/(default)/documents/users/$(userId)).data;
+    }
+
+    function isSuperAdmin() {
+      return request.auth != null
+        && (
+          userProfile().role == 'superadmin'
+          || request.auth.token.email == 'admin@pharmaflow.com'
+        );
+    }
+
+    function canAccessBusiness(businessId) {
+      return request.auth != null
+        && (isSuperAdmin() || userProfile().businessId == businessId);
+    }
+
+    function hasAnyModulePermission(moduleIds) {
+      return isSuperAdmin()
+        || (
+          userProfile().permissionsConfigured != true
+          && (
+            !(userProfile().permissions is list)
+            || userProfile().permissions.size() == 0
+          )
+        )
+        || (
+          userProfile().permissions is list
+          && userProfile().permissions.hasAny(moduleIds)
+        );
+    }
+
     function certificateUploadsEnabled(businessId) {
       return firestore.get(/databases/(default)/documents/businesses/$(businessId)).data.branchCertificateUploadEnabled == true;
     }
 
     // DDA Prescription uploads - only authenticated business members
     match /businesses/{businessId}/dda_prescriptions/{fileName} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null
+      allow read: if canAccessBusiness(businessId) && hasAnyModulePermission(['dda-register']);
+      allow write: if canAccessBusiness(businessId) && hasAnyModulePermission(['dda-register'])
                    && request.resource.size < 5 * 1024 * 1024
                    && (request.resource.contentType.matches('image/.*')
                        || request.resource.contentType == 'application/pdf');
@@ -20,24 +52,24 @@ service firebase.storage {
 
     // Company logo uploads - authenticated business members
     match /businesses/{businessId}/company_logo/{fileName} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null
+      allow read: if canAccessBusiness(businessId);
+      allow write: if canAccessBusiness(businessId) && hasAnyModulePermission(['settings'])
                    && request.resource.size < 2 * 1024 * 1024
                    && request.resource.contentType.matches('image/.*');
     }
 
     // Branch Portal contracts - original and signed copies
     match /businesses/{businessId}/contracts/{fileName} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null
+      allow read: if canAccessBusiness(businessId) && hasAnyModulePermission(['branch-portal']);
+      allow write: if canAccessBusiness(businessId) && hasAnyModulePermission(['branch-portal'])
                    && request.resource.size < 10 * 1024 * 1024
                    && (request.resource.contentType == 'application/pdf'
                        || request.resource.contentType.matches('image/(png|jpeg|webp|gif|bmp)'));
     }
 
     match /businesses/{businessId}/signed_contracts/{fileName} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null
+      allow read: if canAccessBusiness(businessId) && hasAnyModulePermission(['branch-portal']);
+      allow write: if canAccessBusiness(businessId) && hasAnyModulePermission(['branch-portal'])
                    && request.resource.size < 10 * 1024 * 1024
                    && (request.resource.contentType == 'application/pdf'
                        || request.resource.contentType.matches('image/(png|jpeg|webp|gif|bmp)'));
@@ -46,17 +78,24 @@ service firebase.storage {
     // Branch compliance certificates - image files only. Firestore rules
     // separately enforce the Superadmin-issued branch upload permission.
     match /businesses/{businessId}/branch_certificates/{fileName} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null
-                   && userProfile().businessId == businessId
-                   && certificateUploadsEnabled(businessId)
+      allow read: if canAccessBusiness(businessId) && hasAnyModulePermission(['branch-portal']);
+      allow write: if canAccessBusiness(businessId) && hasAnyModulePermission(['branch-portal'])
+                   && (
+                     isSuperAdmin()
+                     || certificateUploadsEnabled(businessId)
+                   )
                    && request.resource.size < 8 * 1024 * 1024
                    && request.resource.contentType.matches('image/(png|jpeg|webp)');
     }
 
     // Profile photo uploads - authenticated users can write their own
     match /users/{userId}/profile_photo/{fileName} {
-      allow read: if request.auth != null;
+      allow read: if request.auth != null
+                  && (
+                    request.auth.uid == userId
+                    || isSuperAdmin()
+                    || userProfile().businessId == targetUserProfile(userId).businessId
+                  );
       allow write: if request.auth != null
                    && request.auth.uid == userId
                    && request.resource.size < 2 * 1024 * 1024

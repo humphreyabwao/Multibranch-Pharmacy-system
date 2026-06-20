@@ -12,6 +12,9 @@
     const Auth = {
         currentUser: null,
         userProfile: null,
+        authorizationReady: false,
+        _profileListener: null,
+        _authorizationFingerprint: null,
         pendingLoginNoticeKey: 'pf_login_error',
 
         /**
@@ -25,29 +28,34 @@
             }
 
             window.auth.onAuthStateChanged(async (user) => {
+                this.authorizationReady = false;
                 if (user) {
                     this.currentUser = user;
                     try {
                         await this.loadUserProfile(user.uid);
+                        this.authorizationReady = true;
                         this.onAuthSuccess();
                     } catch (err) {
-                        // Handle franchise isolation errors
+                        let message = 'We could not verify your access. Please sign in again.';
                         if (err.message === 'ACCOUNT_DISABLED') {
-                            this.showLoginError('Your account has been disabled. Please contact your administrator.');
-                            this.onAuthRequired();
+                            message = 'Your account has been disabled. Please contact your administrator.';
                         } else if (err.message === 'FRANCHISE_INACTIVE') {
-                            const stored = localStorage.getItem(this.pendingLoginNoticeKey);
-                            if (stored) localStorage.removeItem(this.pendingLoginNoticeKey);
-                            this.showLoginError(stored || 'This branch has been suspended. Please contact the system administrator.');
-                            this.onAuthRequired();
+                            message = localStorage.getItem(this.pendingLoginNoticeKey)
+                                || 'This branch has been suspended. Please contact the system administrator.';
+                        } else if (err.message === 'ACCOUNT_NOT_CONFIGURED') {
+                            message = 'Your login exists, but no authorized user profile is assigned. Contact the system administrator.';
+                        } else if (err.message === 'FRANCHISE_NOT_ASSIGNED') {
+                            message = 'Your account is not assigned to a franchise. Contact the system administrator.';
                         } else {
                             console.error('Profile load error:', err);
-                            this.onAuthSuccess();
                         }
+                        await this.denyAccess(message);
                     }
                 } else {
+                    this.stopAuthorizationWatcher();
                     this.currentUser = null;
                     this.userProfile = null;
+                    this.authorizationReady = false;
                     this.onAuthRequired();
                 }
             });
@@ -140,23 +148,17 @@
          * Load user profile from Firestore
          */
         loadUserProfile: async function (uid) {
-            try {
-                const doc = await window.db.collection('users').doc(uid).get();
-                if (doc.exists) {
-                    this.userProfile = { id: doc.id, ...doc.data() };
-                } else {
-                    console.warn('User profile not found in Firestore for UID:', uid);
-                    // Auto-create profile with a default business
-                    await this.autoProvisionUser(uid);
-                }
-            } catch (err) {
-                console.error('Error loading user profile:', err);
-                await this.autoProvisionUser(uid);
-            }
+            // Authorization must come from the server, never a stale offline profile.
+            const doc = await window.db.collection('users').doc(uid).get({ source: 'server' });
+            if (!doc.exists) throw new Error('ACCOUNT_NOT_CONFIGURED');
 
-            // If profile exists but has no businessId, auto-assign one
-            if (this.userProfile && !this.userProfile.businessId) {
-                await this.autoAssignBusiness(uid);
+            this.userProfile = { id: doc.id, ...doc.data() };
+
+            if (!['superadmin', 'admin', 'staff'].includes(this.userProfile.role)) {
+                throw new Error('ACCOUNT_NOT_CONFIGURED');
+            }
+            if (this.userProfile.permissionsConfigured === true && !Array.isArray(this.userProfile.permissions)) {
+                throw new Error('ACCOUNT_NOT_CONFIGURED');
             }
 
             // Enforce franchise isolation: check user status and franchise active state
@@ -172,110 +174,62 @@
             }
 
             if (this.userProfile && this.userProfile.role !== 'superadmin') {
+                if (!this.userProfile.businessId) {
+                    throw new Error('FRANCHISE_NOT_ASSIGNED');
+                }
+
                 // Check if user account is disabled
                 if (this.userProfile.status === 'disabled') {
-                    await window.auth.signOut();
-                    this.currentUser = null;
-                    this.userProfile = null;
                     throw new Error('ACCOUNT_DISABLED');
                 }
 
                 // Check if franchise is active
                 if (this.userProfile.businessId) {
                     try {
-                        const bizDoc = await window.db.collection('businesses').doc(this.userProfile.businessId).get();
+                        const bizDoc = await window.db.collection('businesses').doc(this.userProfile.businessId).get({ source: 'server' });
+                        if (!bizDoc.exists) {
+                            throw new Error('FRANCHISE_NOT_ASSIGNED');
+                        }
                         if (bizDoc.exists && bizDoc.data().isActive === false) {
                             const suspensionMessage = this.getSuspensionMessage(bizDoc.data());
                             try { localStorage.setItem(this.pendingLoginNoticeKey, suspensionMessage); } catch (e) { /* ignore */ }
-                            await window.auth.signOut();
-                            this.currentUser = null;
-                            this.userProfile = null;
                             throw new Error('FRANCHISE_INACTIVE');
                         }
                     } catch (bizErr) {
-                        if (bizErr.message === 'FRANCHISE_INACTIVE') throw bizErr;
+                        if (bizErr.message === 'FRANCHISE_INACTIVE' || bizErr.message === 'FRANCHISE_NOT_ASSIGNED') {
+                            throw bizErr;
+                        }
                         console.error('Error checking franchise status:', bizErr);
+                        throw new Error('PROFILE_VERIFICATION_FAILED');
                     }
                 }
             }
         },
 
-        /**
-         * Auto-create a Firestore user doc and default business for first-time users
-         */
-        autoProvisionUser: async function (uid) {
+        denyAccess: async function (message) {
+            this.stopAuthorizationWatcher();
+            this.authorizationReady = false;
+            this.userProfile = null;
             try {
-                // Find or create a default business
-                const bizId = await this.findOrCreateDefaultBusiness();
-
-                // Master superadmin always gets superadmin role
-                const email = this.currentUser.email || '';
-                const isMaster = email.toLowerCase() === (PharmaFlow.MASTER_EMAIL || 'admin@pharmaflow.com').toLowerCase();
-
-                const profileData = {
-                    email: email,
-                    displayName: this.currentUser.displayName || this.currentUser.email?.split('@')[0] || 'User',
-                    role: isMaster ? 'superadmin' : (PharmaFlow.USER_ROLES?.ADMIN || 'admin'),
-                    businessId: bizId,
-                    createdAt: firebase.firestore.FieldValue.serverTimestamp()
-                };
-
-                await window.db.collection('users').doc(uid).set(profileData);
-                this.userProfile = { id: uid, ...profileData };
-                console.log('Auto-provisioned user profile with business:', bizId);
-            } catch (err) {
-                console.error('Auto-provision failed:', err);
-                this.userProfile = {
-                    id: uid,
-                    email: this.currentUser.email,
-                    displayName: this.currentUser.displayName || 'User',
-                    role: 'staff',
-                    businessId: null
-                };
-            }
-        },
-
-        /**
-         * If user exists but has no businessId, assign one
-         */
-        autoAssignBusiness: async function (uid) {
+                localStorage.setItem(this.pendingLoginNoticeKey, message);
+            } catch (e) { /* ignore */ }
             try {
-                const bizId = await this.findOrCreateDefaultBusiness();
-                await window.db.collection('users').doc(uid).update({ businessId: bizId });
-                this.userProfile.businessId = bizId;
-                console.log('Auto-assigned business to user:', bizId);
+                await window.auth.signOut();
             } catch (err) {
-                console.error('Auto-assign business failed:', err);
+                console.error('Failed to close unauthorized session:', err);
             }
-        },
-
-        /**
-         * Find the first existing business or create a default one
-         */
-        findOrCreateDefaultBusiness: async function () {
-            // Try to find any existing business
-            const snapshot = await window.db.collection('businesses').limit(1).get();
-            if (!snapshot.empty) {
-                return snapshot.docs[0].id;
+            this.currentUser = null;
+            if (window.location.pathname.endsWith('login.html')) {
+                this.showLoginError(message);
             }
-
-            // Create a default business
-            const bizRef = await window.db.collection('businesses').add({
-                name: 'My Pharmacy',
-                address: '',
-                phone: '',
-                licenseNumber: '',
-                createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-                isActive: true
-            });
-            console.log('Created default business:', bizRef.id);
-            return bizRef.id;
+            this.onAuthRequired();
         },
 
         /**
          * Called when user is authenticated — redirect to dashboard
          */
         onAuthSuccess: function () {
+            this.startAuthorizationWatcher();
             if (window.location.pathname.endsWith('login.html') || window.location.pathname === '/') {
                 window.location.href = 'index.html';
             }
@@ -286,6 +240,57 @@
                     profile: this.userProfile
                 }
             }));
+        },
+
+        authorizationFingerprint: function (profile) {
+            const permissions = Array.isArray(profile && profile.permissions)
+                ? profile.permissions.slice().sort()
+                : [];
+            return JSON.stringify({
+                role: profile && profile.role,
+                businessId: profile && profile.businessId,
+                status: profile && profile.status,
+                permissionsConfigured: profile && profile.permissionsConfigured === true,
+                permissions: permissions
+            });
+        },
+
+        startAuthorizationWatcher: function () {
+            this.stopAuthorizationWatcher();
+            if (!window.db || !this.currentUser || !this.userProfile) return;
+
+            const uid = this.currentUser.uid;
+            this._authorizationFingerprint = this.authorizationFingerprint(this.userProfile);
+            this._profileListener = window.db.collection('users').doc(uid).onSnapshot(doc => {
+                if (!doc.exists) {
+                    this.denyAccess('Your authorized user profile was removed. Contact the system administrator.');
+                    return;
+                }
+
+                const nextProfile = { id: doc.id, ...doc.data() };
+                const nextFingerprint = this.authorizationFingerprint(nextProfile);
+                if (nextFingerprint === this._authorizationFingerprint) return;
+
+                this._authorizationFingerprint = nextFingerprint;
+                if (nextProfile.status === 'disabled') {
+                    this.denyAccess('Your account has been disabled. Please contact your administrator.');
+                    return;
+                }
+
+                // Rebuild every listener and route from the newly issued tenant/permissions.
+                window.location.reload();
+            }, err => {
+                console.error('Authorization watcher error:', err);
+                this.denyAccess('We could not continuously verify your access. Please sign in again.');
+            });
+        },
+
+        stopAuthorizationWatcher: function () {
+            if (this._profileListener) {
+                try { this._profileListener(); } catch (e) { /* ignore */ }
+            }
+            this._profileListener = null;
+            this._authorizationFingerprint = null;
         },
 
         /**
@@ -353,6 +358,7 @@
          */
         signOut: async function () {
             try {
+                this.stopAuthorizationWatcher();
                 this.clearCachedSessionState();
                 await window.auth.signOut();
                 window.location.replace('login.html');
@@ -396,6 +402,28 @@
         },
 
         /**
+         * Fail-closed module permission check used by both sidebar and router.
+         */
+        canAccess: function (moduleId, subModuleId) {
+            const profile = this.userProfile;
+            if (!this.authorizationReady || !profile || !moduleId) return false;
+            if (profile.role === 'superadmin') return true;
+
+            const permissions = Array.isArray(profile.permissions) ? profile.permissions : [];
+            const isExplicit = profile.permissionsConfigured === true || permissions.length > 0;
+
+            // Legacy profiles without an explicit permission configuration retain full access.
+            if (!isExplicit) return true;
+
+            if (subModuleId) {
+                return permissions.includes(moduleId + ':' + subModuleId);
+            }
+
+            return permissions.includes(moduleId)
+                || permissions.some(permission => permission.startsWith(moduleId + ':'));
+        },
+
+        /**
          * Check if current user is superadmin
          */
         isSuperAdmin: function () {
@@ -413,11 +441,51 @@
          * Get current business ID — returns selected franchise for superadmins
          */
         getBusinessId: function () {
-            // Superadmin franchise selector override
-            if (PharmaFlow.selectedBusinessId) {
-                return PharmaFlow.selectedBusinessId;
+            const profile = this.userProfile;
+            if (!this.authorizationReady || !profile) return null;
+
+            // Only a verified superadmin may switch tenant context.
+            if (profile.role === 'superadmin') {
+                return PharmaFlow.selectedBusinessId || profile.businessId || null;
             }
-            return this.userProfile ? this.userProfile.businessId : null;
+
+            // Franchise users are permanently pinned to their assigned workspace.
+            return profile.businessId || null;
+        },
+
+        setActiveBusinessId: function (businessId) {
+            const profile = this.userProfile;
+            if (!this.authorizationReady || !profile) return false;
+
+            if (profile.role !== 'superadmin') {
+                PharmaFlow.selectedBusinessId = null;
+                return businessId === profile.businessId;
+            }
+
+            if (businessId != null && businessId !== '' && !this.isValidBusinessId(businessId)) {
+                return false;
+            }
+            PharmaFlow.selectedBusinessId = businessId || null;
+            return true;
+        },
+
+        isValidBusinessId: function (businessId) {
+            return typeof businessId === 'string'
+                && businessId.length > 0
+                && businessId.length <= 128
+                && businessId.indexOf('/') === -1;
+        },
+
+        canAccessBusiness: function (businessId) {
+            if (!this.authorizationReady || !this.userProfile || !this.isValidBusinessId(businessId)) return false;
+            return this.userProfile.role === 'superadmin' || this.userProfile.businessId === businessId;
+        },
+
+        assertBusinessAccess: function (businessId) {
+            if (!this.canAccessBusiness(businessId)) {
+                throw new Error('TENANT_ACCESS_DENIED');
+            }
+            return businessId;
         },
 
         /**

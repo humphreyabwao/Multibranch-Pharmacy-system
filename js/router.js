@@ -60,14 +60,43 @@
          * Navigate to a module/sub-module
          */
         navigateTo: function (moduleId, subModuleId) {
+            if (!PharmaFlow.Sidebar || !PharmaFlow.Sidebar.authorizationReady) return;
+
+            let moduleConfig = PharmaFlow.Sidebar.getModuleConfig(moduleId);
+            if (!moduleConfig || !PharmaFlow.Sidebar.canAccess(moduleId)) {
+                const fallback = PharmaFlow.Sidebar.getFirstAccessibleTarget();
+                if (!fallback) {
+                    this.renderAccessDenied();
+                    return;
+                }
+                moduleId = fallback.moduleId;
+                subModuleId = fallback.subModuleId;
+                moduleConfig = PharmaFlow.Sidebar.getModuleConfig(moduleId);
+            }
+
+            const visibleChildren = PharmaFlow.Sidebar.getVisibleChildren(moduleConfig);
+            if (moduleConfig.children && moduleConfig.children.length > 0) {
+                if (visibleChildren.length === 0) {
+                    this.renderAccessDenied();
+                    return;
+                }
+                if (!subModuleId || !visibleChildren.some(child => child.id === subModuleId)) {
+                    subModuleId = visibleChildren[0].id;
+                }
+            } else {
+                subModuleId = null;
+            }
+
+            if (!PharmaFlow.Sidebar.canAccess(moduleId, subModuleId)) {
+                this.renderAccessDenied();
+                return;
+            }
+
             // Cleanup previous module listeners (always cleanup, even on same-module re-render for franchise switching)
             this._cleanupModule(this.currentModuleId);
 
             this.currentModuleId = moduleId;
             this.currentSubModuleId = subModuleId;
-
-            const moduleConfig = PharmaFlow.Sidebar.getModuleConfig(moduleId);
-            if (!moduleConfig) return;
 
             const hasChildren = moduleConfig.children && moduleConfig.children.length > 0;
 
@@ -76,11 +105,11 @@
 
             // Render page content
             if (hasChildren && subModuleId) {
-                const child = moduleConfig.children.find(c => c.id === subModuleId);
+                const child = visibleChildren.find(c => c.id === subModuleId);
                 this.renderPage(moduleConfig, child);
             } else if (hasChildren) {
                 // Default to first child
-                const firstChild = moduleConfig.children[0];
+                const firstChild = visibleChildren[0];
                 this.currentSubModuleId = firstChild.id;
                 this.renderTabs(moduleConfig, firstChild.id);
                 this.renderPage(moduleConfig, firstChild);
@@ -104,17 +133,7 @@
                 return;
             }
 
-            // Filter children by role and permission
-            const userRole = PharmaFlow.Auth && PharmaFlow.Auth.userProfile ? PharmaFlow.Auth.userProfile.role : null;
-            const visibleChildren = moduleConfig.children.filter(child => {
-                if (child.roles && child.roles.length > 0 && userRole) {
-                    if (!child.roles.includes(userRole)) return false;
-                }
-                if (PharmaFlow.AdminPanel && PharmaFlow.AdminPanel.hasPermission) {
-                    if (!PharmaFlow.AdminPanel.hasPermission(moduleConfig.id, child.id)) return false;
-                }
-                return true;
-            });
+            const visibleChildren = PharmaFlow.Sidebar.getVisibleChildren(moduleConfig);
 
             if (visibleChildren.length === 0) {
                 tabsContainer.style.display = 'none';
@@ -157,6 +176,10 @@
         renderPage: function (moduleConfig, subModule) {
             const contentBody = document.getElementById('content-body');
             if (!contentBody) return;
+            if (!moduleConfig || !PharmaFlow.Sidebar.canAccess(moduleConfig.id, subModule ? subModule.id : null)) {
+                this.renderAccessDenied();
+                return;
+            }
 
             // Dashboard has its own renderer
             if (moduleConfig.id === 'dashboard' && PharmaFlow.Dashboard) {
@@ -486,6 +509,20 @@
                     e.preventDefault();
                     PharmaFlow.Sidebar.setActive('dashboard', null);
                 });
+            }
+        },
+
+        renderAccessDenied: function () {
+            const tabsContainer = document.getElementById('content-tabs');
+            const contentBody = document.getElementById('content-body');
+            if (tabsContainer) {
+                tabsContainer.style.display = 'none';
+                tabsContainer.innerHTML = '';
+            }
+            if (contentBody) {
+                contentBody.innerHTML = '<div class="card"><div class="page-placeholder">'
+                    + '<i class="fas fa-shield-halved"></i><h2>Access denied</h2>'
+                    + '<p>This module is not assigned to your account.</p></div></div>';
             }
         }
     };

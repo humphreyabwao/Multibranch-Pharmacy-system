@@ -246,6 +246,7 @@
         expandedModules: new Set(),
         isCollapsed: false,
         _currentRole: null,
+        authorizationReady: false,
         _moduleTags: {},
         _moduleTagsListener: null,
 
@@ -253,8 +254,7 @@
          * Initialize sidebar
          */
         init: function () {
-            this.render();
-            this.renderSettings();
+            this.lock();
             this.bindToggle();
 
             window.addEventListener('beforeunload', () => {
@@ -270,30 +270,13 @@
             if (!nav) return;
 
             nav.innerHTML = '';
+            if (!this.authorizationReady || !PharmaFlow.Auth || !PharmaFlow.Auth.authorizationReady) return;
 
             NAV_CONFIG.forEach(item => {
-                // Role-based visibility: hide role-restricted items if no role yet or role doesn't match
-                if (item.roles && item.roles.length > 0) {
-                    if (!userRole || !item.roles.includes(userRole)) return;
-                }
+                if (!this.canAccess(item.id)) return;
 
-                // Permission-based visibility (uses AdminPanel.hasPermission if available)
-                if (PharmaFlow.AdminPanel && PharmaFlow.AdminPanel.hasPermission && userRole) {
-                    if (!PharmaFlow.AdminPanel.hasPermission(item.id)) return;
-                }
-
-                // Filter children by role and permission
-                let visibleChildren = (item.children || []).filter(child => {
-                    // Child-level role restriction: hide if no role yet or role doesn't match
-                    if (child.roles && child.roles.length > 0) {
-                        if (!userRole || !child.roles.includes(userRole)) return false;
-                    }
-                    // Child-level permission restriction
-                    if (PharmaFlow.AdminPanel && PharmaFlow.AdminPanel.hasPermission && userRole) {
-                        if (!PharmaFlow.AdminPanel.hasPermission(item.id, child.id)) return false;
-                    }
-                    return true;
-                });
+                const visibleChildren = this.getVisibleChildren(item);
+                if (item.children && item.children.length > 0 && visibleChildren.length === 0) return;
 
                 // Section title
                 if (item.section) {
@@ -368,6 +351,10 @@
             if (!footerNav) return;
 
             footerNav.innerHTML = '';
+            if (!this.authorizationReady || !this.canAccess(SETTINGS_NAV.id)) return;
+
+            const visibleChildren = this.getVisibleChildren(SETTINGS_NAV);
+            if (SETTINGS_NAV.children.length > 0 && visibleChildren.length === 0) return;
             const settingsTagHtml = this.getModuleTagHtml(SETTINGS_NAV.id);
 
             const navItem = document.createElement('div');
@@ -380,7 +367,7 @@
             `;
 
             navItem.addEventListener('click', () => {
-                this.setActive(SETTINGS_NAV.id, null);
+                this.setActive(SETTINGS_NAV.id, visibleChildren[0] ? visibleChildren[0].id : null);
             });
 
             footerNav.appendChild(navItem);
@@ -413,6 +400,8 @@
          * Set active module/sub-module
          */
         setActive: function (moduleId, subModuleId) {
+            if (!this.canAccess(moduleId, subModuleId)) return false;
+
             this.activeModuleId = moduleId;
             this.activeSubModuleId = subModuleId;
 
@@ -434,6 +423,7 @@
                     subModuleId: subModuleId
                 }
             }));
+            return true;
         },
 
         /**
@@ -508,6 +498,52 @@
             return null;
         },
 
+        lock: function () {
+            this.authorizationReady = false;
+            this._currentRole = null;
+            const nav = document.getElementById('sidebar-nav');
+            const footerNav = document.getElementById('sidebar-nav-footer');
+            if (nav) nav.innerHTML = '';
+            if (footerNav) footerNav.innerHTML = '';
+        },
+
+        canAccess: function (moduleId, subModuleId) {
+            if (!this.authorizationReady || !PharmaFlow.Auth || !PharmaFlow.Auth.authorizationReady) return false;
+
+            const config = this.getModuleConfig(moduleId);
+            const profile = PharmaFlow.Auth.userProfile;
+            const role = profile ? profile.role : null;
+            if (!config || !role) return false;
+            if (config.roles && config.roles.length > 0 && !config.roles.includes(role)) return false;
+
+            if (subModuleId) {
+                const child = (config.children || []).find(item => item.id === subModuleId);
+                if (!child) return false;
+                if (child.roles && child.roles.length > 0 && !child.roles.includes(role)) return false;
+            }
+
+            return PharmaFlow.Auth.canAccess(moduleId, subModuleId);
+        },
+
+        getVisibleChildren: function (moduleConfig) {
+            if (!moduleConfig || !this.authorizationReady) return [];
+            return (moduleConfig.children || []).filter(child => this.canAccess(moduleConfig.id, child.id));
+        },
+
+        getFirstAccessibleTarget: function () {
+            const configs = NAV_CONFIG.concat([SETTINGS_NAV]);
+            for (const config of configs) {
+                if (!this.canAccess(config.id)) continue;
+                const children = this.getVisibleChildren(config);
+                if (config.children && config.children.length > 0) {
+                    if (children.length > 0) return { moduleId: config.id, subModuleId: children[0].id };
+                    continue;
+                }
+                return { moduleId: config.id, subModuleId: null };
+            }
+            return null;
+        },
+
         /**
          * Get all nav config
          */
@@ -557,6 +593,7 @@
          * Restore sidebar state from localStorage
          */
         restoreState: function () {
+            if (!this.authorizationReady) return;
             // Restore collapsed state
             const collapsed = localStorage.getItem('pf_sidebar_collapsed');
             if (collapsed === 'true' && window.innerWidth > 768) {
@@ -570,6 +607,11 @@
             if (stateStr) {
                 try {
                     const state = JSON.parse(stateStr);
+                    if (!this.canAccess(state.activeModuleId, state.activeSubModuleId)) {
+                        const fallback = this.getFirstAccessibleTarget();
+                        if (fallback) this.setActive(fallback.moduleId, fallback.subModuleId);
+                        return;
+                    }
                     this.activeModuleId = state.activeModuleId;
                     this.activeSubModuleId = state.activeSubModuleId;
                     this.expandedModules = new Set(state.expandedModules || []);
@@ -586,11 +628,13 @@
                     }
                 } catch (e) {
                     // Invalid state — default to dashboard
-                    this.setActive('dashboard', null);
+                    const fallback = this.getFirstAccessibleTarget();
+                    if (fallback) this.setActive(fallback.moduleId, fallback.subModuleId);
                 }
             } else {
                 // No saved state — default to dashboard
-                this.setActive('dashboard', null);
+                const fallback = this.getFirstAccessibleTarget();
+                if (fallback) this.setActive(fallback.moduleId, fallback.subModuleId);
             }
         },
 
@@ -599,6 +643,11 @@
          */
         updateForRole: function (role) {
             this._currentRole = role;
+            this.authorizationReady = !!(PharmaFlow.Auth && PharmaFlow.Auth.authorizationReady && PharmaFlow.Auth.userProfile);
+            if (!this.authorizationReady) {
+                this.lock();
+                return;
+            }
             this.subscribeModuleTags();
 
             this.render(role);

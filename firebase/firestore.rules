@@ -38,35 +38,55 @@ service cloud.firestore {
       return isSuperAdmin() || belongsToBusiness(businessId);
     }
 
+    function hasAnyModulePermission(moduleIds) {
+      return isSuperAdmin()
+        || (
+          getUserProfile().permissionsConfigured != true
+          && (
+            !(getUserProfile().permissions is list)
+            || getUserProfile().permissions.size() == 0
+          )
+        )
+        || (
+          getUserProfile().permissions is list
+          && getUserProfile().permissions.hasAny(moduleIds)
+        );
+    }
+
+    function canUseTenantModule(businessId, moduleIds) {
+      return canAccessBusiness(businessId) && hasAnyModulePermission(moduleIds);
+    }
+
     function branchCertificateUploadsEnabled(businessId) {
       return get(/databases/$(database)/documents/businesses/$(businessId)).data.branchCertificateUploadEnabled == true;
     }
 
     // ===== USER PROFILES =====
     match /users/{userId} {
-      // Admins+ can read all user profiles (needed for admin panel user management)
       allow read: if isAuthenticated() && (
         request.auth.uid == userId ||
-        isAdminOrAbove()
+        isSuperAdmin() ||
+        (
+          hasRole('admin')
+          && resource.data.businessId == getUserProfile().businessId
+        )
       );
 
-      // Create user profiles:
-      // - self create allowed
-      // - superadmin can create any
-      // - admin can create only non-superadmin users inside own business
+      // Profiles are provisioned only by an authorized administrator.
       allow create: if isAuthenticated() && (
-        request.auth.uid == userId
-        || isSuperAdmin()
+        isSuperAdmin()
         || (
           hasRole('admin')
           && request.resource.data.businessId == getUserProfile().businessId
           && request.resource.data.role != 'superadmin'
+          && request.resource.data.permissionsConfigured == true
+          && request.resource.data.permissions is list
         )
       );
-
-      // Self-edit: users can update their own profile but NOT change role or permissions
+      // Self-edit is restricted to non-security profile fields.
       allow update: if isAuthenticated() && request.auth.uid == userId
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'permissions']);
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['displayName', 'phone', 'photoURL', 'updatedAt']);
 
       // Superadmin: full edit access on any user profile
       allow update: if isSuperAdmin();
@@ -74,9 +94,13 @@ service cloud.firestore {
       // Admin: can edit users within the same business, cannot promote to superadmin
       allow update: if isAuthenticated()
         && hasRole('admin')
+        && request.auth.uid != userId
         && resource.data.businessId == getUserProfile().businessId
+        && request.resource.data.businessId == resource.data.businessId
         && resource.data.role != 'superadmin'
-        && request.resource.data.role != 'superadmin';
+        && request.resource.data.role != 'superadmin'
+        && request.resource.data.permissionsConfigured == true
+        && request.resource.data.permissions is list;
 
       // Delete user profiles:
       // - superadmin can delete any non-self profile
@@ -97,19 +121,13 @@ service cloud.firestore {
 
     // ===== BUSINESSES (Franchises) =====
     match /businesses/{businessId} {
-      allow read: if isAuthenticated();
-      allow create: if isSuperAdmin()
-        || (
-          hasRole('admin')
-          && (
-            !('branchCertificateUploadEnabled' in request.resource.data)
-            || request.resource.data.branchCertificateUploadEnabled == false
-          )
-        );
+      allow read: if isSuperAdmin() || belongsToBusiness(businessId);
+      allow create: if isSuperAdmin();
       allow update: if isSuperAdmin()
         || (
           isAdminOrAbove()
           && belongsToBusiness(businessId)
+          && hasAnyModulePermission(['settings'])
           && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
             'branchCertificateUploadEnabled',
             'branchCertificatePermissionUpdatedAt',
@@ -120,79 +138,79 @@ service cloud.firestore {
 
       // ── Sales (POS) — all staff can create, admin+ to edit/delete ──
       match /sales/{saleId} {
-        allow read: if canAccessBusiness(businessId);
-        allow create: if canAccessBusiness(businessId);
-        allow update, delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+        allow read: if canUseTenantModule(businessId, ['dashboard', 'pharmacy', 'wholesale', 'reports', 'accounts']);
+        allow create: if canUseTenantModule(businessId, ['pharmacy', 'wholesale', 'patients']);
+        allow update, delete: if canUseTenantModule(businessId, ['pharmacy', 'wholesale']) && isAdminOrAbove();
       }
 
       // ── Inventory — all staff can create & update stock, admin+ to delete ──
       match /inventory/{itemId} {
-        allow read: if canAccessBusiness(businessId);
-        allow create, update: if canAccessBusiness(businessId);
-        allow delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+        allow read: if canUseTenantModule(businessId, ['dashboard', 'pharmacy', 'inventory', 'disposals', 'dda-register', 'my-orders', 'wholesale', 'patients', 'reports']);
+        allow create, update: if canUseTenantModule(businessId, ['inventory', 'pharmacy', 'disposals', 'dda-register', 'my-orders', 'wholesale', 'patients']);
+        allow delete: if canUseTenantModule(businessId, ['inventory']) && isAdminOrAbove();
       }
 
       // ── Patients — all staff can register & update, admin+ to delete ──
       match /patients/{patientId} {
-        allow read: if canAccessBusiness(businessId);
-        allow create, update: if canAccessBusiness(businessId);
-        allow delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+        allow read: if canUseTenantModule(businessId, ['dashboard', 'patients', 'reports']);
+        allow create, update: if canUseTenantModule(businessId, ['patients']);
+        allow delete: if canUseTenantModule(businessId, ['patients']) && isAdminOrAbove();
       }
 
       // ── Patient Bills — all staff can create & update, admin+ to delete ──
       match /patient_bills/{billId} {
-        allow read: if canAccessBusiness(businessId);
-        allow create, update: if canAccessBusiness(businessId);
-        allow delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+        allow read: if canUseTenantModule(businessId, ['patients', 'reports', 'accounts']);
+        allow create, update: if canUseTenantModule(businessId, ['patients']);
+        allow delete: if canUseTenantModule(businessId, ['patients']) && isAdminOrAbove();
       }
 
       // ── Patient Records (clinical) — all staff can create & update ──
       match /patient_records/{recordId} {
-        allow read: if canAccessBusiness(businessId);
-        allow create, update: if canAccessBusiness(businessId);
-        allow delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+        allow read: if canUseTenantModule(businessId, ['patients']);
+        allow create, update: if canUseTenantModule(businessId, ['patients']);
+        allow delete: if canUseTenantModule(businessId, ['patients']) && isAdminOrAbove();
       }
 
       // ── Prescriptions — all staff can create ──
       match /prescriptions/{prescriptionId} {
-        allow read: if canAccessBusiness(businessId);
-        allow create: if canAccessBusiness(businessId);
-        allow update, delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+        allow read: if canUseTenantModule(businessId, ['dashboard', 'pharmacy', 'patients', 'reports']);
+        allow create: if canUseTenantModule(businessId, ['pharmacy', 'patients']);
+        allow update, delete: if canUseTenantModule(businessId, ['pharmacy', 'patients']) && isAdminOrAbove();
       }
 
       // ── Expenses — all staff can create, admin+ to edit/delete ──
       match /expenses/{expenseId} {
-        allow read: if canAccessBusiness(businessId);
-        allow create: if canAccessBusiness(businessId);
-        allow update, delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+        allow read: if canUseTenantModule(businessId, ['dashboard', 'expenses', 'reports', 'accounts']);
+        allow create: if canUseTenantModule(businessId, ['expenses']);
+        allow update, delete: if canUseTenantModule(businessId, ['expenses']) && isAdminOrAbove();
       }
 
       // ── Orders (My Orders) — all staff can create & update, admin+ to delete ──
       match /orders/{orderId} {
-        allow read: if canAccessBusiness(businessId);
-        allow create, update: if canAccessBusiness(businessId);
-        allow delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+        allow read: if canUseTenantModule(businessId, ['dashboard', 'my-orders', 'supplier', 'reports']);
+        allow create, update: if canUseTenantModule(businessId, ['my-orders']);
+        allow delete: if canUseTenantModule(businessId, ['my-orders']) && isAdminOrAbove();
       }
 
       // ── DDA Register — all staff can create ──
       match /dda_register/{entryId} {
-        allow read: if canAccessBusiness(businessId);
-        allow create: if canAccessBusiness(businessId);
-        allow update, delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+        allow read: if canUseTenantModule(businessId, ['dda-register', 'reports']);
+        allow create: if canUseTenantModule(businessId, ['dda-register']);
+        allow update, delete: if canUseTenantModule(businessId, ['dda-register']) && isAdminOrAbove();
       }
 
       // ── Suppliers — admin+ only ──
       match /suppliers/{supplierId} {
-        allow read: if canAccessBusiness(businessId);
-        allow create, update, delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+        allow read: if canUseTenantModule(businessId, ['supplier', 'my-orders']);
+        allow create, update, delete: if canUseTenantModule(businessId, ['supplier']) && isAdminOrAbove();
       }
 
       // ── Wholesale Orders — admin+ to create/edit/delete, rider token for dispatch updates ──
       match /wholesale_orders/{wholesaleId} {
-        allow read: if canAccessBusiness(businessId);
-        allow create: if canAccessBusiness(businessId) && isAdminOrAbove();
-        allow update: if canAccessBusiness(businessId) && isAdminOrAbove();
-        allow delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+        allow read: if canUseTenantModule(businessId, ['dashboard', 'wholesale', 'reports']);
+        allow create: if canUseTenantModule(businessId, ['wholesale']) && isAdminOrAbove();
+        allow update: if canUseTenantModule(businessId, ['wholesale']) && isAdminOrAbove();
+        allow delete: if canUseTenantModule(businessId, ['wholesale']) && isAdminOrAbove();
         // Allow unauthenticated rider to read & update dispatch status via token
         allow get: if resource.data.dispatch.riderToken is string && resource.data.dispatch.riderToken.size() > 0;
         allow update: if resource.data.dispatch.riderToken is string
@@ -202,29 +220,29 @@ service cloud.firestore {
 
       // ── Activity Log — all staff can create (logging), admin+ to delete ──
       match /activity_log/{logId} {
-        allow read: if canAccessBusiness(businessId);
+        allow read: if canUseTenantModule(businessId, ['activity-log', 'dashboard']);
         allow create: if canAccessBusiness(businessId);
-        allow update, delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+        allow update, delete: if canUseTenantModule(businessId, ['activity-log']) && isAdminOrAbove();
       }
 
       // ── Medication Refills — all staff can create & update, admin+ to delete ──
       match /medication_refills/{refillId} {
-        allow read: if canAccessBusiness(businessId);
-        allow create, update: if canAccessBusiness(businessId);
-        allow delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+        allow read: if canUseTenantModule(businessId, ['dashboard', 'medication-refill']);
+        allow create, update: if canUseTenantModule(businessId, ['medication-refill']);
+        allow delete: if canUseTenantModule(businessId, ['medication-refill']) && isAdminOrAbove();
       }
 
       // ── Reports — admin+ only ──
       match /reports/{reportId} {
-        allow read: if canAccessBusiness(businessId);
-        allow create, update, delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+        allow read: if canUseTenantModule(businessId, ['reports']);
+        allow create, update, delete: if canUseTenantModule(businessId, ['reports']) && isAdminOrAbove();
       }
 
       // ── Accounts — admin+ to write, superadmin to delete ──
       match /accounts/{accountId} {
-        allow read: if canAccessBusiness(businessId);
-        allow create, update: if canAccessBusiness(businessId) && isAdminOrAbove();
-        allow delete: if canAccessBusiness(businessId) && isSuperAdmin();
+        allow read: if canUseTenantModule(businessId, ['accounts']);
+        allow create, update: if canUseTenantModule(businessId, ['accounts']) && isAdminOrAbove();
+        allow delete: if canUseTenantModule(businessId, ['accounts']) && isSuperAdmin();
       }
 
       // ── Messages — all staff can read/create/update ──
@@ -250,12 +268,12 @@ service cloud.firestore {
 
       // ── Support Tickets — branch creates/tracks, superadmin resolves ──
       match /tickets/{ticketId} {
-        allow read: if canAccessBusiness(businessId);
-        allow create: if canAccessBusiness(businessId)
+        allow read: if canUseTenantModule(businessId, ['support-tickets']);
+        allow create: if canUseTenantModule(businessId, ['support-tickets'])
           && request.resource.data.businessId == businessId;
         allow update: if isSuperAdmin()
           || (
-            canAccessBusiness(businessId)
+            canUseTenantModule(businessId, ['support-tickets'])
             && request.resource.data.diff(resource.data).affectedKeys()
               .hasOnly(['title', 'description', 'category', 'priority', 'contactPhone', 'reference', 'updatedAt', 'lastUpdatedBy'])
           );
@@ -264,23 +282,23 @@ service cloud.firestore {
 
       // ── Settings (retention, etc.) — admin+ to read/write ──
       match /settings/{settingId} {
-        allow read: if canAccessBusiness(businessId);
-        allow create, update: if canAccessBusiness(businessId) && isAdminOrAbove();
-        allow delete: if canAccessBusiness(businessId) && isSuperAdmin();
+        allow read: if canUseTenantModule(businessId, ['settings', 'activity-log']);
+        allow create, update: if canUseTenantModule(businessId, ['settings', 'activity-log']) && isAdminOrAbove();
+        allow delete: if canUseTenantModule(businessId, ['settings']) && isSuperAdmin();
       }
 
       // ── Stock History — read for all, write for admin+ ──
       match /stock_history/{entryId} {
-        allow read: if canAccessBusiness(businessId);
-        allow create: if canAccessBusiness(businessId);
-        allow delete: if canAccessBusiness(businessId) && isSuperAdmin();
+        allow read: if canUseTenantModule(businessId, ['inventory', 'my-orders', 'reports']);
+        allow create: if canUseTenantModule(businessId, ['inventory', 'pharmacy', 'disposals', 'my-orders', 'wholesale']);
+        allow delete: if canUseTenantModule(businessId, ['inventory']) && isSuperAdmin();
       }
 
       // Inventory disposals — expired batches are quarantined automatically;
       // staff can record damage and complete physical disposal.
       match /disposals/{disposalId} {
-        allow read: if canAccessBusiness(businessId);
-        allow create: if canAccessBusiness(businessId)
+        allow read: if canUseTenantModule(businessId, ['dashboard', 'inventory', 'disposals', 'reports']);
+        allow create: if canUseTenantModule(businessId, ['inventory', 'disposals'])
           && request.resource.data.productId is string
           && request.resource.data.productName is string
           && request.resource.data.quantity is int
@@ -296,7 +314,7 @@ service cloud.firestore {
           ]
           && request.resource.data.source in ['automatic', 'manual']
           && request.resource.data.status == 'pending';
-        allow update: if canAccessBusiness(businessId)
+        allow update: if canUseTenantModule(businessId, ['inventory', 'disposals'])
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'status',
             'disposalMethod',
@@ -313,21 +331,21 @@ service cloud.firestore {
           && request.resource.data.disposedByEmail is string
           && request.resource.data.disposedByUid is string
           && request.resource.data.disposedAt is string;
-        allow delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+        allow delete: if canUseTenantModule(businessId, ['disposals']) && isAdminOrAbove();
       }
 
       // ── Client Leads — wholesale client management ──
       match /client_leads/{clientId} {
-        allow read: if canAccessBusiness(businessId);
-        allow create, update: if canAccessBusiness(businessId);
-        allow delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+        allow read: if canUseTenantModule(businessId, ['wholesale']);
+        allow create, update: if canUseTenantModule(businessId, ['wholesale']);
+        allow delete: if canUseTenantModule(businessId, ['wholesale']) && isAdminOrAbove();
       }
 
       // ── Riders — delivery riders management + public update for delivery count ──
       match /riders/{riderId} {
-        allow read: if canAccessBusiness(businessId);
-        allow create, update: if canAccessBusiness(businessId);
-        allow delete: if canAccessBusiness(businessId) && isAdminOrAbove();
+        allow read: if canUseTenantModule(businessId, ['wholesale']);
+        allow create, update: if canUseTenantModule(businessId, ['wholesale']);
+        allow delete: if canUseTenantModule(businessId, ['wholesale']) && isAdminOrAbove();
         // Allow unauthenticated rider page to update delivery stats
         allow get: if true;
         allow update: if request.resource.data.diff(resource.data).affectedKeys()
@@ -337,8 +355,16 @@ service cloud.firestore {
 
     // ===== RIDER SESSIONS (public read for shareable rider links) =====
     match /rider_sessions/{token} {
-      allow read: if true;
-      allow create, update: if isAuthenticated();
+      allow get: if true;
+      allow list: if false;
+      allow create, update: if isSuperAdmin()
+        || (
+          isAuthenticated()
+          && request.resource.data.businessIds is list
+          && request.resource.data.businessIds.size() == 1
+          && request.resource.data.businessIds[0] == getUserProfile().businessId
+          && hasAnyModulePermission(['wholesale'])
+        );
     }
 
     // ===== GLOBAL ADMIN CONFIG =====
@@ -349,17 +375,16 @@ service cloud.firestore {
     // ===== SYSTEM CONFIG (auto-reminders, etc.) =====
     match /system_config/{docId} {
       allow read: if isAuthenticated();
-      allow write: if isAdminOrAbove();
+      allow write: if isSuperAdmin();
     }
 
     // ===== FRANCHISE ALERTS =====
     match /franchise_alerts/{alertId} {
-      // All authenticated users can read (dashboard banners filter by businessId)
-      allow read: if isAuthenticated();
-      // Admins+ can create and delete alerts
-      allow create, delete: if isAdminOrAbove();
+      allow read: if isSuperAdmin()
+        || (isAuthenticated() && belongsToBusiness(resource.data.businessId));
+      allow create, delete: if isSuperAdmin();
       // Admins+ can update alert state; branch users can only dismiss alerts explicitly marked dismissible.
-      allow update: if isAdminOrAbove()
+      allow update: if isSuperAdmin()
         || (
           isAuthenticated()
           && belongsToBusiness(resource.data.businessId)
@@ -372,10 +397,20 @@ service cloud.firestore {
     // ===== CENTRAL SUPPORT TICKET COPIES =====
     match /support_tickets/{ticketId} {
       allow read: if isSuperAdmin()
-        || (isAuthenticated() && belongsToBusiness(resource.data.businessId));
+        || (
+          isAuthenticated()
+          && belongsToBusiness(resource.data.businessId)
+          && hasAnyModulePermission(['support-tickets'])
+        );
       allow create: if isAuthenticated()
         && request.resource.data.businessId is string
-        && (isSuperAdmin() || belongsToBusiness(request.resource.data.businessId));
+        && (
+          isSuperAdmin()
+          || (
+            belongsToBusiness(request.resource.data.businessId)
+            && hasAnyModulePermission(['support-tickets'])
+          )
+        );
       allow update: if isSuperAdmin();
       allow delete: if isSuperAdmin();
     }
@@ -383,29 +418,48 @@ service cloud.firestore {
     // ===== BRANCH PORTAL: BILLING DOCUMENTS =====
     match /branch_finance_docs/{docId} {
       allow read: if isSuperAdmin()
-        || (isAuthenticated() && belongsToBusiness(resource.data.businessId));
+        || (
+          isAuthenticated()
+          && belongsToBusiness(resource.data.businessId)
+          && hasAnyModulePermission(['branch-portal'])
+        );
       allow create, update, delete: if isSuperAdmin();
     }
 
     // ===== BRANCH PORTAL: COMMUNICATIONS =====
     match /branch_communications/{messageId} {
       allow read: if isSuperAdmin()
-        || (isAuthenticated() && belongsToBusiness(resource.data.businessId));
+        || (
+          isAuthenticated()
+          && belongsToBusiness(resource.data.businessId)
+          && hasAnyModulePermission(['branch-portal'])
+        );
       allow create: if isAuthenticated()
         && request.resource.data.businessId is string
-        && (isSuperAdmin() || belongsToBusiness(request.resource.data.businessId));
+        && (
+          isSuperAdmin()
+          || (
+            belongsToBusiness(request.resource.data.businessId)
+            && hasAnyModulePermission(['branch-portal'])
+          )
+        );
       allow update, delete: if isSuperAdmin();
     }
 
     // ===== BRANCH PORTAL: CONTRACTS =====
     match /branch_contracts/{contractId} {
       allow read: if isSuperAdmin()
-        || (isAuthenticated() && belongsToBusiness(resource.data.businessId));
+        || (
+          isAuthenticated()
+          && belongsToBusiness(resource.data.businessId)
+          && hasAnyModulePermission(['branch-portal'])
+        );
       allow create, delete: if isSuperAdmin();
       allow update: if isSuperAdmin()
         || (
           isAuthenticated()
           && belongsToBusiness(resource.data.businessId)
+          && hasAnyModulePermission(['branch-portal'])
           && request.resource.data.businessId == resource.data.businessId
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'signedFileUrl',
@@ -425,10 +479,15 @@ service cloud.firestore {
     // then create image-only certificate records for their own branch.
     match /branch_certificates/{certificateId} {
       allow read: if isSuperAdmin()
-        || (isAuthenticated() && belongsToBusiness(resource.data.businessId));
+        || (
+          isAuthenticated()
+          && belongsToBusiness(resource.data.businessId)
+          && hasAnyModulePermission(['branch-portal'])
+        );
       allow create: if isAuthenticated()
         && request.resource.data.businessId is string
         && belongsToBusiness(request.resource.data.businessId)
+        && hasAnyModulePermission(['branch-portal'])
         && branchCertificateUploadsEnabled(request.resource.data.businessId)
         && request.resource.data.imageUrl is string
         && request.resource.data.imageName is string

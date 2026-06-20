@@ -67,6 +67,11 @@
                     PharmaFlow.Sidebar.updateForRole(profile.role);
                 }
 
+                // Reveal the application only after the authorized navigation has been built.
+                document.body.classList.remove('auth-pending');
+                const authGate = document.getElementById('auth-gate');
+                if (authGate) authGate.setAttribute('aria-hidden', 'true');
+
                 // Manage franchise selector visibility based on role
                 if (profile && profile.role === PharmaFlow.USER_ROLES.SUPERADMIN) {
                     this.showFranchiseSelector();
@@ -90,15 +95,28 @@
                 this._authInitialized = true;
             });
 
+            // Firebase may restore a cached session before this large app bundle finishes loading.
+            // Replay the verified state so the authorization gate can never remain stuck.
+            if (PharmaFlow.Auth && PharmaFlow.Auth.authorizationReady && PharmaFlow.Auth.userProfile) {
+                window.dispatchEvent(new CustomEvent('auth-ready', {
+                    detail: {
+                        user: PharmaFlow.Auth.currentUser,
+                        profile: PharmaFlow.Auth.userProfile
+                    }
+                }));
+            }
+
             // Re-establish listeners when business changes (superadmin switching)
             window.addEventListener('business-changed', (e) => {
                 const { businessId } = e.detail;
-                if (businessId) {
+                if (!PharmaFlow.Auth || !PharmaFlow.Auth.setActiveBusinessId(businessId)) return;
+                const activeBusinessId = PharmaFlow.Auth.getBusinessId();
+                if (activeBusinessId) {
                     const uid = PharmaFlow.Auth && PharmaFlow.Auth.currentUser ? PharmaFlow.Auth.currentUser.uid : null;
-                    this.startNotifications(businessId, uid);
-                    this.startMessages(businessId, uid);
-                    this.startBusinessStatusWatcher(businessId);
-                    this.startExpiryMonitor(businessId);
+                    this.startNotifications(activeBusinessId, uid);
+                    this.startMessages(activeBusinessId, uid);
+                    this.startBusinessStatusWatcher(activeBusinessId);
+                    this.startExpiryMonitor(activeBusinessId);
                 }
             });
         },
@@ -205,13 +223,16 @@
         hideFranchiseSelector: function () {
             const selector = document.getElementById('franchise-selector');
             if (selector) selector.style.display = 'none';
+            if (PharmaFlow.Auth && PharmaFlow.Auth.userProfile && PharmaFlow.Auth.userProfile.role !== 'superadmin') {
+                PharmaFlow.selectedBusinessId = null;
+            }
         },
 
         /**
          * Load businesses for franchise selector (superadmin)
          */
         loadBusinesses: async function () {
-            if (!window.db) return;
+            if (!window.db || !PharmaFlow.Auth || !PharmaFlow.Auth.isSuperAdmin()) return;
             const select = document.getElementById('franchise-select');
             if (!select) return;
 
@@ -231,7 +252,7 @@
                 const profile = PharmaFlow.Auth ? PharmaFlow.Auth.userProfile : null;
                 if (profile && profile.businessId) {
                     select.value = profile.businessId;
-                    PharmaFlow.selectedBusinessId = profile.businessId;
+                    PharmaFlow.Auth.setActiveBusinessId(profile.businessId);
                 }
 
                 // Only bind the change listener once
@@ -239,10 +260,9 @@
                     this._franchiseListenerBound = true;
                     select.addEventListener('change', () => {
                         const selectedBusinessId = select.value;
-                        // Store selected business globally so all modules pick it up
-                        PharmaFlow.selectedBusinessId = selectedBusinessId || null;
+                        if (!PharmaFlow.Auth.setActiveBusinessId(selectedBusinessId)) return;
                         window.dispatchEvent(new CustomEvent('business-changed', {
-                            detail: { businessId: selectedBusinessId }
+                            detail: { businessId: PharmaFlow.Auth.getBusinessId() }
                         }));
                         // Re-render the current active module with the new business data
                         if (PharmaFlow.Router && PharmaFlow.Router.currentModuleId) {

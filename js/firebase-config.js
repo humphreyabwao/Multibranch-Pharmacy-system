@@ -122,8 +122,14 @@ function initializeFirebase() {
  */
 function getBusinessCollection(businessId, collectionName) {
     if (!window.db) {
-        console.error('Firestore not initialized');
-        return null;
+        throw new Error('Firestore not initialized');
+    }
+    if (!window.PharmaFlow || !PharmaFlow.Auth || !PharmaFlow.Auth.authorizationReady) {
+        throw new Error('Tenant context is not authorized');
+    }
+    PharmaFlow.Auth.assertBusinessAccess(businessId);
+    if (typeof collectionName !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(collectionName)) {
+        throw new Error('Invalid tenant collection');
     }
     return window.db.collection('businesses').doc(businessId).collection(collectionName);
 }
