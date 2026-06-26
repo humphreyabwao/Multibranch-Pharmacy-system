@@ -16,6 +16,7 @@
         _profileListener: null,
         _authorizationFingerprint: null,
         pendingLoginNoticeKey: 'pf_login_error',
+        pendingLoginNoticeDetailKey: 'pf_login_error_detail',
 
         /**
          * Initialize auth state listener
@@ -37,11 +38,11 @@
                         this.onAuthSuccess();
                     } catch (err) {
                         let message = 'We could not verify your access. Please sign in again.';
-                        if (err.message === 'ACCOUNT_DISABLED') {
-                            message = 'Your account has been disabled. Please contact your administrator.';
+                        if (err.message === 'ACCOUNT_SUSPENDED') {
+                            message = this.getAccountSuspensionMessage(this.userProfile);
                         } else if (err.message === 'FRANCHISE_INACTIVE') {
                             message = localStorage.getItem(this.pendingLoginNoticeKey)
-                                || 'This branch has been suspended. Please contact the system administrator.';
+                                || this.getFranchiseDeactivationMessage(this._lastInactiveBusinessData || {});
                         } else if (err.message === 'ACCOUNT_NOT_CONFIGURED') {
                             message = 'Your login exists, but no authorized user profile is assigned. Contact the system administrator.';
                         } else if (err.message === 'FRANCHISE_NOT_ASSIGNED') {
@@ -115,7 +116,7 @@
                 for (let i = 0; i < localStorage.length; i++) {
                     const key = localStorage.key(i);
                     if (!key || !key.startsWith('pf_')) continue;
-                    if (key === 'pf_last_active_business_id' || key === this.pendingLoginNoticeKey) continue;
+                    if (key === 'pf_last_active_business_id' || key === this.pendingLoginNoticeKey || key === this.pendingLoginNoticeDetailKey) continue;
                     if (key.indexOf('pf_brand_snapshot_') === 0) continue;
                     if (key === 'pf_brand_name' || key === 'pf_brand_tagline' || key === 'pf_brand_icon' || key === 'pf_brand_company_logo') {
                         continue;
@@ -161,7 +162,11 @@
                 throw new Error('ACCOUNT_NOT_CONFIGURED');
             }
 
-            // Enforce franchise isolation: check user status and franchise active state
+            if (this.isProfileSuspended(this.userProfile)) {
+                throw new Error('ACCOUNT_SUSPENDED');
+            }
+
+            // Enforce franchise isolation: check franchise active state
             if (this.userProfile && this.userProfile.role !== 'superadmin') {
                 // Master email always gets superadmin — self-heal if role was changed
                 const masterEmail = (PharmaFlow.MASTER_EMAIL || 'admin@pharmaflow.com').toLowerCase();
@@ -178,11 +183,6 @@
                     throw new Error('FRANCHISE_NOT_ASSIGNED');
                 }
 
-                // Check if user account is disabled
-                if (this.userProfile.status === 'disabled') {
-                    throw new Error('ACCOUNT_DISABLED');
-                }
-
                 // Check if franchise is active
                 if (this.userProfile.businessId) {
                     try {
@@ -191,8 +191,8 @@
                             throw new Error('FRANCHISE_NOT_ASSIGNED');
                         }
                         if (bizDoc.exists && bizDoc.data().isActive === false) {
-                            const suspensionMessage = this.getSuspensionMessage(bizDoc.data());
-                            try { localStorage.setItem(this.pendingLoginNoticeKey, suspensionMessage); } catch (e) { /* ignore */ }
+                            this._lastInactiveBusinessData = bizDoc.data();
+                            this.storeFranchiseDeactivationNotice(bizDoc.data());
                             throw new Error('FRANCHISE_INACTIVE');
                         }
                     } catch (bizErr) {
@@ -272,8 +272,8 @@
                 if (nextFingerprint === this._authorizationFingerprint) return;
 
                 this._authorizationFingerprint = nextFingerprint;
-                if (nextProfile.status === 'disabled') {
-                    this.denyAccess('Your account has been disabled. Please contact your administrator.');
+                if (this.isProfileSuspended(nextProfile)) {
+                    this.denyAccess(this.getAccountSuspensionMessage(nextProfile));
                     return;
                 }
 
@@ -309,7 +309,9 @@
         showLoginError: function (msg) {
             const errorDiv = document.getElementById('login-error');
             const msgEl = document.getElementById('login-error-text');
+            const actionsEl = document.getElementById('login-error-actions');
             if (msgEl) msgEl.textContent = msg || '';
+            this.renderLoginErrorActions(actionsEl, this.getStoredLoginNoticeDetail());
             if (errorDiv) {
                 errorDiv.classList.remove('login-shake');
                 void errorDiv.offsetWidth;
@@ -321,18 +323,130 @@
         },
 
         getSuspensionMessage: function (businessData) {
+            return this.getFranchiseDeactivationMessage(businessData);
+        },
+
+        getFranchiseDeactivationMessage: function (businessData) {
             const reason = businessData && (businessData.suspensionReason || businessData.inactiveReason || businessData.deactivationReason);
+            const status = businessData && (businessData.deactivationStatus || businessData.billingStatus || businessData.paymentStatus);
+            const amount = businessData && (businessData.deactivationAmount || businessData.amountDue || businessData.planAmount);
+            const currency = businessData && (businessData.deactivationCurrency || businessData.currency || 'KES');
+            const parts = ['This franchise has been deactivated.'];
+            if (status) parts.push('Status: ' + this.humanizeStatus(status) + '.');
+            if (reason) parts.push('Reason: ' + reason + '.');
+            if (amount) parts.push('Amount due: ' + this.formatNoticeMoney(amount, currency) + '.');
+            if (businessData && businessData.deactivationTillNumber) parts.push('Till: ' + businessData.deactivationTillNumber + '.');
+            if (businessData && businessData.deactivationPaybillNumber) {
+                parts.push('Paybill: ' + businessData.deactivationPaybillNumber + (businessData.deactivationAccountNumber ? ', Account: ' + businessData.deactivationAccountNumber : '') + '.');
+            }
+            if (businessData && businessData.deactivationPaymentNumber) parts.push('Payment number: ' + businessData.deactivationPaymentNumber + '.');
+            parts.push('Please contact the system administrator.');
+            return parts.join(' ');
+        },
+
+        buildFranchiseDeactivationDetail: function (businessData) {
+            businessData = businessData || {};
+            return {
+                showPayNow: businessData.deactivationShowPayNow === true || businessData.showPayNow === true || businessData.billingStatus === 'overdue' || businessData.deactivationStatus === 'overdue',
+                paymentUrl: businessData.deactivationPaymentUrl || businessData.paymentUrl || '',
+                status: businessData.deactivationStatus || businessData.billingStatus || businessData.paymentStatus || '',
+                amount: businessData.deactivationAmount || businessData.amountDue || businessData.planAmount || '',
+                currency: businessData.deactivationCurrency || businessData.currency || 'KES',
+                tillNumber: businessData.deactivationTillNumber || businessData.tillNumber || '',
+                paybillNumber: businessData.deactivationPaybillNumber || businessData.paybillNumber || '',
+                accountNumber: businessData.deactivationAccountNumber || businessData.accountNumber || '',
+                paymentNumber: businessData.deactivationPaymentNumber || businessData.paymentNumber || '',
+                instructions: businessData.deactivationPaymentInstructions || businessData.paymentInstructions || ''
+            };
+        },
+
+        storeFranchiseDeactivationNotice: function (businessData) {
+            const message = this.getFranchiseDeactivationMessage(businessData);
+            const detail = this.buildFranchiseDeactivationDetail(businessData);
+            try {
+                localStorage.setItem(this.pendingLoginNoticeKey, message);
+                localStorage.setItem(this.pendingLoginNoticeDetailKey, JSON.stringify(detail));
+            } catch (e) { /* ignore */ }
+            return message;
+        },
+
+        getStoredLoginNoticeDetail: function () {
+            try {
+                const raw = localStorage.getItem(this.pendingLoginNoticeDetailKey);
+                return raw ? JSON.parse(raw) : null;
+            } catch (err) {
+                return null;
+            }
+        },
+
+        renderLoginErrorActions: function (actionsEl, detail) {
+            if (!actionsEl) return;
+            actionsEl.innerHTML = '';
+            this._setLoginAlertVisible('login-error-actions', false);
+            if (!detail || !detail.showPayNow) return;
+
+            const lines = [];
+            if (detail.status) lines.push('Status: ' + this.humanizeStatus(detail.status));
+            if (detail.amount) lines.push('Amount: ' + this.formatNoticeMoney(detail.amount, detail.currency || 'KES'));
+            if (detail.tillNumber) lines.push('Till: ' + detail.tillNumber);
+            if (detail.paybillNumber) lines.push('Paybill: ' + detail.paybillNumber + (detail.accountNumber ? ' / Account: ' + detail.accountNumber : ''));
+            if (detail.paymentNumber) lines.push('Payment number: ' + detail.paymentNumber);
+            if (detail.instructions) lines.push(detail.instructions);
+
+            const details = document.createElement('small');
+            details.textContent = lines.join(' | ');
+            actionsEl.appendChild(details);
+
+            const payBtn = document.createElement('button');
+            payBtn.type = 'button';
+            payBtn.className = 'login-pay-now-btn';
+            payBtn.textContent = 'Pay Now';
+            payBtn.addEventListener('click', () => {
+                if (detail.paymentUrl && window.open) {
+                    window.open(detail.paymentUrl, '_blank', 'noopener');
+                } else if (window.alert) {
+                    window.alert(lines.join('\n') || 'Please contact the system administrator for payment instructions.');
+                }
+            });
+            actionsEl.appendChild(payBtn);
+            this._setLoginAlertVisible('login-error-actions', true);
+        },
+
+        humanizeStatus: function (status) {
+            return String(status || '').replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        },
+
+        formatNoticeMoney: function (amount, currency) {
+            const num = parseFloat(amount);
+            if (!isFinite(num)) return String(amount || '');
+            return (currency || 'KES') + ' ' + new Intl.NumberFormat('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(num);
+        },
+
+        isProfileSuspended: function (profile) {
+            if (!profile) return false;
+            const status = String(profile.status || '').toLowerCase();
+            return status === 'disabled'
+                || status === 'suspended'
+                || profile.active === false
+                || profile.isActive === false;
+        },
+
+        getAccountSuspensionMessage: function (profile) {
+            const reason = profile && (profile.suspensionReason || profile.disabledReason || profile.inactiveReason);
             return reason
-                ? 'This branch has been suspended. Reason: ' + reason
-                : 'This branch has been suspended. Please contact the system administrator.';
+                ? 'Your account has been suspended. Reason: ' + reason
+                : 'Your account has been suspended. Please contact your administrator.';
         },
 
         consumeStoredLoginNotice: function () {
             try {
                 const msg = localStorage.getItem(this.pendingLoginNoticeKey);
                 if (!msg) return;
+                const detail = this.getStoredLoginNoticeDetail();
                 localStorage.removeItem(this.pendingLoginNoticeKey);
+                localStorage.removeItem(this.pendingLoginNoticeDetailKey);
                 this.showLoginError(msg);
+                if (detail) this.renderLoginErrorActions(document.getElementById('login-error-actions'), detail);
             } catch (err) {
                 console.warn('Failed to show stored login notice:', err);
             }
@@ -387,7 +501,7 @@
                 'auth/wrong-password': 'Incorrect password. Please try again.',
                 'auth/invalid-email': 'Please enter a valid email address.',
                 'auth/too-many-requests': 'Too many failed attempts. Please try again later.',
-                'auth/user-disabled': 'This account has been disabled. Contact your administrator.',
+                'auth/user-disabled': 'This account has been suspended. Contact your administrator.',
                 'auth/network-request-failed': 'Network error. Please check your connection.',
                 'auth/invalid-credential': 'Invalid email or password. Please try again.'
             };

@@ -478,7 +478,7 @@
                                     <label>Status</label>
                                     <select id="adm-u-status">
                                         <option value="active">Active</option>
-                                        <option value="disabled">Disabled</option>
+                                        <option value="disabled">Suspended</option>
                                     </select>
                                 </div>
                             </div>
@@ -1036,7 +1036,7 @@
                     <div class="dda-view-row"><span class="dda-view-label">Role</span><span class="dda-view-value">${this.getRoleBadge(user.role)}</span></div>
                     <div class="dda-view-row"><span class="dda-view-label">Phone</span><span class="dda-view-value">${this.escapeHtml(user.phone || '—')}</span></div>
                     <div class="dda-view-row"><span class="dda-view-label">Franchise</span><span class="dda-view-value">${this.escapeHtml(bizNames && bizNames[user.businessId] ? bizNames[user.businessId] : (user.businessId || '—'))}</span></div>
-                    <div class="dda-view-row"><span class="dda-view-label">Status</span><span class="dda-view-value">${user.status === 'disabled' ? '<span class="ord-status-badge ord-status--cancelled">Disabled</span>' : '<span class="ord-status-badge ord-status--approved">Active</span>'}</span></div>
+                    <div class="dda-view-row"><span class="dda-view-label">Status</span><span class="dda-view-value">${user.status === 'disabled' ? '<span class="ord-status-badge ord-status--cancelled">Suspended</span>' : '<span class="ord-status-badge ord-status--approved">Active</span>'}</span></div>
                     <div class="dda-view-row"><span class="dda-view-label">Created By</span><span class="dda-view-value">${this.escapeHtml(user.createdBy || '—')}</span></div>
                 </div>
                 <div style="margin-top:16px">
@@ -1349,6 +1349,130 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- Franchise Deactivation Modal -->
+                <div class="dda-modal-overlay" id="adm-biz-deactivate-modal" style="display:none">
+                    <div class="dda-modal adm-deactivate-modal">
+                        <div class="dda-modal-header adm-deactivate-header">
+                            <div>
+                                <span class="adm-deactivate-kicker">Access Control</span>
+                                <h3><i class="fas fa-ban"></i> Deactivate Franchise</h3>
+                            </div>
+                            <button class="dda-modal-close" id="adm-biz-deactivate-close">&times;</button>
+                        </div>
+                        <div class="dda-modal-body adm-deactivate-body">
+                            <input type="hidden" id="adm-biz-deactivate-id">
+                            <section class="adm-deactivate-hero">
+                                <div class="adm-deactivate-hero-main">
+                                    <div class="adm-deactivate-icon"><i class="fas fa-building-lock"></i></div>
+                                    <div>
+                                        <h4 id="adm-biz-deactivate-name">Deactivate this franchise</h4>
+                                        <p>Assigned users are signed out in realtime and future logins show the notice below.</p>
+                                    </div>
+                                </div>
+                                <div class="adm-deactivate-impact">
+                                    <span><strong id="adm-biz-deactivate-user-count">0</strong> users affected</span>
+                                    <span><strong>Realtime</strong> sign-out</span>
+                                </div>
+                            </section>
+
+                            <div class="adm-deactivate-grid">
+                                <section class="adm-deactivate-panel">
+                                    <div class="adm-deactivate-panel-head">
+                                        <i class="fas fa-triangle-exclamation"></i>
+                                        <div>
+                                            <h4>Login Notice</h4>
+                                            <p>What branch users will see after deactivation.</p>
+                                        </div>
+                                    </div>
+                                    <div class="dda-form-row">
+                                        <div class="dda-form-group">
+                                            <label>Status shown on login</label>
+                                            <select id="adm-biz-deactivate-status">
+                                                <option value="suspended">Suspended</option>
+                                                <option value="overdue">Overdue</option>
+                                                <option value="payment_due">Payment Due</option>
+                                                <option value="under_review">Under Review</option>
+                                            </select>
+                                        </div>
+                                        <div class="dda-form-group">
+                                            <label>Amount to Pay</label>
+                                            <input type="number" id="adm-biz-deactivate-amount" min="0" step="0.01" placeholder="e.g., 5000">
+                                        </div>
+                                    </div>
+                                    <div class="dda-form-group">
+                                        <label>Reason shown on login <span class="required">*</span></label>
+                                        <textarea id="adm-biz-deactivate-reason" rows="4" placeholder="Example: Monthly subscription payment is overdue."></textarea>
+                                    </div>
+                                    <label class="adm-deactivate-switch">
+                                        <input type="checkbox" id="adm-biz-deactivate-paynow" checked>
+                                        <span><i class="fas fa-credit-card"></i></span>
+                                        <strong>Show Pay Now button</strong>
+                                    </label>
+                                </section>
+
+                                <section class="adm-deactivate-preview" aria-label="Login alert preview">
+                                    <div class="adm-deactivate-preview-top">
+                                        <span>Login alert preview</span>
+                                        <i class="fas fa-eye"></i>
+                                    </div>
+                                    <div class="adm-deactivate-preview-card">
+                                        <div class="adm-deactivate-preview-icon"><i class="fas fa-circle-exclamation"></i></div>
+                                        <div>
+                                            <strong>This franchise has been deactivated.</strong>
+                                            <p id="adm-biz-deactivate-preview-text">Status, reason, and payment details will appear here.</p>
+                                            <button type="button" class="adm-deactivate-preview-pay">Pay Now</button>
+                                        </div>
+                                    </div>
+                                </section>
+                            </div>
+
+                            <section class="adm-deactivate-panel adm-deactivate-payment-panel">
+                                <div class="adm-deactivate-panel-head">
+                                    <i class="fas fa-money-check-dollar"></i>
+                                    <div>
+                                        <h4>Payment Details</h4>
+                                        <p>Optional fields for overdue or payment-related deactivations.</p>
+                                    </div>
+                                </div>
+                                <div class="adm-deactivate-payment-grid">
+                                    <div class="dda-form-group">
+                                        <label>Currency</label>
+                                        <input type="text" id="adm-biz-deactivate-currency" value="KES" maxlength="8">
+                                    </div>
+                                    <div class="dda-form-group">
+                                        <label>Till Number</label>
+                                        <input type="text" id="adm-biz-deactivate-till" placeholder="e.g., 123456">
+                                    </div>
+                                    <div class="dda-form-group">
+                                        <label>Paybill Number</label>
+                                        <input type="text" id="adm-biz-deactivate-paybill" placeholder="e.g., 654321">
+                                    </div>
+                                    <div class="dda-form-group">
+                                        <label>Account Number</label>
+                                        <input type="text" id="adm-biz-deactivate-account" placeholder="Optional account/reference">
+                                    </div>
+                                    <div class="dda-form-group">
+                                        <label>Payment Phone/Number</label>
+                                        <input type="text" id="adm-biz-deactivate-payment-number" placeholder="e.g., 07xx xxx xxx">
+                                    </div>
+                                    <div class="dda-form-group">
+                                        <label>Payment URL</label>
+                                        <input type="url" id="adm-biz-deactivate-payment-url" placeholder="Optional checkout link">
+                                    </div>
+                                </div>
+                                <div class="dda-form-group">
+                                    <label>Payment Instructions</label>
+                                    <textarea id="adm-biz-deactivate-instructions" rows="2" placeholder="Optional instructions shown beside Pay Now"></textarea>
+                                </div>
+                            </section>
+                        </div>
+                        <div class="dda-modal-footer adm-deactivate-footer">
+                            <button class="dda-btn adm-deactivate-cancel-btn" id="adm-biz-deactivate-cancel">Cancel</button>
+                            <button class="dda-btn adm-deactivate-save-btn" id="adm-biz-deactivate-save"><i class="fas fa-ban"></i> Deactivate Franchise</button>
+                        </div>
+                    </div>
+                </div>
             `;
 
             this.bindFranchiseEvents(container);
@@ -1362,6 +1486,15 @@
             document.getElementById('adm-biz-modal-close')?.addEventListener('click', () => { document.getElementById('adm-biz-modal').style.display = 'none'; });
             document.getElementById('adm-biz-cancel')?.addEventListener('click', () => { document.getElementById('adm-biz-modal').style.display = 'none'; });
             document.getElementById('adm-biz-save')?.addEventListener('click', () => this.saveFranchise());
+            document.getElementById('adm-biz-deactivate-close')?.addEventListener('click', () => { document.getElementById('adm-biz-deactivate-modal').style.display = 'none'; });
+            document.getElementById('adm-biz-deactivate-cancel')?.addEventListener('click', () => { document.getElementById('adm-biz-deactivate-modal').style.display = 'none'; });
+            document.getElementById('adm-biz-deactivate-save')?.addEventListener('click', () => this.confirmDeactivateFranchise());
+            ['adm-biz-deactivate-status', 'adm-biz-deactivate-amount', 'adm-biz-deactivate-currency', 'adm-biz-deactivate-reason', 'adm-biz-deactivate-till', 'adm-biz-deactivate-paybill', 'adm-biz-deactivate-account', 'adm-biz-deactivate-payment-number', 'adm-biz-deactivate-paynow'].forEach(id => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.addEventListener(el.type === 'checkbox' ? 'change' : 'input', () => this.updateDeactivatePreview());
+                el.addEventListener('change', () => this.updateDeactivatePreview());
+            });
 
             // Assignment type toggle
             document.getElementById('adm-biz-assign-type')?.addEventListener('change', function () {
@@ -1429,6 +1562,15 @@
         saveFranchise: async function () {
             const editId = document.getElementById('adm-biz-edit-id')?.value;
             const isEdit = !!editId;
+            const existingBiz = isEdit ? allBusinesses.find(item => item.id === editId) : null;
+            const selectedStatus = document.getElementById('adm-biz-status')?.value || 'active';
+
+            if (isEdit && existingBiz && existingBiz.isActive !== false && selectedStatus === 'inactive') {
+                document.getElementById('adm-biz-modal').style.display = 'none';
+                this.showToast('Use the deactivation form to capture the login notice and payment details.', 'error');
+                this.openFranchiseDeactivationModal(editId);
+                return;
+            }
 
             const name = document.getElementById('adm-biz-name')?.value?.trim();
             if (!name) { this.showToast('Franchise name is required.', 'error'); return; }
@@ -1439,12 +1581,16 @@
                 phone: document.getElementById('adm-biz-phone')?.value?.trim() || '',
                 email: document.getElementById('adm-biz-email')?.value?.trim() || '',
                 address: document.getElementById('adm-biz-address')?.value?.trim() || '',
-                isActive: document.getElementById('adm-biz-status')?.value !== 'inactive',
+                isActive: selectedStatus !== 'inactive',
                 notes: document.getElementById('adm-biz-notes')?.value?.trim() || '',
                 branchCertificateUploadEnabled: isEdit
                     ? allBusinesses.find(item => item.id === editId)?.branchCertificateUploadEnabled === true
                     : false
             };
+
+            if (isEdit && existingBiz && existingBiz.isActive === false && selectedStatus === 'active') {
+                Object.assign(data, this.buildFranchiseReactivationUpdate());
+            }
 
             // Validate admin assignment fields before saving
             const assignType = !isEdit ? (document.getElementById('adm-biz-assign-type')?.value || 'none') : 'none';
@@ -1682,35 +1828,148 @@
         },
 
         toggleFranchiseStatus: async function (bizId, isCurrentlyActive) {
-            const action = isCurrentlyActive ? 'deactivate' : 'activate';
-            if (!(await PharmaFlow.confirm('Are you sure you want to ' + action + ' this franchise?', { title: action.charAt(0).toUpperCase() + action.slice(1) + ' Franchise', confirmText: 'Yes, ' + action.charAt(0).toUpperCase() + action.slice(1), danger: isCurrentlyActive }))) return;
-            let reason = '';
             if (isCurrentlyActive) {
-                reason = window.prompt('Reason to show this branch on login:', 'Branch temporarily suspended by superadmin.');
-                if (!reason) return;
+                this.openFranchiseDeactivationModal(bizId);
+                return;
             }
+
+            if (!(await PharmaFlow.confirm('Activate this franchise now? Users assigned to it will regain login access.', { title: 'Activate Franchise', confirmText: 'Activate Franchise' }))) return;
+            try {
+                const updateData = this.buildFranchiseReactivationUpdate();
+                await window.db.collection('businesses').doc(bizId).update(updateData);
+                this.showToast('Franchise activated!');
+            } catch (err) {
+                console.error('Toggle franchise error:', err);
+                this.showToast('Failed to activate franchise.', 'error');
+            }
+        },
+
+        buildFranchiseReactivationUpdate: function () {
+            return {
+                isActive: true,
+                billingStatus: 'active',
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                deactivationStatus: firebase.firestore.FieldValue.delete(),
+                suspensionReason: firebase.firestore.FieldValue.delete(),
+                inactiveReason: firebase.firestore.FieldValue.delete(),
+                deactivationReason: firebase.firestore.FieldValue.delete(),
+                deactivationAmount: firebase.firestore.FieldValue.delete(),
+                deactivationCurrency: firebase.firestore.FieldValue.delete(),
+                deactivationTillNumber: firebase.firestore.FieldValue.delete(),
+                deactivationPaybillNumber: firebase.firestore.FieldValue.delete(),
+                deactivationAccountNumber: firebase.firestore.FieldValue.delete(),
+                deactivationPaymentNumber: firebase.firestore.FieldValue.delete(),
+                deactivationPaymentInstructions: firebase.firestore.FieldValue.delete(),
+                deactivationPaymentUrl: firebase.firestore.FieldValue.delete(),
+                deactivationShowPayNow: firebase.firestore.FieldValue.delete(),
+                deactivatedAt: firebase.firestore.FieldValue.delete(),
+                deactivatedBy: firebase.firestore.FieldValue.delete(),
+                suspendedAt: firebase.firestore.FieldValue.delete(),
+                suspendedBy: firebase.firestore.FieldValue.delete()
+            };
+        },
+
+        openFranchiseDeactivationModal: function (bizId) {
+            const business = allBusinesses.find(b => b.id === bizId);
+            if (!business) return;
+            const modal = document.getElementById('adm-biz-deactivate-modal');
+            if (!modal) return;
+            document.getElementById('adm-biz-deactivate-id').value = bizId;
+            document.getElementById('adm-biz-deactivate-name').textContent = 'Deactivate "' + (business.name || 'this franchise') + '". Users in this franchise will be signed out in realtime and blocked at login.';
+            document.getElementById('adm-biz-deactivate-status').value = business.deactivationStatus || business.billingStatus || 'suspended';
+            document.getElementById('adm-biz-deactivate-amount').value = business.deactivationAmount || business.amountDue || business.planAmount || '';
+            document.getElementById('adm-biz-deactivate-currency').value = business.deactivationCurrency || business.currency || 'KES';
+            document.getElementById('adm-biz-deactivate-payment-url').value = business.deactivationPaymentUrl || business.paymentUrl || '';
+            document.getElementById('adm-biz-deactivate-till').value = business.deactivationTillNumber || business.tillNumber || '';
+            document.getElementById('adm-biz-deactivate-paybill').value = business.deactivationPaybillNumber || business.paybillNumber || '';
+            document.getElementById('adm-biz-deactivate-account').value = business.deactivationAccountNumber || business.accountNumber || '';
+            document.getElementById('adm-biz-deactivate-payment-number').value = business.deactivationPaymentNumber || business.paymentNumber || '';
+            document.getElementById('adm-biz-deactivate-reason').value = business.deactivationReason || business.suspensionReason || '';
+            document.getElementById('adm-biz-deactivate-instructions').value = business.deactivationPaymentInstructions || business.paymentInstructions || '';
+            document.getElementById('adm-biz-deactivate-paynow').checked = business.deactivationShowPayNow !== false;
+            const affectedUsers = allUsers.filter(u => u.businessId === bizId && u.status !== 'disabled').length;
+            const countEl = document.getElementById('adm-biz-deactivate-user-count');
+            if (countEl) countEl.textContent = affectedUsers;
+            this.updateDeactivatePreview();
+            modal.style.display = 'flex';
+        },
+
+        updateDeactivatePreview: function () {
+            const preview = document.getElementById('adm-biz-deactivate-preview-text');
+            const payBtn = document.querySelector('.adm-deactivate-preview-pay');
+            if (!preview) return;
+            const status = this.humanizeLabel(document.getElementById('adm-biz-deactivate-status')?.value || 'suspended');
+            const reason = (document.getElementById('adm-biz-deactivate-reason')?.value || '').trim() || 'Reason will appear here.';
+            const amount = document.getElementById('adm-biz-deactivate-amount')?.value;
+            const currency = (document.getElementById('adm-biz-deactivate-currency')?.value || 'KES').trim().toUpperCase();
+            const till = (document.getElementById('adm-biz-deactivate-till')?.value || '').trim();
+            const paybill = (document.getElementById('adm-biz-deactivate-paybill')?.value || '').trim();
+            const account = (document.getElementById('adm-biz-deactivate-account')?.value || '').trim();
+            const paymentNo = (document.getElementById('adm-biz-deactivate-payment-number')?.value || '').trim();
+            const parts = ['Status: ' + status + '.', reason];
+            if (amount) parts.push('Amount due: ' + currency + ' ' + Number(amount || 0).toLocaleString('en-KE') + '.');
+            if (till) parts.push('Till: ' + till + '.');
+            if (paybill) parts.push('Paybill: ' + paybill + (account ? ', Account: ' + account : '') + '.');
+            if (paymentNo) parts.push('Payment number: ' + paymentNo + '.');
+            preview.textContent = parts.join(' ');
+            if (payBtn) payBtn.style.display = document.getElementById('adm-biz-deactivate-paynow')?.checked ? 'inline-flex' : 'none';
+        },
+
+        humanizeLabel: function (value) {
+            return String(value || '').replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        },
+
+        confirmDeactivateFranchise: async function () {
+            const bizId = document.getElementById('adm-biz-deactivate-id')?.value;
+            const business = allBusinesses.find(b => b.id === bizId);
+            const reason = (document.getElementById('adm-biz-deactivate-reason')?.value || '').trim();
+            if (!bizId || !business) return;
+            if (!reason) { this.showToast('Please enter a deactivation reason.', 'error'); return; }
+
+            const status = document.getElementById('adm-biz-deactivate-status')?.value || 'suspended';
+            const amountRaw = document.getElementById('adm-biz-deactivate-amount')?.value;
+            const amount = amountRaw === '' ? null : Math.max(0, parseFloat(amountRaw) || 0);
+            const currency = (document.getElementById('adm-biz-deactivate-currency')?.value || 'KES').trim().toUpperCase();
+            const showPayNow = document.getElementById('adm-biz-deactivate-paynow')?.checked === true;
+
+            if (!(await PharmaFlow.confirm('Deactivate "' + (business.name || 'this franchise') + '" now? All assigned users will be signed out and future logins will show the deactivation alert.', {
+                title: 'Deactivate Franchise',
+                confirmText: 'Deactivate Franchise',
+                danger: true
+            }))) return;
+
+            const btn = document.getElementById('adm-biz-deactivate-save');
+            if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Deactivating...'; }
 
             try {
                 const updateData = {
-                    isActive: !isCurrentlyActive,
+                    isActive: false,
+                    billingStatus: status,
+                    deactivationStatus: status,
+                    suspensionReason: reason,
+                    inactiveReason: reason,
+                    deactivationReason: reason,
+                    deactivationAmount: amount,
+                    deactivationCurrency: currency,
+                    deactivationTillNumber: (document.getElementById('adm-biz-deactivate-till')?.value || '').trim(),
+                    deactivationPaybillNumber: (document.getElementById('adm-biz-deactivate-paybill')?.value || '').trim(),
+                    deactivationAccountNumber: (document.getElementById('adm-biz-deactivate-account')?.value || '').trim(),
+                    deactivationPaymentNumber: (document.getElementById('adm-biz-deactivate-payment-number')?.value || '').trim(),
+                    deactivationPaymentInstructions: (document.getElementById('adm-biz-deactivate-instructions')?.value || '').trim(),
+                    deactivationPaymentUrl: (document.getElementById('adm-biz-deactivate-payment-url')?.value || '').trim(),
+                    deactivationShowPayNow: showPayNow,
+                    deactivatedAt: new Date().toISOString(),
+                    deactivatedBy: PharmaFlow.Auth?.userProfile?.displayName || PharmaFlow.Auth?.userProfile?.email || 'Superadmin',
                     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
                 };
-                if (isCurrentlyActive) {
-                    updateData.billingStatus = 'suspended';
-                    updateData.suspensionReason = reason;
-                    updateData.suspendedAt = new Date().toISOString();
-                    updateData.suspendedBy = 'Superadmin';
-                } else {
-                    updateData.billingStatus = 'active';
-                    updateData.suspensionReason = firebase.firestore.FieldValue.delete();
-                    updateData.suspendedAt = firebase.firestore.FieldValue.delete();
-                    updateData.suspendedBy = firebase.firestore.FieldValue.delete();
-                }
                 await window.db.collection('businesses').doc(bizId).update(updateData);
-                this.showToast('Franchise ' + action + 'd!');
+                document.getElementById('adm-biz-deactivate-modal').style.display = 'none';
+                this.showToast('Franchise deactivated. Assigned users will see the login alert in realtime.');
             } catch (err) {
-                console.error('Toggle franchise error:', err);
-                this.showToast('Failed to ' + action + ' franchise.', 'error');
+                console.error('Deactivate franchise error:', err);
+                this.showToast('Failed to deactivate franchise: ' + err.message, 'error');
+            } finally {
+                if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-ban"></i> Deactivate Franchise'; }
             }
         },
 

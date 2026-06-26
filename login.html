@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PharmaFlow - Login</title>
-    <link rel="stylesheet" href="css/styles.css">
+    <link rel="stylesheet" href="css/styles.css?v=20260627-franchise-deactivation-1">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <script src="js/branding-sync.js"></script>
     <script>
@@ -35,6 +35,7 @@
             <div id="login-error" class="alert alert-error login-hidden" role="alert" aria-live="assertive">
                 <i class="fas fa-circle-exclamation" aria-hidden="true"></i>
                 <span id="login-error-text"></span>
+                <div id="login-error-actions" class="login-error-actions login-hidden"></div>
             </div>
             <div id="login-success" class="alert alert-success login-hidden" role="status" aria-live="polite"></div>
 
@@ -102,7 +103,7 @@
     </div>
 
     <script src="js/firebase-config.js?v=20260620-tenant-isolation-1"></script>
-    <script src="js/auth.js?v=20260620-tenant-isolation-1"></script>
+    <script src="js/auth.js?v=20260627-suspended-login-1"></script>
     <script>
         // Set dynamic year
         document.getElementById('footer-year').textContent = new Date().getFullYear();

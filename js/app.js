@@ -149,13 +149,13 @@
                     if (!doc.exists) return;
                     const data = doc.data() || {};
                     if (data.isActive === false) {
-                        const reason = data.suspensionReason || data.inactiveReason || data.deactivationReason || 'Please contact the system administrator.';
-                        try {
-                            localStorage.setItem('pf_login_error', 'This branch has been suspended. Reason: ' + reason);
-                        } catch (e) { /* ignore */ }
                         if (PharmaFlow.Auth) {
+                            PharmaFlow.Auth.storeFranchiseDeactivationNotice(data);
                             PharmaFlow.Auth.signOut();
                         } else if (window.auth) {
+                            try {
+                                localStorage.setItem('pf_login_error', 'This franchise has been deactivated. Please contact the system administrator.');
+                            } catch (e) { /* ignore */ }
                             window.auth.signOut().finally(() => window.location.replace('login.html'));
                         }
                     }

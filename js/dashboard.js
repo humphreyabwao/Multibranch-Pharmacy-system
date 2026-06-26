@@ -352,7 +352,7 @@
                 <div class="global-search-panel" id="global-search-panel">
                     <div class="global-search-header">
                         <i class="fas fa-search"></i>
-                        <input type="text" id="gs-input" placeholder="Search inventory, sales, patients, expenses, orders..." autocomplete="off">
+                        <input type="text" id="gs-input" placeholder="Search modules, customers, sales, stock, orders, tickets..." autocomplete="off">
                         <button class="gs-close-btn" id="gs-close-btn">ESC</button>
                     </div>
                     <div class="global-search-body" id="gs-body">
@@ -440,22 +440,7 @@
             const body = document.getElementById('gs-body');
             if (!body) return;
 
-            const modules = [
-                { icon: 'fas fa-cart-shopping', color: 'green', label: 'Point of Sale', module: 'pharmacy', sub: 'pos' },
-                { icon: 'fas fa-boxes-stacked', color: 'blue', label: 'View Inventory', module: 'inventory', sub: 'view-inventory' },
-                { icon: 'fas fa-plus-circle', color: 'teal', label: 'Add Inventory', module: 'inventory', sub: 'add-inventory' },
-                { icon: 'fas fa-receipt', color: 'purple', label: 'All Sales', module: 'pharmacy', sub: 'all-sales' },
-                { icon: 'fas fa-hospital-user', color: 'blue', label: 'Patients / Customers', module: 'patients', sub: 'manage-patients' },
-                { icon: 'fas fa-file-invoice-dollar', color: 'red', label: 'Expenses', module: 'expenses', sub: 'manage-expenses' },
-                { icon: 'fas fa-boxes-packing', color: 'orange', label: 'Medication Orders', module: 'medication-refill', sub: 'manage-orders' },
-                { icon: 'fas fa-store', color: 'indigo', label: 'Wholesale', module: 'wholesale', sub: 'manage-wholesale' },
-                { icon: 'fas fa-truck', color: 'teal', label: 'Suppliers', module: 'supplier', sub: null },
-                { icon: 'fas fa-prescription', color: 'cyan', label: 'Prescriptions', module: 'pharmacy', sub: 'prescription' },
-                { icon: 'fas fa-book', color: 'red', label: 'DDA Register', module: 'dda-register', sub: 'view-register' },
-                { icon: 'fas fa-clipboard-list', color: 'green', label: 'Reports', module: 'reports', sub: 'generate-report' },
-                { icon: 'fas fa-calculator', color: 'purple', label: 'Accounts', module: 'accounts', sub: null },
-                { icon: 'fas fa-cog', color: 'orange', label: 'Settings', module: 'settings', sub: null }
-            ];
+            const modules = this._getSearchableModules();
 
             body.innerHTML = `
                 <div class="gs-section-label">Quick Navigation</div>
@@ -465,7 +450,8 @@
                             <i class="${m.icon}"></i>
                         </div>
                         <div class="search-result-info">
-                            <span class="search-result-title">${m.label}</span>
+                            <span class="search-result-title">${this.escapeHtml(m.label)}</span>
+                            ${m.subtitle ? `<span class="search-result-subtitle">${this.escapeHtml(m.subtitle)}</span>` : ''}
                         </div>
                         <span class="search-result-type">module</span>
                     </div>
@@ -529,6 +515,128 @@
             });
         },
 
+        _getSearchableModules: function () {
+            const colors = ['green', 'blue', 'purple', 'teal', 'orange', 'indigo', 'red', 'cyan'];
+            const configs = [];
+            if (PharmaFlow.Sidebar && PharmaFlow.Sidebar.getNavConfig) {
+                configs.push(...PharmaFlow.Sidebar.getNavConfig());
+            } else if (PharmaFlow.NAV_CONFIG) {
+                configs.push(...PharmaFlow.NAV_CONFIG);
+            }
+            if (PharmaFlow.SETTINGS_NAV) configs.push(PharmaFlow.SETTINGS_NAV);
+
+            const targets = [];
+            configs.forEach((mod, index) => {
+                const color = colors[index % colors.length];
+                const canAccess = !PharmaFlow.Sidebar || !PharmaFlow.Sidebar.canAccess || PharmaFlow.Sidebar.canAccess(mod.id);
+                if (!canAccess) return;
+
+                const children = PharmaFlow.Sidebar && PharmaFlow.Sidebar.getVisibleChildren
+                    ? PharmaFlow.Sidebar.getVisibleChildren(mod)
+                    : (mod.children || []);
+
+                if (children && children.length > 0) {
+                    children.forEach(child => {
+                        if (PharmaFlow.Sidebar && PharmaFlow.Sidebar.canAccess && !PharmaFlow.Sidebar.canAccess(mod.id, child.id)) return;
+                        targets.push({
+                            icon: child.icon || mod.icon || 'fas fa-circle',
+                            color,
+                            label: child.label,
+                            subtitle: mod.label,
+                            module: mod.id,
+                            sub: child.id,
+                            keywords: this._buildModuleKeywords(mod, child)
+                        });
+                    });
+                } else {
+                    targets.push({
+                        icon: mod.icon || 'fas fa-circle',
+                        color,
+                        label: mod.label,
+                        subtitle: '',
+                        module: mod.id,
+                        sub: null,
+                        keywords: this._buildModuleKeywords(mod, null)
+                    });
+                }
+            });
+            return targets;
+        },
+
+        _buildModuleKeywords: function (mod, child) {
+            const aliases = {
+                pharmacy: ['pharmacy', 'customer', 'customers', 'client', 'clients', 'pos', 'sale', 'sales', 'receipt', 'prescription', 'rx'],
+                inventory: ['inventory', 'stock', 'product', 'medicine', 'drug', 'batch', 'reconciliation'],
+                disposals: ['disposal', 'dispose', 'expired', 'damage', 'damaged', 'loss'],
+                'dda-register': ['dda', 'controlled', 'dangerous drugs', 'register'],
+                'medication-refill': ['refill', 'medication', 'reminder', 'chronic'],
+                'my-orders': ['order', 'orders', 'purchase', 'po', 'restock', 'supplier order'],
+                supplier: ['supplier', 'vendor'],
+                wholesale: ['wholesale', 'bulk', 'client lead', 'rider', 'delivery'],
+                patients: ['patient', 'patients', 'customer', 'customers', 'billing', 'medical record'],
+                expenses: ['expense', 'expenses', 'cost', 'spend', 'bill'],
+                reports: ['report', 'reports', 'analytics', 'summary', 'export'],
+                accounts: ['account', 'accounts', 'finance', 'p&l', 'profit', 'loss', 'reconciliation'],
+                'activity-log': ['activity', 'log', 'audit', 'alert'],
+                'support-tickets': ['ticket', 'support', 'help', 'issue'],
+                'branch-portal': ['branch', 'portal', 'invoice', 'receipt', 'communication', 'contract', 'certificate'],
+                'admin-panel': ['admin', 'user', 'staff', 'franchise', 'billing', 'pricing'],
+                settings: ['setting', 'settings', 'config', 'profile', 'business', 'notification', 'version'],
+                dashboard: ['dashboard', 'home', 'overview']
+            };
+            const terms = [
+                mod.id,
+                mod.label,
+                child && child.id,
+                child && child.label,
+                ...(aliases[mod.id] || [])
+            ];
+            return terms.filter(Boolean).join(' ').toLowerCase();
+        },
+
+        _safeSearchGet: async function (query, label) {
+            if (!query) return null;
+            try {
+                return await query.get();
+            } catch (err) {
+                console.warn('Global search skipped ' + label + ':', err);
+                return null;
+            }
+        },
+
+        _docMatches: function (data, q, fields) {
+            return fields.some(field => this._fieldText(data, field).includes(q));
+        },
+
+        _fieldText: function (data, path) {
+            const value = path.split('.').reduce((obj, key) => (obj == null ? '' : obj[key]), data);
+            if (Array.isArray(value)) {
+                return value.map(item => {
+                    if (item && typeof item === 'object') return Object.values(item).join(' ');
+                    return item;
+                }).join(' ').toLowerCase();
+            }
+            if (value && typeof value === 'object') return Object.values(value).join(' ').toLowerCase();
+            return String(value || '').toLowerCase();
+        },
+
+        _dedupeSearchResults: function (results) {
+            const seen = new Set();
+            return results.filter(result => {
+                const nav = result.navigate || {};
+                const key = [
+                    result.type,
+                    result.title,
+                    result.subtitle,
+                    nav.module,
+                    nav.sub
+                ].map(value => String(value || '').toLowerCase()).join('|');
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            });
+        },
+
         /**
          * Perform live search across ALL Firestore collections (parallel)
          */
@@ -546,19 +654,39 @@
             try {
                 const ref = (col) => getBusinessCollection(businessId, col);
 
-                // Run ALL queries in parallel
-                const [invSnap, patSnap, salesSnap, supSnap, expSnap, wsSnap, rxSnap] = await Promise.all([
-                    ref('inventory').limit(200).get(),
-                    ref('patients').limit(100).get(),
-                    ref('sales').orderBy('createdAt', 'desc').limit(100).get(),
-                    ref('suppliers').limit(100).get(),
-                    ref('expenses').orderBy('createdAt', 'desc').limit(80).get(),
-                    ref('wholesale_orders').orderBy('createdAt', 'desc').limit(80).get(),
-                    ref('prescriptions').orderBy('createdAt', 'desc').limit(80).get()
+                const [
+                    invSnap, patSnap, salesSnap, supSnap, expSnap, wsSnap, rxSnap,
+                    orderSnap, refillSnap, ddaSnap, disposalSnap, billSnap, recordSnap,
+                    riderSnap, leadSnap, ticketSnap, logSnap, stockSnap, messageSnap,
+                    branchFinanceSnap, branchCommSnap, branchContractSnap, branchCertSnap
+                ] = await Promise.all([
+                    this._safeSearchGet(ref('inventory').limit(250), 'inventory'),
+                    this._safeSearchGet(ref('patients').limit(200), 'patients'),
+                    this._safeSearchGet(ref('sales').orderBy('createdAt', 'desc').limit(150), 'sales'),
+                    this._safeSearchGet(ref('suppliers').limit(150), 'suppliers'),
+                    this._safeSearchGet(ref('expenses').orderBy('createdAt', 'desc').limit(120), 'expenses'),
+                    this._safeSearchGet(ref('wholesale_orders').orderBy('createdAt', 'desc').limit(120), 'wholesale_orders'),
+                    this._safeSearchGet(ref('prescriptions').orderBy('createdAt', 'desc').limit(120), 'prescriptions'),
+                    this._safeSearchGet(ref('orders').orderBy('createdAt', 'desc').limit(120), 'orders'),
+                    this._safeSearchGet(ref('medication_refills').limit(150), 'medication_refills'),
+                    this._safeSearchGet(ref('dda_register').limit(150), 'dda_register'),
+                    this._safeSearchGet(ref('disposals').limit(150), 'disposals'),
+                    this._safeSearchGet(ref('patient_bills').orderBy('createdAt', 'desc').limit(120), 'patient_bills'),
+                    this._safeSearchGet(ref('patient_records').orderBy('createdAt', 'desc').limit(120), 'patient_records'),
+                    this._safeSearchGet(ref('riders').limit(120), 'riders'),
+                    this._safeSearchGet(ref('client_leads').limit(150), 'client_leads'),
+                    this._safeSearchGet(ref('tickets').orderBy('createdAt', 'desc').limit(120), 'tickets'),
+                    this._safeSearchGet(ref('activity_log').orderBy('createdAt', 'desc').limit(120), 'activity_log'),
+                    this._safeSearchGet(ref('stock_history').orderBy('createdAt', 'desc').limit(120), 'stock_history'),
+                    this._safeSearchGet(ref('message_history').orderBy('createdAt', 'desc').limit(120), 'message_history'),
+                    this._safeSearchGet(window.db.collection('branch_finance_docs').where('businessId', '==', businessId).limit(120), 'branch_finance_docs'),
+                    this._safeSearchGet(window.db.collection('branch_communications').where('businessId', '==', businessId).limit(120), 'branch_communications'),
+                    this._safeSearchGet(window.db.collection('branch_contracts').where('businessId', '==', businessId).limit(120), 'branch_contracts'),
+                    this._safeSearchGet(window.db.collection('branch_certificates').where('businessId', '==', businessId).limit(120), 'branch_certificates')
                 ]);
 
                 // Inventory
-                invSnap.forEach(doc => {
+                invSnap && invSnap.forEach(doc => {
                     const d = doc.data();
                     const name = (d.name || '').toLowerCase();
                     const generic = (d.genericName || '').toLowerCase();
@@ -576,42 +704,54 @@
                 });
 
                 // Patients
-                patSnap.forEach(doc => {
+                patSnap && patSnap.forEach(doc => {
                     const d = doc.data();
-                    const name = (d.name || d.displayName || '').toLowerCase();
+                    const name = (d.name || d.displayName || d.fullName || '').toLowerCase();
                     const phone = (d.phone || '').toLowerCase();
                     const email = (d.email || '').toLowerCase();
-                    if (name.includes(q) || phone.includes(q) || email.includes(q)) {
+                    const id = (d.patientId || d.idNumber || doc.id || '').toLowerCase();
+                    if (name.includes(q) || phone.includes(q) || email.includes(q) || id.includes(q)) {
                         results.push({
                             type: 'customer', icon: 'fas fa-user', color: 'blue',
-                            title: d.name || d.displayName || 'Unknown Customer',
-                            subtitle: `Phone: ${d.phone || 'N/A'} | ${d.email || ''}`,
+                            title: d.name || d.displayName || d.fullName || 'Unknown Customer',
+                            subtitle: `ID: ${d.patientId || doc.id} | Phone: ${d.phone || 'N/A'} | ${d.email || ''}`,
                             navigate: { module: 'patients', sub: 'manage-patients' }
                         });
                     }
                 });
 
                 // Sales
-                salesSnap.forEach(doc => {
+                salesSnap && salesSnap.forEach(doc => {
                     const d = doc.data();
                     const saleId = (d.saleId || doc.id || '').toLowerCase();
-                    const customer = (d.customerName || '').toLowerCase();
-                    if (saleId.includes(q) || customer.includes(q)) {
+                    const customer = (d.customerName || d.customer?.name || '').toLowerCase();
+                    const customerPhone = (d.customerPhone || d.customer?.phone || '').toLowerCase();
+                    const customerEmail = (d.customerEmail || d.customer?.email || '').toLowerCase();
+                    if (saleId.includes(q) || customer.includes(q) || this._docMatches(d, q, ['items'])) {
                         results.push({
                             type: 'sale', icon: 'fas fa-receipt', color: 'purple',
                             title: `Sale ${d.saleId || doc.id}`,
-                            subtitle: `${d.customerName || 'Walk-in'} | ${this.formatCurrency(d.total || 0)} | ${this.formatDate(d.createdAt)}`,
+                            subtitle: `${d.customerName || d.customer?.name || 'Walk-in'} | ${this.formatCurrency(d.total || 0)} | ${this.formatDate(d.createdAt)}`,
                             navigate: { module: 'pharmacy', sub: 'all-sales' }
+                        });
+                    }
+                    if (customer && (customer.includes(q) || customerPhone.includes(q) || customerEmail.includes(q))) {
+                        results.push({
+                            type: 'pharmacy customer', icon: 'fas fa-users', color: 'blue',
+                            title: d.customerName || d.customer?.name || 'Pharmacy Customer',
+                            subtitle: `${d.customerPhone || d.customer?.phone || 'No phone'} | Last sale: ${this.formatDate(d.createdAt)}`,
+                            navigate: { module: 'pharmacy', sub: 'customers' }
                         });
                     }
                 });
 
                 // Suppliers
-                supSnap.forEach(doc => {
+                supSnap && supSnap.forEach(doc => {
                     const d = doc.data();
                     const name = (d.name || '').toLowerCase();
                     const contact = (d.contactPerson || '').toLowerCase();
-                    if (name.includes(q) || contact.includes(q)) {
+                    const phone = (d.phone || '').toLowerCase();
+                    if (name.includes(q) || contact.includes(q) || phone.includes(q)) {
                         results.push({
                             type: 'supplier', icon: 'fas fa-truck', color: 'teal',
                             title: d.name || 'Unknown Supplier',
@@ -622,7 +762,7 @@
                 });
 
                 // Expenses
-                expSnap.forEach(doc => {
+                expSnap && expSnap.forEach(doc => {
                     const d = doc.data();
                     const desc = (d.description || '').toLowerCase();
                     const cat = (d.category || '').toLowerCase();
@@ -638,22 +778,22 @@
                 });
 
                 // Wholesale Orders
-                wsSnap.forEach(doc => {
+                wsSnap && wsSnap.forEach(doc => {
                     const d = doc.data();
                     const orderId = (d.orderId || doc.id || '').toLowerCase();
-                    const client = (d.clientName || d.customerName || '').toLowerCase();
-                    if (orderId.includes(q) || client.includes(q)) {
+                    const client = (d.clientName || d.customerName || d.customer?.name || '').toLowerCase();
+                    if (orderId.includes(q) || client.includes(q) || this._docMatches(d, q, ['customer.phone', 'customer.email', 'items'])) {
                         results.push({
                             type: 'wholesale', icon: 'fas fa-store', color: 'indigo',
                             title: `Order ${d.orderId || doc.id}`,
-                            subtitle: `${d.clientName || d.customerName || 'Client'} | ${this.formatCurrency(d.total || d.grandTotal || 0)}`,
+                            subtitle: `${d.clientName || d.customerName || d.customer?.name || 'Client'} | ${this.formatCurrency(d.total || d.grandTotal || 0)}`,
                             navigate: { module: 'wholesale', sub: 'manage-wholesale' }
                         });
                     }
                 });
 
                 // Prescriptions
-                rxSnap.forEach(doc => {
+                rxSnap && rxSnap.forEach(doc => {
                     const d = doc.data();
                     const patient = (d.patientName || '').toLowerCase();
                     const rxId = (d.prescriptionId || doc.id || '').toLowerCase();
@@ -667,16 +807,226 @@
                         });
                     }
                 });
+
+                // Purchase Orders
+                orderSnap && orderSnap.forEach(doc => {
+                    const d = doc.data();
+                    if (this._docMatches({ ...d, id: doc.id }, q, ['orderId', 'id', 'supplierName', 'createdBy', 'status', 'items'])) {
+                        results.push({
+                            type: 'order', icon: 'fas fa-clipboard-list', color: 'orange',
+                            title: `Purchase Order ${d.orderId || doc.id}`,
+                            subtitle: `${d.supplierName || 'Supplier'} | ${this.formatCurrency(d.totalAmount || 0)} | ${d.status || 'pending'}`,
+                            navigate: { module: 'my-orders', sub: 'manage-orders' }
+                        });
+                    }
+                });
+
+                // Medication Refills
+                refillSnap && refillSnap.forEach(doc => {
+                    const d = doc.data();
+                    if (this._docMatches({ ...d, id: doc.id }, q, ['refillId', 'id', 'patientName', 'patientPhone', 'medication', 'dosage', 'doctor', 'status'])) {
+                        results.push({
+                            type: 'refill', icon: 'fas fa-pills', color: 'orange',
+                            title: d.patientName || 'Medication Refill',
+                            subtitle: `${d.medication || ''} | Next: ${this.formatDate(d.nextRefillDate)} | ${d.status || 'Active'}`,
+                            navigate: { module: 'medication-refill', sub: 'manage-refills' }
+                        });
+                    }
+                });
+
+                // DDA Register
+                ddaSnap && ddaSnap.forEach(doc => {
+                    const d = doc.data();
+                    if (this._docMatches({ ...d, id: doc.id }, q, ['id', 'patientName', 'customerName', 'drugName', 'medication', 'prescriptionNumber', 'batchNumber', 'doctorName'])) {
+                        results.push({
+                            type: 'dda', icon: 'fas fa-book-medical', color: 'red',
+                            title: d.drugName || d.medication || 'DDA Entry',
+                            subtitle: `${d.patientName || d.customerName || 'Patient'} | ${d.prescriptionNumber || doc.id}`,
+                            navigate: { module: 'dda-register', sub: 'view-register' }
+                        });
+                    }
+                });
+
+                // Disposals
+                disposalSnap && disposalSnap.forEach(doc => {
+                    const d = doc.data();
+                    if (this._docMatches({ ...d, id: doc.id }, q, ['id', 'productName', 'sku', 'batchNumber', 'category', 'reason', 'status'])) {
+                        results.push({
+                            type: 'disposal', icon: 'fas fa-trash-can-arrow-up', color: 'red',
+                            title: d.productName || 'Disposal Entry',
+                            subtitle: `${d.reason || 'disposal'} | Batch: ${d.batchNumber || 'N/A'} | ${d.status || 'pending'}`,
+                            navigate: { module: 'disposals', sub: 'expired-stock' }
+                        });
+                    }
+                });
+
+                // Patient Bills
+                billSnap && billSnap.forEach(doc => {
+                    const d = doc.data();
+                    if (this._docMatches({ ...d, id: doc.id }, q, ['billId', 'invoiceNumber', 'id', 'patient.name', 'patient.fullName', 'patient.phone', 'status', 'services'])) {
+                        results.push({
+                            type: 'patient bill', icon: 'fas fa-file-invoice-dollar', color: 'blue',
+                            title: d.billId || d.invoiceNumber || `Bill ${doc.id}`,
+                            subtitle: `${d.patient?.name || d.patient?.fullName || 'Patient'} | ${this.formatCurrency(d.grandTotal || d.totalAmount || 0)} | ${d.status || ''}`,
+                            navigate: { module: 'patients', sub: 'manage-billing' }
+                        });
+                    }
+                });
+
+                // Patient Records
+                recordSnap && recordSnap.forEach(doc => {
+                    const d = doc.data();
+                    if (this._docMatches({ ...d, id: doc.id }, q, ['recordId', 'id', 'patientName', 'patientPhone', 'diagnosis', 'notes', 'doctorName', 'services'])) {
+                        results.push({
+                            type: 'medical record', icon: 'fas fa-notes-medical', color: 'blue',
+                            title: d.patientName || 'Patient Record',
+                            subtitle: `${d.diagnosis || d.notes || ''} | ${this.formatDate(d.createdAt)}`,
+                            navigate: { module: 'patients', sub: 'manage-patients' }
+                        });
+                    }
+                });
+
+                // Riders
+                riderSnap && riderSnap.forEach(doc => {
+                    const d = doc.data();
+                    if (this._docMatches({ ...d, id: doc.id }, q, ['name', 'phone', 'agentType', 'vehicleReg', 'status'])) {
+                        results.push({
+                            type: 'rider', icon: 'fas fa-motorcycle', color: 'indigo',
+                            title: d.name || 'Rider',
+                            subtitle: `${d.phone || ''} | ${d.agentType || ''} | ${d.status || ''}`,
+                            navigate: { module: 'wholesale', sub: 'riders' }
+                        });
+                    }
+                });
+
+                // Client Leads
+                leadSnap && leadSnap.forEach(doc => {
+                    const d = doc.data();
+                    if (this._docMatches({ ...d, id: doc.id }, q, ['name', 'businessName', 'phone', 'email', 'address', 'notes'])) {
+                        results.push({
+                            type: 'client lead', icon: 'fas fa-users-gear', color: 'indigo',
+                            title: d.name || d.businessName || 'Client Lead',
+                            subtitle: `${d.businessName || ''} | ${d.phone || ''} | ${d.email || ''}`,
+                            navigate: { module: 'wholesale', sub: 'client-leads' }
+                        });
+                    }
+                });
+
+                // Support Tickets
+                ticketSnap && ticketSnap.forEach(doc => {
+                    const d = doc.data();
+                    if (this._docMatches({ ...d, id: doc.id }, q, ['ticketId', 'id', 'subject', 'description', 'category', 'status', 'raisedBy'])) {
+                        results.push({
+                            type: 'ticket', icon: 'fas fa-ticket', color: 'teal',
+                            title: d.subject || d.ticketId || `Ticket ${doc.id}`,
+                            subtitle: `${d.category || 'Support'} | ${d.status || 'open'} | ${this.formatDate(d.createdAt)}`,
+                            navigate: { module: 'support-tickets', sub: 'my-tickets' }
+                        });
+                    }
+                });
+
+                // Activity Logs
+                logSnap && logSnap.forEach(doc => {
+                    const d = doc.data();
+                    if (this._docMatches({ ...d, id: doc.id }, q, ['title', 'description', 'category', 'severity', 'createdBy', 'status', 'metadata'])) {
+                        results.push({
+                            type: 'activity', icon: 'fas fa-clock-rotate-left', color: 'teal',
+                            title: d.title || 'Activity Log',
+                            subtitle: `${d.description || ''} | ${this.formatDate(d.createdAt)}`,
+                            navigate: { module: 'activity-log', sub: 'all-activities' }
+                        });
+                    }
+                });
+
+                // Stock History
+                stockSnap && stockSnap.forEach(doc => {
+                    const d = doc.data();
+                    if (this._docMatches({ ...d, id: doc.id }, q, ['productName', 'sku', 'batchNumber', 'batchNumbers', 'type', 'reason', 'createdBy'])) {
+                        results.push({
+                            type: 'stock history', icon: 'fas fa-layer-group', color: 'green',
+                            title: d.productName || 'Stock Movement',
+                            subtitle: `${d.type || d.reason || 'movement'} | ${this.formatDate(d.createdAt)}`,
+                            navigate: { module: 'my-orders', sub: 'stock-history' }
+                        });
+                    }
+                });
+
+                // Pharmacy Customer Messages
+                messageSnap && messageSnap.forEach(doc => {
+                    const d = doc.data();
+                    if (this._docMatches({ ...d, id: doc.id }, q, ['customerName', 'customerPhone', 'phone', 'message', 'channel', 'status'])) {
+                        results.push({
+                            type: 'customer message', icon: 'fas fa-message', color: 'blue',
+                            title: d.customerName || d.customerPhone || 'Customer Message',
+                            subtitle: `${d.channel || 'message'} | ${d.status || ''} | ${this.formatDate(d.createdAt)}`,
+                            navigate: { module: 'pharmacy', sub: 'customers' }
+                        });
+                    }
+                });
+
+                // Branch Portal Documents
+                branchFinanceSnap && branchFinanceSnap.forEach(doc => {
+                    const d = doc.data();
+                    if (this._docMatches({ ...d, id: doc.id }, q, ['docNumber', 'businessName', 'billingMonth', 'note', 'type', 'status', 'paymentMode'])) {
+                        results.push({
+                            type: 'branch document', icon: 'fas fa-file-invoice-dollar', color: 'purple',
+                            title: d.docNumber || `Branch Document ${doc.id}`,
+                            subtitle: `${d.billingMonth || d.type || ''} | ${this.formatCurrency(d.amount || d.totalAmount || 0)} | ${d.status || ''}`,
+                            navigate: { module: 'branch-portal', sub: 'billing-documents' }
+                        });
+                    }
+                });
+
+                branchCommSnap && branchCommSnap.forEach(doc => {
+                    const d = doc.data();
+                    if (this._docMatches({ ...d, id: doc.id }, q, ['subject', 'message', 'category', 'status', 'businessName'])) {
+                        results.push({
+                            type: 'branch communication', icon: 'fas fa-comments', color: 'purple',
+                            title: d.subject || 'Branch Communication',
+                            subtitle: `${d.category || ''} | ${this.formatDate(d.createdAt)}`,
+                            navigate: { module: 'branch-portal', sub: 'branch-communications' }
+                        });
+                    }
+                });
+
+                branchContractSnap && branchContractSnap.forEach(doc => {
+                    const d = doc.data();
+                    if (this._docMatches({ ...d, id: doc.id }, q, ['title', 'contractNumber', 'businessName', 'status', 'notes'])) {
+                        results.push({
+                            type: 'branch contract', icon: 'fas fa-file-signature', color: 'purple',
+                            title: d.title || d.contractNumber || 'Branch Contract',
+                            subtitle: `${d.status || ''} | ${this.formatDate(d.createdAt)}`,
+                            navigate: { module: 'branch-portal', sub: 'branch-contracts' }
+                        });
+                    }
+                });
+
+                branchCertSnap && branchCertSnap.forEach(doc => {
+                    const d = doc.data();
+                    if (this._docMatches({ ...d, id: doc.id }, q, ['title', 'certificateNumber', 'authority', 'businessName', 'status'])) {
+                        results.push({
+                            type: 'branch certificate', icon: 'fas fa-certificate', color: 'purple',
+                            title: d.title || d.certificateNumber || 'Branch Certificate',
+                            subtitle: `${d.authority || ''} | ${d.status || ''}`,
+                            navigate: { module: 'branch-portal', sub: 'branch-certificates' }
+                        });
+                    }
+                });
             } catch (err) {
                 console.error('Search error:', err);
             }
 
             // Also match module keywords for quick navigation
             const moduleMatches = this._matchModuleKeywords(q);
+            const visibleResults = this._dedupeSearchResults(results).filter(r => {
+                if (!r.navigate || !r.navigate.module) return false;
+                if (!PharmaFlow.Sidebar || !PharmaFlow.Sidebar.canAccess) return true;
+                return PharmaFlow.Sidebar.canAccess(r.navigate.module, r.navigate.sub || null);
+            });
 
             // Render results
             this._gsActiveIndex = -1;
-            if (results.length === 0 && moduleMatches.length === 0) {
+            if (visibleResults.length === 0 && moduleMatches.length === 0) {
                 body.innerHTML = `
                     <div class="search-empty">
                         <i class="fas fa-search"></i>
@@ -706,15 +1056,20 @@
 
             // Data results grouped by type
             const grouped = {};
-            results.forEach(r => {
+            visibleResults.forEach(r => {
                 if (!grouped[r.type]) grouped[r.type] = [];
                 grouped[r.type].push(r);
             });
-
             const typeLabels = {
                 inventory: 'Inventory', customer: 'Customers', sale: 'Sales',
                 supplier: 'Suppliers', expense: 'Expenses', wholesale: 'Wholesale',
-                prescription: 'Prescriptions'
+                prescription: 'Prescriptions', order: 'Purchase Orders', refill: 'Medication Refills',
+                dda: 'DDA Register', disposal: 'Disposals', 'patient bill': 'Patient Bills',
+                'medical record': 'Medical Records', rider: 'Riders', 'client lead': 'Client Leads',
+                ticket: 'Support Tickets', activity: 'Activity Logs', 'stock history': 'Stock History',
+                'customer message': 'Customer Messages', 'pharmacy customer': 'Pharmacy Customers',
+                'branch document': 'Branch Documents', 'branch communication': 'Branch Communications',
+                'branch contract': 'Branch Contracts', 'branch certificate': 'Branch Certificates'
             };
 
             let totalShown = moduleMatches.length;
@@ -736,7 +1091,7 @@
                 totalShown += showing.length;
             }
 
-            const totalResults = results.length + moduleMatches.length;
+            const totalResults = visibleResults.length + moduleMatches.length;
             if (totalResults > totalShown) {
                 html += `<div class="search-more">${totalResults - totalShown} more results hidden &mdash; refine your search</div>`;
             }
@@ -749,25 +1104,10 @@
          * Match module keywords for quick navigation
          */
         _matchModuleKeywords: function (q) {
-            const all = [
-                { keywords: ['inventory', 'stock', 'product', 'medicine', 'drug'], icon: 'fas fa-boxes-stacked', color: 'blue', label: 'View Inventory', module: 'inventory', sub: 'view-inventory' },
-                { keywords: ['sale', 'pos', 'transaction', 'checkout', 'sell'], icon: 'fas fa-cart-shopping', color: 'green', label: 'Point of Sale', module: 'pharmacy', sub: 'pos' },
-                { keywords: ['sale', 'all sale', 'history'], icon: 'fas fa-receipt', color: 'purple', label: 'All Sales', module: 'pharmacy', sub: 'all-sales' },
-                { keywords: ['patient', 'customer', 'client', 'buyer'], icon: 'fas fa-hospital-user', color: 'blue', label: 'Patients / Customers', module: 'patients', sub: 'manage-patients' },
-                { keywords: ['expense', 'cost', 'spend', 'bill'], icon: 'fas fa-file-invoice-dollar', color: 'red', label: 'Expenses', module: 'expenses', sub: 'manage-expenses' },
-                { keywords: ['order', 'refill', 'medication', 'restock'], icon: 'fas fa-boxes-packing', color: 'orange', label: 'Medication Orders', module: 'medication-refill', sub: 'manage-orders' },
-                { keywords: ['wholesale', 'bulk'], icon: 'fas fa-store', color: 'indigo', label: 'Wholesale', module: 'wholesale', sub: 'manage-wholesale' },
-                { keywords: ['supplier', 'vendor'], icon: 'fas fa-truck', color: 'teal', label: 'Suppliers', module: 'supplier', sub: null },
-                { keywords: ['prescription', 'rx'], icon: 'fas fa-prescription', color: 'cyan', label: 'Prescriptions', module: 'pharmacy', sub: 'prescription' },
-                { keywords: ['dda', 'register', 'controlled'], icon: 'fas fa-book', color: 'red', label: 'DDA Register', module: 'dda-register', sub: 'view-register' },
-                { keywords: ['report', 'analytics', 'summary'], icon: 'fas fa-clipboard-list', color: 'green', label: 'Reports', module: 'reports', sub: 'generate-report' },
-                { keywords: ['account', 'p&l', 'profit', 'loss', 'finance'], icon: 'fas fa-calculator', color: 'purple', label: 'Accounts', module: 'accounts', sub: null },
-                { keywords: ['setting', 'config', 'preference'], icon: 'fas fa-cog', color: 'orange', label: 'Settings', module: 'settings', sub: null },
-                { keywords: ['admin', 'panel', 'user', 'staff'], icon: 'fas fa-user-shield', color: 'red', label: 'Admin Panel', module: 'admin-panel', sub: null },
-                { keywords: ['activity', 'log', 'audit'], icon: 'fas fa-list-check', color: 'teal', label: 'Activity Logs', module: 'activity-log', sub: null },
-                { keywords: ['dashboard', 'home', 'overview'], icon: 'fas fa-tachometer-alt', color: 'green', label: 'Dashboard', module: 'dashboard', sub: null }
-            ];
-            return all.filter(m => m.keywords.some(kw => kw.includes(q) || q.includes(kw)));
+            return this._getSearchableModules().filter(m => {
+                const haystack = `${m.label || ''} ${m.subtitle || ''} ${m.module || ''} ${m.sub || ''} ${m.keywords || ''}`.toLowerCase();
+                return haystack.includes(q) || q.split(/\s+/).some(term => term && haystack.includes(term));
+            });
         },
 
         /**
@@ -775,27 +1115,8 @@
          */
         handleModuleSearch: function (query) {
             const q = query.toLowerCase();
-            if (q.includes('inventory') || q.includes('stock') || q.includes('product')) {
-                PharmaFlow.Sidebar.setActive('inventory', 'view-inventory');
-            } else if (q.includes('sale') || q.includes('pos') || q.includes('transaction')) {
-                PharmaFlow.Sidebar.setActive('pharmacy', 'all-sales');
-            } else if (q.includes('patient') || q.includes('customer')) {
-                PharmaFlow.Sidebar.setActive('patients', 'manage-patients');
-            } else if (q.includes('expense')) {
-                PharmaFlow.Sidebar.setActive('expenses', 'manage-expenses');
-            } else if (q.includes('order') || q.includes('refill')) {
-                PharmaFlow.Sidebar.setActive('medication-refill', 'manage-orders');
-            } else if (q.includes('report')) {
-                PharmaFlow.Sidebar.setActive('reports', 'generate-report');
-            } else if (q.includes('supplier')) {
-                PharmaFlow.Sidebar.setActive('supplier', null);
-            } else if (q.includes('wholesale')) {
-                PharmaFlow.Sidebar.setActive('wholesale', 'manage-wholesale');
-            } else if (q.includes('dda') || q.includes('register')) {
-                PharmaFlow.Sidebar.setActive('dda-register', 'view-register');
-            } else if (q.includes('prescription')) {
-                PharmaFlow.Sidebar.setActive('pharmacy', 'prescription');
-            }
+            const match = this._matchModuleKeywords(q)[0];
+            if (match && PharmaFlow.Sidebar) PharmaFlow.Sidebar.setActive(match.module, match.sub || null);
         },
 
         /* ==============================================================
