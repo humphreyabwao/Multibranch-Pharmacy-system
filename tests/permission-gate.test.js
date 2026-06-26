@@ -4,6 +4,10 @@ const path = require('path');
 const vm = require('vm');
 
 const listeners = {};
+const timers = [];
+const testConsole = Object.assign(Object.create(console), {
+    warn() {}
+});
 class FakeElement {
     constructor() {
         this.children = [];
@@ -25,8 +29,16 @@ const elements = {
     'sidebar-nav-footer': new FakeElement()
 };
 const context = {
-    console,
+    console: testConsole,
     Set,
+    setTimeout(handler) {
+        timers.push(handler);
+        return handler;
+    },
+    clearTimeout(handler) {
+        const index = timers.indexOf(handler);
+        if (index >= 0) timers.splice(index, 1);
+    },
     CustomEvent: function CustomEvent(type, options) {
         this.type = type;
         this.detail = options && options.detail;
@@ -46,6 +58,7 @@ const context = {
         addEventListener(type, handler) { listeners[type] = handler; },
         getElementById(id) { return elements[id] || null; },
         createElement() { return new FakeElement(); },
+        querySelector() { return null; },
         querySelectorAll() { return []; }
     },
     window: {
@@ -149,5 +162,47 @@ assert.strictEqual(Auth.canAccess('dashboard'), false, 'authorization must fail 
 assert.strictEqual(Sidebar.canAccess('dashboard'), false);
 Sidebar.render('admin');
 assert.strictEqual(elements['sidebar-nav'].children.length, 0, 'pre-authorization sidebar stays empty');
+
+let currentSnapshot = null;
+let onSnapshotCount = 0;
+let unsubscribeCount = 0;
+context.window.db = {
+    collection(name) {
+        assert.strictEqual(name, 'system_config');
+        return {
+            doc(id) {
+                assert.strictEqual(id, 'module_tags');
+                return {
+                    onSnapshot(success, error) {
+                        onSnapshotCount += 1;
+                        currentSnapshot = { success, error };
+                        return () => { unsubscribeCount += 1; };
+                    }
+                };
+            }
+        };
+    }
+};
+
+setProfile({ role: 'admin', permissions: ['dashboard'], permissionsConfigured: true });
+Sidebar.updateForRole('admin');
+assert.strictEqual(onSnapshotCount, 1, 'module tag listener should start after authorization');
+currentSnapshot.success({
+    exists: true,
+    data() { return { tags: { dashboard: 'new' } }; }
+});
+assert.strictEqual(Sidebar.getModuleTag('dashboard'), 'new');
+
+currentSnapshot.error(new Error('transient listener failure'));
+assert.strictEqual(Sidebar._moduleTagsListener, null, 'listener handle must clear after errors');
+assert.strictEqual(unsubscribeCount, 1, 'failed listener must be detached');
+assert.strictEqual(timers.length, 1, 'listener errors should schedule a retry');
+timers.shift()();
+assert.strictEqual(onSnapshotCount, 2, 'retry should re-open the module tag listener');
+
+Sidebar.lock();
+assert.strictEqual(Sidebar._moduleTagsListener, null, 'lock must detach module tag listener');
+assert.strictEqual(unsubscribeCount, 2, 'lock should unsubscribe the active module tag listener');
+assert.deepStrictEqual(Object.keys(Sidebar._moduleTags), [], 'lock clears cached module tags');
 
 console.log('Permission gate scenarios passed.');

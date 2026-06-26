@@ -3547,10 +3547,14 @@
                 .onSnapshot(doc => {
                     const data = doc.exists ? doc.data() : {};
                     moduleTagsState = data.tags || {};
+                    window.dispatchEvent(new CustomEvent('module-tags-updated', {
+                        detail: { tags: moduleTagsState }
+                    }));
                     this.renderModuleTagStats();
                     this.renderModuleTagsTable();
                 }, err => {
                     console.error('Module tags subscribe error:', err);
+                    moduleTagsListener = null;
                     this.showToast('Failed to load module tags.', 'error');
                 });
         },
@@ -3659,12 +3663,9 @@
                 }, { merge: true });
 
                 moduleTagsState = nextTags;
-                if (PharmaFlow.Sidebar) {
-                    PharmaFlow.Sidebar._moduleTags = nextTags;
-                    PharmaFlow.Sidebar.render(PharmaFlow.Sidebar._currentRole);
-                    PharmaFlow.Sidebar.renderSettings();
-                    PharmaFlow.Sidebar.updateActiveState();
-                }
+                window.dispatchEvent(new CustomEvent('module-tags-updated', {
+                    detail: { tags: nextTags }
+                }));
                 this.renderModuleTagStats();
                 this.renderModuleTagsTable();
                 this.showToast('Module tags saved successfully!');

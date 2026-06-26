@@ -249,6 +249,8 @@
         authorizationReady: false,
         _moduleTags: {},
         _moduleTagsListener: null,
+        _moduleTagsRetryTimer: null,
+        _moduleTagsRetryDelay: 2500,
 
         /**
          * Initialize sidebar
@@ -256,6 +258,11 @@
         init: function () {
             this.lock();
             this.bindToggle();
+
+            window.addEventListener('module-tags-updated', (e) => {
+                const tags = e.detail && e.detail.tags ? e.detail.tags : {};
+                this.applyModuleTags(tags);
+            });
 
             window.addEventListener('beforeunload', () => {
                 this.saveState();
@@ -501,6 +508,8 @@
         lock: function () {
             this.authorizationReady = false;
             this._currentRole = null;
+            this.unsubscribeModuleTags();
+            this._moduleTags = {};
             const nav = document.getElementById('sidebar-nav');
             const footerNav = document.getElementById('sidebar-nav-footer');
             if (nav) nav.innerHTML = '';
@@ -562,18 +571,51 @@
             return '<span class="nav-module-tag nav-module-tag--' + tag + '">' + label + '</span>';
         },
 
+        applyModuleTags: function (tags) {
+            this._moduleTags = tags || {};
+            if (!this.authorizationReady) return;
+            this.render(this._currentRole);
+            this.renderSettings();
+            this.updateActiveState();
+        },
+
+        unsubscribeModuleTags: function () {
+            this.clearModuleTagsRetry();
+            if (!this._moduleTagsListener) return;
+            try { this._moduleTagsListener(); } catch (e) { /* ignore */ }
+            this._moduleTagsListener = null;
+        },
+
+        clearModuleTagsRetry: function () {
+            if (!this._moduleTagsRetryTimer) return;
+            clearTimeout(this._moduleTagsRetryTimer);
+            this._moduleTagsRetryTimer = null;
+        },
+
+        scheduleModuleTagsRetry: function () {
+            if (this._moduleTagsRetryTimer || !this.authorizationReady) return;
+            this._moduleTagsRetryTimer = setTimeout(() => {
+                this._moduleTagsRetryTimer = null;
+                this.subscribeModuleTags();
+            }, this._moduleTagsRetryDelay);
+        },
+
         subscribeModuleTags: function () {
-            if (this._moduleTagsListener || !window.db) return;
+            if (this._moduleTagsListener || !this.authorizationReady) return;
+            if (!window.db) {
+                this.scheduleModuleTagsRetry();
+                return;
+            }
 
             this._moduleTagsListener = window.db.collection('system_config').doc('module_tags')
                 .onSnapshot(doc => {
                     const data = doc.exists ? doc.data() : {};
-                    this._moduleTags = data.tags || {};
-                    this.render(this._currentRole);
-                    this.renderSettings();
-                    this.updateActiveState();
+                    this.clearModuleTagsRetry();
+                    this.applyModuleTags(data.tags || {});
                 }, err => {
                     console.warn('Module tags listener error:', err);
+                    this.unsubscribeModuleTags();
+                    this.scheduleModuleTagsRetry();
                 });
         },
 
