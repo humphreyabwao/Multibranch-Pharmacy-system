@@ -122,8 +122,16 @@ assert(
     'Branch Portal certificates must be searchable as a module target'
 );
 assert(
+    modules.some(item => item.module === 'human-resource' && item.sub === 'hr-staff'),
+    'Human Resource staff must be searchable as a module target'
+);
+assert(
     Dashboard._matchModuleKeywords('customers').some(item => item.module === 'pharmacy' && item.sub === 'customers'),
     'customer keyword should match the Pharmacy Customers tab'
+);
+assert(
+    Dashboard._matchModuleKeywords('hr payroll').some(item => item.module === 'human-resource' && item.sub === 'hr-payroll'),
+    'HR payroll keyword should match the Human Resource Payroll tab'
 );
 
 const rows = {
@@ -149,7 +157,11 @@ const rows = {
     branch_finance_docs: [{ id: 'bill-1', docNumber: 'AMINA-BILL', billingMonth: 'June 2026', amount: 500, status: 'issued' }],
     branch_communications: [],
     branch_contracts: [],
-    branch_certificates: [{ id: 'cert-1', title: 'Amina License', authority: 'Board', status: 'active' }]
+    branch_certificates: [{ id: 'cert-1', title: 'Amina License', authority: 'Board', status: 'active' }],
+    hr_staff: [{ id: 'staff-1', staffCode: 'AMI/001', name: 'Amina Nurse', jobTitle: 'Nurse', phone: '0755000000' }],
+    hr_staff_profiles: [],
+    hr_payroll: [{ id: 'pay-1', staffCode: 'AMI/001', staffName: 'Amina Nurse', period: '2026-06', grossPay: 50000, status: 'pending' }],
+    hr_advances: [{ id: 'adv-1', staffCode: 'AMI/001', staffName: 'Amina Nurse', amount: 10000, reference: 'Advance June' }]
 };
 const failures = new Set(['activity_log']);
 
@@ -171,6 +183,9 @@ Dashboard.performSearch('amina', 'tenant-a').then(() => {
     assert(html.includes('Support Tickets'), 'support tickets should be included');
     assert(html.includes('Branch Documents'), 'branch finance documents should be included');
     assert(html.includes('Branch Certificates'), 'branch certificates should be included');
+    assert(html.includes('Human Resource Staff'), 'HR staff should be included');
+    assert(html.includes('Human Resource Payroll'), 'HR payroll should be included');
+    assert(html.includes('Human Resource Advances'), 'HR advances should be included');
     assert(!html.includes('Activity Logs'), 'failed collection should be skipped without killing search');
 
     const duplicated = [

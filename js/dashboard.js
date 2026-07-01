@@ -576,6 +576,7 @@
                 patients: ['patient', 'patients', 'customer', 'customers', 'billing', 'medical record'],
                 expenses: ['expense', 'expenses', 'cost', 'spend', 'bill'],
                 reports: ['report', 'reports', 'analytics', 'summary', 'export'],
+                'human-resource': ['human resource', 'hr', 'staff', 'employee', 'employees', 'payroll', 'salary', 'salaries', 'payslip', 'payslips', 'advance', 'deduction', 'statutory'],
                 accounts: ['account', 'accounts', 'finance', 'p&l', 'profit', 'loss', 'reconciliation'],
                 'activity-log': ['activity', 'log', 'audit', 'alert'],
                 'support-tickets': ['ticket', 'support', 'help', 'issue'],
@@ -584,14 +585,25 @@
                 settings: ['setting', 'settings', 'config', 'profile', 'business', 'notification', 'version'],
                 dashboard: ['dashboard', 'home', 'overview']
             };
+            const tokenize = (value) => String(value || '')
+                .replace(/[-_/]+/g, ' ')
+                .split(/\s+/)
+                .filter(Boolean);
             const terms = [
                 mod.id,
                 mod.label,
+                mod.section,
                 child && child.id,
                 child && child.label,
-                ...(aliases[mod.id] || [])
+                child && child.section,
+                ...(mod.children || []).map(c => c.label).join(' '),
+                ...(mod.children || []).map(c => c.id).join(' '),
+                ...(aliases[mod.id] || []),
+                ...tokenize(mod.id),
+                ...tokenize(mod.label),
+                ...(child ? tokenize(child.id).concat(tokenize(child.label)) : [])
             ];
-            return terms.filter(Boolean).join(' ').toLowerCase();
+            return Array.from(new Set(terms.filter(Boolean).map(term => String(term).toLowerCase()))).join(' ');
         },
 
         _safeSearchGet: async function (query, label) {
@@ -658,7 +670,8 @@
                     invSnap, patSnap, salesSnap, supSnap, expSnap, wsSnap, rxSnap,
                     orderSnap, refillSnap, ddaSnap, disposalSnap, billSnap, recordSnap,
                     riderSnap, leadSnap, ticketSnap, logSnap, stockSnap, messageSnap,
-                    branchFinanceSnap, branchCommSnap, branchContractSnap, branchCertSnap
+                    branchFinanceSnap, branchCommSnap, branchContractSnap, branchCertSnap,
+                    hrStaffSnap, hrProfileSnap, hrPayrollSnap, hrAdvanceSnap
                 ] = await Promise.all([
                     this._safeSearchGet(ref('inventory').limit(250), 'inventory'),
                     this._safeSearchGet(ref('patients').limit(200), 'patients'),
@@ -682,7 +695,11 @@
                     this._safeSearchGet(window.db.collection('branch_finance_docs').where('businessId', '==', businessId).limit(120), 'branch_finance_docs'),
                     this._safeSearchGet(window.db.collection('branch_communications').where('businessId', '==', businessId).limit(120), 'branch_communications'),
                     this._safeSearchGet(window.db.collection('branch_contracts').where('businessId', '==', businessId).limit(120), 'branch_contracts'),
-                    this._safeSearchGet(window.db.collection('branch_certificates').where('businessId', '==', businessId).limit(120), 'branch_certificates')
+                    this._safeSearchGet(window.db.collection('branch_certificates').where('businessId', '==', businessId).limit(120), 'branch_certificates'),
+                    this._safeSearchGet(ref('hr_staff').limit(180), 'hr_staff'),
+                    this._safeSearchGet(ref('hr_staff_profiles').limit(180), 'hr_staff_profiles'),
+                    this._safeSearchGet(ref('hr_payroll').orderBy('createdAt', 'desc').limit(160), 'hr_payroll'),
+                    this._safeSearchGet(ref('hr_advances').orderBy('createdAt', 'desc').limit(160), 'hr_advances')
                 ]);
 
                 // Inventory
@@ -1012,6 +1029,57 @@
                         });
                     }
                 });
+
+                // Human Resource staff
+                const pushHrStaff = (doc, data, sourceLabel) => {
+                    if (this._docMatches({ ...data, id: doc.id }, q, [
+                        'id', 'staffId', 'staffCode', 'employeeId', 'displayName', 'name', 'fullName',
+                        'email', 'phone', 'jobTitle', 'hrRole', 'staffType', 'department', 'status'
+                    ])) {
+                        const name = data.displayName || data.name || data.fullName || data.staffName || 'Staff Member';
+                        const code = data.staffCode || data.staffId || data.employeeId || doc.id;
+                        results.push({
+                            type: 'hr staff', icon: 'fas fa-users-gear', color: 'teal',
+                            title: name,
+                            subtitle: `${code} | ${data.jobTitle || data.hrRole || data.staffType || sourceLabel || 'Staff'} | ${data.phone || data.email || ''}`,
+                            navigate: { module: 'human-resource', sub: 'hr-staff' }
+                        });
+                    }
+                };
+                hrStaffSnap && hrStaffSnap.forEach(doc => pushHrStaff(doc, doc.data(), 'Staff'));
+                hrProfileSnap && hrProfileSnap.forEach(doc => pushHrStaff(doc, doc.data(), 'Profile'));
+
+                // Human Resource payroll / payslips
+                hrPayrollSnap && hrPayrollSnap.forEach(doc => {
+                    const d = doc.data();
+                    if (this._docMatches({ ...d, id: doc.id }, q, [
+                        'id', 'payrollId', 'staffId', 'staffCode', 'staffName', 'jobTitle',
+                        'hrRole', 'staffType', 'period', 'status', 'paymentMethod', 'reference'
+                    ])) {
+                        results.push({
+                            type: 'hr payroll', icon: 'fas fa-money-check-dollar', color: 'green',
+                            title: d.staffName || d.staffCode || 'Payroll Record',
+                            subtitle: `${d.period || 'Period'} | ${this.formatCurrency(d.totalMonthPay || d.grossPay || 0)} | ${d.status || 'pending'}`,
+                            navigate: { module: 'human-resource', sub: d.status === 'paid' || d.paymentConfirmed ? 'hr-payslips' : 'hr-payroll' }
+                        });
+                    }
+                });
+
+                // Human Resource advances
+                hrAdvanceSnap && hrAdvanceSnap.forEach(doc => {
+                    const d = doc.data();
+                    if (this._docMatches({ ...d, id: doc.id }, q, [
+                        'id', 'staffId', 'staffCode', 'staffName', 'staffType', 'period',
+                        'reference', 'paymentMethod', 'status', 'note'
+                    ])) {
+                        results.push({
+                            type: 'hr advance', icon: 'fas fa-hand-holding-dollar', color: 'orange',
+                            title: d.staffName || d.staffCode || 'Advance Payment',
+                            subtitle: `${this.formatCurrency(d.amount || 0)} | ${d.reference || d.period || ''} | ${d.status || 'recorded'}`,
+                            navigate: { module: 'human-resource', sub: 'hr-payroll' }
+                        });
+                    }
+                });
             } catch (err) {
                 console.error('Search error:', err);
             }
@@ -1069,7 +1137,9 @@
                 ticket: 'Support Tickets', activity: 'Activity Logs', 'stock history': 'Stock History',
                 'customer message': 'Customer Messages', 'pharmacy customer': 'Pharmacy Customers',
                 'branch document': 'Branch Documents', 'branch communication': 'Branch Communications',
-                'branch contract': 'Branch Contracts', 'branch certificate': 'Branch Certificates'
+                'branch contract': 'Branch Contracts', 'branch certificate': 'Branch Certificates',
+                'hr staff': 'Human Resource Staff', 'hr payroll': 'Human Resource Payroll',
+                'hr advance': 'Human Resource Advances'
             };
 
             let totalShown = moduleMatches.length;
