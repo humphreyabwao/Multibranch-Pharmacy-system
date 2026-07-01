@@ -131,7 +131,11 @@ function getBusinessCollection(businessId, collectionName) {
     if (typeof collectionName !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(collectionName)) {
         throw new Error('Invalid tenant collection');
     }
-    return window.db.collection('businesses').doc(businessId).collection(collectionName);
+    var collectionRef = window.db.collection('businesses').doc(businessId).collection(collectionName);
+    if (window.PharmaFlow && PharmaFlow.SupabaseFallback && typeof PharmaFlow.SupabaseFallback.wrapCollectionRef === 'function') {
+        return PharmaFlow.SupabaseFallback.wrapCollectionRef(collectionRef, businessId, collectionName);
+    }
+    return collectionRef;
 }
 
 /**

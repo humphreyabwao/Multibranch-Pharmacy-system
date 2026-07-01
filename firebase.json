@@ -6,11 +6,21 @@
       "**/node_modules/**",
       "automation/**",
       "firebase/**",
+      "functions/**",
+      "supabase/**",
       ".git/**",
       "README.md",
       "*.md"
     ],
     "rewrites": [
+      {
+        "source": "/api/fallback/write",
+        "function": "supabaseFallbackWrite"
+      },
+      {
+        "source": "/api/fallback/read",
+        "function": "supabaseFallbackRead"
+      },
       {
         "source": "/rider.html",
         "destination": "/rider.html"
