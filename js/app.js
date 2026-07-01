@@ -648,6 +648,35 @@
             return earliest;
         },
 
+        _getExpiryTrackedBatches: function (product) {
+            const engine = PharmaFlow.InventoryBatchEngine;
+            if (engine && engine.canonicalBatches) {
+                return engine.canonicalBatches(product).map((batch, index) => ({ ...batch, _batchIndex: index }));
+            }
+            const batches = Array.isArray(product.stockBatches) && product.stockBatches.length
+                ? product.stockBatches
+                : (product.quantity || product.expiryDate || product.batchNumber ? [{
+                    batchNumber: product.batchNumber || product.sku || '',
+                    quantity: product.quantity || 0,
+                    expiryDate: product.expiryDate || null,
+                    legacy: true
+                }] : []);
+            return batches
+                .map((batch, index) => ({
+                    ...batch,
+                    batchNumber: batch.batchNumber || product.batchNumber || product.sku || '',
+                    quantity: Math.max(0, parseFloat(batch.quantity || 0) || 0),
+                    _batchIndex: index
+                }))
+                .filter(batch => batch.quantity > 0);
+        },
+
+        _batchAlertKey: function (productId, batch, expiryDate) {
+            const batchNumber = String(batch.batchNumber || 'no-batch').replace(/[^a-zA-Z0-9_-]/g, '_');
+            const expiryKey = expiryDate ? expiryDate.toISOString().slice(0, 10) : 'no-expiry';
+            return `${productId}-${batchNumber}-${expiryKey}-${batch._batchIndex || 0}`;
+        },
+
         _buildInventoryAlerts: function (products) {
             const config = this._getNotificationSettings();
             const today = new Date();
@@ -687,35 +716,59 @@
                 }
 
                 if (!config.notifyExpiry) return;
-                const exp = this._getEarliestExpiry(product);
-                if (!exp) return;
-                exp.setHours(0, 0, 0, 0);
-                const daysLeft = Math.ceil((exp - today) / (1000 * 60 * 60 * 24));
-                if (exp < today) {
-                    alerts.push({
-                        id: 'expired-' + product.id,
-                        type: 'expiry-alert',
-                        icon: 'fas fa-skull-crossbones',
-                        color: 'red',
-                        title: 'Expired Stock',
-                        message: `${name} has expired. Remove from shelves.`,
-                        time: new Date().toISOString(),
-                        priority: 'critical'
-                    });
-                    expiryPopupItems.push({ id: product.id, name: name, daysLeft: daysLeft, expiryDate: exp, status: 'expired' });
-                } else if (exp <= warningDate) {
-                    alerts.push({
-                        id: 'exp-' + product.id,
-                        type: 'expiry-alert',
-                        icon: 'fas fa-calendar-xmark',
-                        color: daysLeft <= 7 ? 'red' : 'orange',
-                        title: 'Expiring Soon',
-                        message: `${name} expires in ${daysLeft} day${daysLeft !== 1 ? 's' : ''}.`,
-                        time: new Date().toISOString(),
-                        priority: daysLeft <= 7 ? 'high' : 'medium'
-                    });
-                    expiryPopupItems.push({ id: product.id, name: name, daysLeft: daysLeft, expiryDate: exp, status: 'soon' });
-                }
+                this._getExpiryTrackedBatches(product).forEach(batch => {
+                    const exp = this._toDate(batch.expiryDate);
+                    if (!exp) return;
+                    exp.setHours(0, 0, 0, 0);
+                    const daysLeft = Math.ceil((exp - today) / (1000 * 60 * 60 * 24));
+                    const batchNumber = batch.batchNumber || 'Unnumbered batch';
+                    const batchQty = Math.max(0, parseFloat(batch.quantity || 0) || 0);
+                    const batchKey = this._batchAlertKey(product.id, batch, exp);
+                    const batchLabel = `batch ${batchNumber}`;
+                    if (exp < today) {
+                        alerts.push({
+                            id: 'expired-' + batchKey,
+                            type: 'expiry-alert',
+                            icon: 'fas fa-skull-crossbones',
+                            color: 'red',
+                            title: 'Expired Batch',
+                            message: `${name} ${batchLabel} has expired. Qty affected: ${batchQty}. Remove this batch from shelves.`,
+                            time: new Date().toISOString(),
+                            priority: 'critical'
+                        });
+                        expiryPopupItems.push({
+                            id: product.id,
+                            batchKey: batchKey,
+                            batchNumber: batchNumber,
+                            quantity: batchQty,
+                            name: name,
+                            daysLeft: daysLeft,
+                            expiryDate: exp,
+                            status: 'expired'
+                        });
+                    } else if (exp <= warningDate) {
+                        alerts.push({
+                            id: 'exp-' + batchKey,
+                            type: 'expiry-alert',
+                            icon: 'fas fa-calendar-xmark',
+                            color: daysLeft <= 7 ? 'red' : 'orange',
+                            title: 'Batch Expiring Soon',
+                            message: `${name} ${batchLabel} expires in ${daysLeft} day${daysLeft !== 1 ? 's' : ''}. Qty affected: ${batchQty}.`,
+                            time: new Date().toISOString(),
+                            priority: daysLeft <= 7 ? 'high' : 'medium'
+                        });
+                        expiryPopupItems.push({
+                            id: product.id,
+                            batchKey: batchKey,
+                            batchNumber: batchNumber,
+                            quantity: batchQty,
+                            name: name,
+                            daysLeft: daysLeft,
+                            expiryDate: exp,
+                            status: 'soon'
+                        });
+                    }
+                });
             });
 
             return { alerts: alerts, expiryPopupItems: expiryPopupItems };
@@ -731,7 +784,7 @@
             items.forEach(item => {
                 const stages = item.status === 'expired' ? ['expired'] : [30, 20, 10].filter(stage => item.daysLeft <= stage);
                 const expiryKey = item.expiryDate.toISOString().slice(0, 10);
-                const keyBase = `pf_expiry_popup_${businessId}_${item.id}_${expiryKey}`;
+                const keyBase = `pf_expiry_popup_${businessId}_${item.batchKey || item.id}_${expiryKey}`;
                 let state = {};
                 try { state = JSON.parse(localStorage.getItem(keyBase) || '{}') || {}; } catch (e) { state = {}; }
                 const nextStage = stages.find(stage => !state[String(stage)]);
@@ -748,11 +801,12 @@
             const rows = visible.map(item => {
                 const date = PharmaFlow.Settings && PharmaFlow.Settings.formatDate ? PharmaFlow.Settings.formatDate(item.expiryDate) : item.expiryDate.toLocaleDateString();
                 const detail = item.status === 'expired' ? 'Expired' : `Expires in ${item.daysLeft} day${item.daysLeft !== 1 ? 's' : ''}`;
-                return `<li><strong>${this._escapeHtml(item.name)}</strong><span>${this._escapeHtml(detail)} - ${this._escapeHtml(date)}</span></li>`;
+                const batch = item.batchNumber ? `Batch ${item.batchNumber}` : 'Batch not numbered';
+                return `<li><strong>${this._escapeHtml(item.name)}<small>${this._escapeHtml(batch)} - Qty ${this._escapeHtml(item.quantity)}</small></strong><span>${this._escapeHtml(detail)} - ${this._escapeHtml(date)}</span></li>`;
             }).join('');
-            const extra = due.length > visible.length ? `<p class="pf-expiry-popup-more">+${due.length - visible.length} more item(s) in notification tab.</p>` : '';
+            const extra = due.length > visible.length ? `<p class="pf-expiry-popup-more">+${due.length - visible.length} more batch(es) in notification tab.</p>` : '';
             PharmaFlow.alert(
-                `<div class="pf-expiry-popup-list"><p>Review these medicines before they reach expiry:</p><ul>${rows}</ul>${extra}</div>`,
+                `<div class="pf-expiry-popup-list"><p>Review these medicine batches before they reach expiry:</p><ul>${rows}</ul>${extra}</div>`,
                 { title: 'Expiry Warning', variant: 'danger' }
             );
         },

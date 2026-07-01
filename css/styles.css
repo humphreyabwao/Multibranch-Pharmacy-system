@@ -18877,6 +18877,14 @@ textarea.tkt-input {
 .pf-expiry-popup-list li strong {
     color: #7f1d1d;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.pf-expiry-popup-list li strong small {
+    color: #991b1b;
+    font-size: 0.72rem;
+    font-weight: 700;
 }
 .pf-expiry-popup-list li span {
     color: #b91c1c;

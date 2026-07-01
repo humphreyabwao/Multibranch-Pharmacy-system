@@ -56,17 +56,19 @@
             if (qty <= 0) outOfStock++;
             else if (qty <= reorderLevel) lowStock++;
 
-            var batches = engine ? engine.sellableBatches(p) : [];
-            var hasExpiringBatch = batches.some(function (batch) {
+            var batches = engine && engine.canonicalBatches ? engine.canonicalBatches(p) : [];
+            var expiringBatchCount = batches.filter(function (batch) {
                 if (!batch.expiryDate) return false;
+                var qty = Math.max(0, parseInt(batch.quantity, 10) || 0);
+                if (!qty) return false;
                 var exp = batch.expiryDate.toDate ? batch.expiryDate.toDate() : new Date(batch.expiryDate);
                 return exp <= warningDate && exp > now;
-            });
+            }).length;
             if (!engine && p.expiryDate) {
                 var exp = p.expiryDate.toDate ? p.expiryDate.toDate() : new Date(p.expiryDate);
-                hasExpiringBatch = exp <= warningDate && exp > now;
+                expiringBatchCount = exp <= warningDate && exp > now ? 1 : 0;
             }
-            if (hasExpiringBatch) expiringSoon++;
+            expiringSoon += expiringBatchCount;
         });
 
         return {
