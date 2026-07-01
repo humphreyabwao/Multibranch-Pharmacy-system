@@ -238,6 +238,22 @@ service cloud.firestore {
         allow create, update, delete: if canUseTenantModule(businessId, ['reports']) && isAdminOrAbove();
       }
 
+      // Human Resource: admin+ only. Reports can read HR data for exports.
+      match /hr_staff/{staffId} {
+        allow read: if canUseTenantModule(businessId, ['human-resource', 'reports']) && isAdminOrAbove();
+        allow create, update, delete: if canUseTenantModule(businessId, ['human-resource']) && isAdminOrAbove();
+      }
+
+      match /hr_staff_profiles/{profileId} {
+        allow read: if canUseTenantModule(businessId, ['human-resource', 'reports']) && isAdminOrAbove();
+        allow create, update, delete: if canUseTenantModule(businessId, ['human-resource']) && isAdminOrAbove();
+      }
+
+      match /hr_payroll/{payrollId} {
+        allow read: if canUseTenantModule(businessId, ['human-resource', 'reports']) && isAdminOrAbove();
+        allow create, update, delete: if canUseTenantModule(businessId, ['human-resource']) && isAdminOrAbove();
+      }
+
       // ── Accounts — admin+ to write, superadmin to delete ──
       match /accounts/{accountId} {
         allow read: if canUseTenantModule(businessId, ['accounts']);

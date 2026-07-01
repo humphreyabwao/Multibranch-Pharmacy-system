@@ -16968,6 +16968,16 @@ textarea.tkt-input {
 .hr-modal {
     max-width: 760px;
 }
+.hr-error-code {
+    display: inline-flex;
+    margin-top: 10px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: #fee2e2;
+    color: #991b1b;
+    font-size: 0.78rem;
+    font-weight: 700;
+}
 .hr-toast {
     position: fixed;
     right: 22px;
@@ -16993,6 +17003,10 @@ textarea.tkt-input {
 }
 .hr-toast--error {
     background: #dc2626;
+}
+[data-theme="dark"] .hr-error-code {
+    background: rgba(239, 68, 68, 0.16);
+    color: #fca5a5;
 }
 @media (max-width: 640px) {
     .hr-modal {

@@ -196,12 +196,18 @@
 
         renderHrLoadError(err, area) {
             const noBusiness = err && err.message === 'NO_BUSINESS_SELECTED';
+            const rawCode = err && (err.code || err.message) ? String(err.code || err.message) : '';
+            const permissionDenied = rawCode.indexOf('permission-denied') !== -1 || rawCode.indexOf('PERMISSION_DENIED') !== -1;
+            const detail = permissionDenied
+                ? 'Firebase denied access to HR records. Deploy the updated Firestore rules and confirm this user has Human Resource permission.'
+                : 'Please refresh and try again. If it continues, check your HR permissions and Firestore access.';
             return this.pageShell('HR ' + area, 'fas fa-people-group', area, `
                 <div class="card">
                     <div class="page-placeholder">
                         <i class="fas ${noBusiness ? 'fa-building-circle-exclamation' : 'fa-triangle-exclamation'}"></i>
                         <h2>${noBusiness ? 'Select a franchise first' : 'Failed to load HR ' + this.escapeHtml(area)}</h2>
-                        <p>${noBusiness ? 'Use the franchise selector at the top to choose the business workspace for HR.' : 'Please refresh and try again. If it continues, check your HR permissions and Firestore access.'}</p>
+                        <p>${noBusiness ? 'Use the franchise selector at the top to choose the business workspace for HR.' : this.escapeHtml(detail)}</p>
+                        ${!noBusiness && rawCode ? '<small class="hr-error-code">Error: ' + this.escapeHtml(rawCode) + '</small>' : ''}
                     </div>
                 </div>`);
         },
