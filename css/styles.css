@@ -16965,8 +16965,132 @@ textarea.tkt-input {
     grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
     gap: 12px;
 }
+.hr-modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10050;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 18px;
+    background: rgba(15, 23, 42, 0.58);
+}
 .hr-modal {
+    width: min(760px, 96vw);
     max-width: 760px;
+    max-height: 92vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border-radius: 10px;
+    background: #ffffff;
+    box-shadow: 0 24px 70px rgba(15, 23, 42, 0.32);
+}
+.hr-modal-header,
+.hr-modal-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 16px 18px;
+    border-bottom: 1px solid var(--border-color);
+}
+.hr-modal-header h3 {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 1rem;
+    color: var(--text-primary);
+}
+.hr-modal-header h3 i {
+    color: var(--primary);
+}
+.hr-modal-close {
+    width: 34px;
+    height: 34px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 1.35rem;
+    line-height: 1;
+    cursor: pointer;
+}
+.hr-modal-close:hover {
+    background: var(--bg-secondary);
+    color: #dc2626;
+}
+.hr-modal-body {
+    padding: 18px;
+    overflow: auto;
+}
+.hr-modal-footer {
+    justify-content: flex-end;
+    border-top: 1px solid var(--border-color);
+    border-bottom: 0;
+    background: var(--bg-secondary);
+}
+.hr-system-note {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-bottom: 14px;
+    padding: 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+}
+.hr-system-note strong {
+    color: var(--text-primary);
+}
+.hr-system-note span {
+    color: var(--text-secondary);
+    font-size: 0.86rem;
+}
+.hr-statutory-panel {
+    margin: 12px 0;
+    padding: 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: #f8fafc;
+}
+.hr-statutory-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    color: var(--text-primary);
+    font-weight: 700;
+}
+.hr-statutory-toggle input {
+    width: 16px;
+    height: 16px;
+}
+.hr-statutory-breakdown {
+    display: grid;
+    gap: 6px;
+}
+.hr-statutory-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    color: var(--text-secondary);
+    font-size: 0.86rem;
+}
+.hr-statutory-row strong {
+    color: var(--text-primary);
+}
+.hr-statutory-row--total {
+    margin-top: 6px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-color);
+    color: var(--text-primary);
+    font-weight: 800;
 }
 .hr-error-code {
     display: inline-flex;
@@ -17008,9 +17132,31 @@ textarea.tkt-input {
     background: rgba(239, 68, 68, 0.16);
     color: #fca5a5;
 }
+[data-theme="dark"] .hr-modal {
+    background: #1e293b;
+}
+[data-theme="dark"] .hr-statutory-panel,
+[data-theme="dark"] .hr-system-note {
+    background: var(--bg-secondary);
+}
 @media (max-width: 640px) {
+    .hr-modal-overlay {
+        align-items: flex-end;
+        padding: 8px;
+    }
     .hr-modal {
-        max-width: calc(100vw - 20px);
+        width: 100%;
+        max-width: 100%;
+        max-height: 96vh;
+        border-radius: 10px 10px 0 0;
+    }
+    .hr-modal-footer {
+        display: grid;
+        grid-template-columns: 1fr;
+    }
+    .hr-modal-footer .dda-btn {
+        width: 100%;
+        justify-content: center;
     }
     .hr-toast {
         left: 12px;

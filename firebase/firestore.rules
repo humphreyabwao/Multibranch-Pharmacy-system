@@ -254,6 +254,11 @@ service cloud.firestore {
         allow create, update, delete: if canUseTenantModule(businessId, ['human-resource']) && isAdminOrAbove();
       }
 
+      match /hr_advances/{advanceId} {
+        allow read: if canUseTenantModule(businessId, ['human-resource', 'reports']) && isAdminOrAbove();
+        allow create, update, delete: if canUseTenantModule(businessId, ['human-resource']) && isAdminOrAbove();
+      }
+
       // ── Accounts — admin+ to write, superadmin to delete ──
       match /accounts/{accountId} {
         allow read: if canUseTenantModule(businessId, ['accounts']);
