@@ -30,6 +30,9 @@
     let allBillingDocs = [];
     let filteredBillingDocs = [];
     let moduleTagsState = {};
+    let moduleTagsDraft = {};
+    let moduleTagsDirty = false;
+    let moduleTagsSaving = false;
     let bizNameCache = {};
     let filteredUsers = [];
     let filteredBusinesses = [];
@@ -208,6 +211,9 @@
             allBillingDocs = [];
             filteredBillingDocs = [];
             moduleTagsState = {};
+            moduleTagsDraft = {};
+            moduleTagsDirty = false;
+            moduleTagsSaving = false;
             filteredUsers = [];
             filteredBusinesses = [];
             filteredTickets = [];
@@ -3843,6 +3849,9 @@
                             </div>
                         </div>
                         <div class="adm-module-tag-actions">
+                            <span class="adm-module-tags-status" id="adm-module-tags-status">
+                                <i class="fas fa-satellite-dish"></i> Live sync active
+                            </span>
                             <button class="dda-btn dda-btn--cancel" id="adm-module-tags-clear">
                                 <i class="fas fa-eraser"></i> Clear All
                             </button>
@@ -3942,11 +3951,15 @@
             moduleTagsListener = window.db.collection('system_config').doc('module_tags')
                 .onSnapshot(doc => {
                     const data = doc.exists ? doc.data() : {};
-                    moduleTagsState = data.tags || {};
+                    moduleTagsState = this.normalizeModuleTags(data.tags || {});
+                    if (!moduleTagsDirty && !moduleTagsSaving) {
+                        moduleTagsDraft = { ...moduleTagsState };
+                    }
                     window.dispatchEvent(new CustomEvent('module-tags-updated', {
                         detail: { tags: moduleTagsState }
                     }));
                     this.renderModuleTagStats();
+                    this.updateModuleTagsStatus();
                     this.renderModuleTagsTable();
                 }, err => {
                     console.error('Module tags subscribe error:', err);
@@ -3957,7 +3970,7 @@
 
         renderModuleTagStats: function () {
             const rows = buildModuleTagRows();
-            const values = Object.values(moduleTagsState || {});
+            const values = Object.values(moduleTagsDraft || {});
             const setText = (id, value) => {
                 const el = document.getElementById(id);
                 if (el) el.textContent = value;
@@ -3974,6 +3987,47 @@
             return '<span class="adm-module-tag-badge adm-module-tag-badge--none">No tag</span>';
         },
 
+        normalizeModuleTags: function (tags) {
+            const clean = {};
+            Object.keys(tags || {}).forEach(key => {
+                const value = tags[key];
+                if (value === 'new' || value === 'updated') clean[key] = value;
+            });
+            return clean;
+        },
+
+        getVisibleModuleTagValue: function (key) {
+            return (moduleTagsDraft && moduleTagsDraft[key]) || 'none';
+        },
+
+        collectModuleTagDraftFromDom: function () {
+            const nextTags = { ...moduleTagsDraft };
+            document.querySelectorAll('.adm-module-tag-select').forEach(select => {
+                const key = select.dataset.moduleKey;
+                if (!key) return;
+                if (select.value === 'new' || select.value === 'updated') nextTags[key] = select.value;
+                else delete nextTags[key];
+            });
+            return this.normalizeModuleTags(nextTags);
+        },
+
+        updateModuleTagsStatus: function () {
+            const status = document.getElementById('adm-module-tags-status');
+            const saveBtn = document.getElementById('adm-module-tags-save');
+            if (!status) return;
+            if (moduleTagsSaving) {
+                status.className = 'adm-module-tags-status adm-module-tags-status--saving';
+                status.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving changes...';
+            } else if (moduleTagsDirty) {
+                status.className = 'adm-module-tags-status adm-module-tags-status--dirty';
+                status.innerHTML = '<i class="fas fa-pen"></i> Unsaved changes';
+            } else {
+                status.className = 'adm-module-tags-status';
+                status.innerHTML = '<i class="fas fa-satellite-dish"></i> Live sync active';
+            }
+            if (saveBtn) saveBtn.disabled = moduleTagsSaving;
+        },
+
         renderModuleTagsTable: function () {
             const tbody = document.getElementById('adm-module-tags-tbody');
             if (!tbody) return;
@@ -3981,7 +4035,7 @@
             const query = (document.getElementById('adm-module-tag-search')?.value || '').toLowerCase();
             const filter = document.getElementById('adm-module-tag-filter')?.value || '';
             const rows = buildModuleTagRows().filter(row => {
-                const tag = moduleTagsState[row.key] || 'none';
+                const tag = this.getVisibleModuleTagValue(row.key);
                 if (filter && tag !== filter) return false;
                 if (!query) return true;
                 const haystack = (row.label + ' ' + row.parentLabel + ' ' + row.type + ' ' + row.section).toLowerCase();
@@ -3994,7 +4048,7 @@
             }
 
             tbody.innerHTML = rows.map(row => {
-                const tag = moduleTagsState[row.key] || 'none';
+                const tag = this.getVisibleModuleTagValue(row.key);
                 return `
                     <tr>
                         <td>
@@ -4024,41 +4078,41 @@
                     const key = select.dataset.moduleKey;
                     const value = select.value;
                     if (value === 'none') {
-                        delete moduleTagsState[key];
+                        delete moduleTagsDraft[key];
                     } else {
-                        moduleTagsState[key] = value;
+                        moduleTagsDraft[key] = value;
                     }
+                    moduleTagsDraft = this.normalizeModuleTags(moduleTagsDraft);
+                    moduleTagsDirty = true;
                     select.className = 'adm-module-tag-select adm-module-tag-select--' + value;
                     const row = select.closest('tr');
                     const badgeCell = row ? row.querySelector('[data-tag-current]') : null;
                     if (badgeCell) badgeCell.innerHTML = this.getModuleTagBadge(value);
                     this.renderModuleTagStats();
+                    this.updateModuleTagsStatus();
                 });
             });
         },
 
         saveModuleTags: async function () {
-            const nextTags = {};
-
-            buildModuleTagRows().forEach(row => {
-                const select = document.querySelector('.adm-module-tag-select[data-module-key="' + row.key + '"]');
-                const value = select ? select.value : (moduleTagsState[row.key] || 'none');
-                if (value === 'new' || value === 'updated') {
-                    nextTags[row.key] = value;
-                }
-            });
+            const nextTags = this.collectModuleTagDraftFromDom();
 
             const btn = document.getElementById('adm-module-tags-save');
             if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...'; }
+            moduleTagsSaving = true;
+            this.updateModuleTagsStatus();
 
             try {
                 await window.db.collection('system_config').doc('module_tags').set({
                     tags: nextTags,
+                    tagCount: Object.keys(nextTags).length,
                     updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
                     updatedBy: PharmaFlow.Auth.userProfile ? (PharmaFlow.Auth.userProfile.displayName || PharmaFlow.Auth.userProfile.email) : 'Unknown'
-                }, { merge: true });
+                }, { merge: false });
 
                 moduleTagsState = nextTags;
+                moduleTagsDraft = { ...nextTags };
+                moduleTagsDirty = false;
                 window.dispatchEvent(new CustomEvent('module-tags-updated', {
                     detail: { tags: nextTags }
                 }));
@@ -4069,14 +4123,19 @@
                 console.error('Save module tags error:', err);
                 this.showToast('Failed to save module tags: ' + err.message, 'error');
             } finally {
+                moduleTagsSaving = false;
+                this.updateModuleTagsStatus();
                 if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-save"></i> Save Tags'; }
             }
         },
 
         clearModuleTags: async function () {
             if (!(await PharmaFlow.confirm('Clear all module tags from the sidebar?', { title: 'Clear Module Tags', confirmText: 'Clear Tags', danger: true }))) return;
-            moduleTagsState = {};
+            moduleTagsDraft = {};
+            moduleTagsDirty = true;
             document.querySelectorAll('.adm-module-tag-select').forEach(select => { select.value = 'none'; });
+            this.renderModuleTagStats();
+            this.updateModuleTagsStatus();
             await this.saveModuleTags();
         },
 
