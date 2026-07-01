@@ -21,6 +21,8 @@
         _businessStatusListener: null,
         _regionalRefreshTimer: null,
         _expiryScanTimer: null,
+        _inventoryAlertProducts: [],
+        _inventoryAlertBusinessId: null,
 
         /**
          * Initialize the application
@@ -34,6 +36,7 @@
             this.initSidebar();
             this.listenAuthReady();
             this.listenRegionalSettingsUpdates();
+            this.listenNotificationSettingsUpdates();
         },
 
         /**
@@ -90,6 +93,12 @@
 
                     // Run scheduled activity log cleanup
                     if (PharmaFlow.ActivityLog) PharmaFlow.ActivityLog.runScheduledCleanup();
+                    if (PharmaFlow.AdminPanel && profile.role === PharmaFlow.USER_ROLES.SUPERADMIN) {
+                        PharmaFlow.AdminPanel.ensureAutoReminderDefaults();
+                        PharmaFlow.AdminPanel.startAutoReminderMonitor();
+                    } else if (PharmaFlow.AdminPanel && PharmaFlow.AdminPanel.stopAutoReminderMonitor) {
+                        PharmaFlow.AdminPanel.stopAutoReminderMonitor();
+                    }
                 }
 
                 this._authInitialized = true;
@@ -117,6 +126,10 @@
                     this.startMessages(activeBusinessId, uid);
                     this.startBusinessStatusWatcher(activeBusinessId);
                     this.startExpiryMonitor(activeBusinessId);
+                    if (PharmaFlow.AdminPanel && PharmaFlow.Auth.userProfile && PharmaFlow.Auth.userProfile.role === PharmaFlow.USER_ROLES.SUPERADMIN) {
+                        PharmaFlow.AdminPanel.ensureAutoReminderDefaults();
+                        PharmaFlow.AdminPanel.startAutoReminderMonitor();
+                    }
                 }
             });
         },
@@ -175,6 +188,12 @@
                         PharmaFlow.Router.currentSubModuleId
                     );
                 }, 120);
+            });
+        },
+
+        listenNotificationSettingsUpdates: function () {
+            window.addEventListener('regional-settings-updated', () => {
+                this._refreshInventoryAlertsFromCache();
             });
         },
 
@@ -495,8 +514,75 @@
 
                     this._renderCombinedNotifications();
                     this._renderCombinedMessages();
+                    this._showDashboardFranchiseAlertPopup(this._franchiseAlerts);
                 }, err => console.error('Franchise alerts (notif) listener error:', err));
             this._notifListeners.push(unsub);
+        },
+
+        _showDashboardFranchiseAlertPopup: function (alerts) {
+            if (!alerts || !alerts.length) return;
+            if (!PharmaFlow.Router || PharmaFlow.Router.currentModuleId !== 'dashboard') return;
+
+            const businessId = PharmaFlow.Auth && PharmaFlow.Auth.getBusinessId ? PharmaFlow.Auth.getBusinessId() : 'default';
+            const active = alerts
+                .filter(alert => alert.status === 'active')
+                .filter(alert => {
+                    const key = `pf_franchise_alert_popup_${businessId}_${alert._alertId || alert.id}`;
+                    if (localStorage.getItem(key)) return false;
+                    try { localStorage.setItem(key, new Date().toISOString()); } catch (e) { /* ignore */ }
+                    return true;
+                })
+                .sort((a, b) => new Date(b.time || 0) - new Date(a.time || 0));
+            if (!active.length) return;
+
+            this._renderSmallAlertPopup(active[0]);
+        },
+
+        _renderSmallAlertPopup: function (alert) {
+            let stack = document.getElementById('pf-dashboard-alert-stack');
+            if (!stack) {
+                stack = document.createElement('div');
+                stack.id = 'pf-dashboard-alert-stack';
+                stack.className = 'pf-dashboard-alert-stack';
+                document.body.appendChild(stack);
+            }
+
+            const popup = document.createElement('div');
+            const isHigh = alert.priority === 'high' || alert.alertType === 'payment_due' || alert.alertType === 'security';
+            popup.className = 'pf-dashboard-alert-popup' + (isHigh ? ' pf-dashboard-alert-popup--high' : '');
+            popup.setAttribute('role', 'status');
+            popup.setAttribute('aria-live', 'polite');
+            popup.innerHTML = `
+                <div class="pf-dashboard-alert-popup__icon">
+                    <i class="${this._escapeAttr(alert.icon || 'fas fa-bell')}"></i>
+                </div>
+                <div class="pf-dashboard-alert-popup__body">
+                    <div class="pf-dashboard-alert-popup__top">
+                        <strong>${this._escapeHtml(alert.title || 'Admin Alert')}</strong>
+                        <button type="button" class="pf-dashboard-alert-popup__close" aria-label="Dismiss alert">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <p>${this._escapeHtml(alert.message || 'You have a new alert from administration.')}</p>
+                    <div class="pf-dashboard-alert-popup__meta">
+                        <span>${this._escapeHtml(alert.createdBy || 'System')}</span>
+                        ${alert.amount && PharmaFlow.Settings && PharmaFlow.Settings.formatCurrency ? `<span>${PharmaFlow.Settings.formatCurrency(alert.amount)}</span>` : ''}
+                        ${alert.dueDate ? `<span>Due: ${this._escapeHtml(alert.dueDate)}</span>` : ''}
+                    </div>
+                </div>
+            `;
+            stack.prepend(popup);
+            Array.from(stack.children).slice(3).forEach(node => node.remove());
+            requestAnimationFrame(() => popup.classList.add('show'));
+
+            const close = () => {
+                popup.classList.remove('show');
+                setTimeout(() => popup.remove(), 220);
+            };
+            popup.querySelector('.pf-dashboard-alert-popup__close')?.addEventListener('click', close);
+            setTimeout(() => {
+                if (document.body.contains(popup)) close();
+            }, 12000);
         },
 
         /**
@@ -507,81 +593,168 @@
             if (!invRef) return;
 
             const unsub = invRef.onSnapshot(snap => {
-                const thirtyDaysFromNow = new Date();
-                thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
-                const today = new Date();
-                today.setHours(0, 0, 0, 0);
+                this._inventoryAlertBusinessId = businessId;
+                this._inventoryAlertProducts = [];
+                snap.forEach(doc => this._inventoryAlertProducts.push({ id: doc.id, ...doc.data() }));
+                this._refreshInventoryAlertsFromCache();
+            }, err => console.error('Inventory alerts listener error:', err));
+            this._notifListeners.push(unsub);
+        },
 
-                const alerts = [];
+        _refreshInventoryAlertsFromCache: function () {
+            const result = this._buildInventoryAlerts(this._inventoryAlertProducts || []);
+            this._systemAlerts = result.alerts;
+            this._renderCombinedNotifications();
+            this._showDashboardExpiryPopups(result.expiryPopupItems);
+        },
 
-                snap.forEach(doc => {
-                    const data = doc.data();
-                    const qty = parseFloat(data.quantity || 0);
+        _getNotificationSettings: function () {
+            const settings = PharmaFlow.Settings && PharmaFlow.Settings.business ? PharmaFlow.Settings.business : {};
+            let lowStockThreshold = parseInt(settings.lowStockThreshold, 10);
+            if (!isFinite(lowStockThreshold) || lowStockThreshold < 1) lowStockThreshold = 10;
+            let expiryWarningDays = parseInt(settings.expiryWarningDays, 10);
+            if (!isFinite(expiryWarningDays) || expiryWarningDays < 30) expiryWarningDays = 30;
+            return {
+                notifyLowStock: settings.notifyLowStock !== false,
+                notifyExpiry: settings.notifyExpiry !== false,
+                lowStockThreshold: lowStockThreshold,
+                expiryWarningDays: Math.min(expiryWarningDays, 365)
+            };
+        },
 
-                    // Out of stock alert
+        _toDate: function (value) {
+            if (!value) return null;
+            const date = value.toDate ? value.toDate() : (value.seconds ? new Date(value.seconds * 1000) : new Date(value));
+            return isNaN(date.getTime()) ? null : date;
+        },
+
+        _getSellableQuantity: function (product) {
+            const engine = PharmaFlow.InventoryBatchEngine;
+            if (engine && engine.sellableQuantity) return engine.sellableQuantity(product);
+            return Math.max(0, parseFloat(product.quantity || 0) || 0);
+        },
+
+        _getEarliestExpiry: function (product) {
+            const engine = PharmaFlow.InventoryBatchEngine;
+            const batches = engine && engine.sellableBatches
+                ? engine.sellableBatches(product)
+                : (Array.isArray(product.stockBatches) ? product.stockBatches.filter(batch => (parseFloat(batch.quantity || 0) || 0) > 0) : []);
+            let earliest = null;
+            batches.forEach(batch => {
+                const date = this._toDate(batch.expiryDate);
+                if (date && (!earliest || date < earliest)) earliest = date;
+            });
+            if (!earliest) earliest = this._toDate(product.expiryDate);
+            return earliest;
+        },
+
+        _buildInventoryAlerts: function (products) {
+            const config = this._getNotificationSettings();
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const warningDate = new Date(today.getTime() + config.expiryWarningDays * 24 * 60 * 60 * 1000);
+            const alerts = [];
+            const expiryPopupItems = [];
+
+            (products || []).forEach(product => {
+                const qty = this._getSellableQuantity(product);
+                const name = product.name || 'Item';
+
+                if (config.notifyLowStock) {
                     if (qty <= 0) {
                         alerts.push({
-                            id: 'oos-' + doc.id,
+                            id: 'oos-' + product.id,
                             type: 'stock-alert',
                             icon: 'fas fa-exclamation-triangle',
                             color: 'red',
                             title: 'Out of Stock',
-                            message: `${data.name || 'Item'} is out of stock. Reorder now.`,
+                            message: `${name} is out of stock. Reorder now.`,
                             time: new Date().toISOString(),
                             priority: 'high'
                         });
-                    }
-                    // Low stock alert (1-5)
-                    else if (qty > 0 && qty <= 5) {
+                    } else if (qty <= config.lowStockThreshold) {
                         alerts.push({
-                            id: 'low-' + doc.id,
+                            id: 'low-' + product.id,
                             type: 'stock-alert',
                             icon: 'fas fa-box-open',
                             color: 'orange',
                             title: 'Low Stock Warning',
-                            message: `${data.name || 'Item'} has only ${qty} units remaining.`,
+                            message: `${name} has only ${qty} units remaining.`,
                             time: new Date().toISOString(),
                             priority: 'medium'
                         });
                     }
+                }
 
-                    // Expiring soon alert
-                    if (data.expiryDate) {
-                        const exp = new Date(data.expiryDate);
-                        if (exp <= thirtyDaysFromNow && exp >= today) {
-                            const daysLeft = Math.ceil((exp - today) / (1000 * 60 * 60 * 24));
-                            alerts.push({
-                                id: 'exp-' + doc.id,
-                                type: 'expiry-alert',
-                                icon: 'fas fa-calendar-xmark',
-                                color: 'red',
-                                title: 'Expiring Soon',
-                                message: `${data.name || 'Item'} expires in ${daysLeft} day${daysLeft !== 1 ? 's' : ''}.`,
-                                time: new Date().toISOString(),
-                                priority: daysLeft <= 7 ? 'high' : 'medium'
-                            });
-                        }
-                        // Already expired
-                        if (exp < today) {
-                            alerts.push({
-                                id: 'expired-' + doc.id,
-                                type: 'expiry-alert',
-                                icon: 'fas fa-skull-crossbones',
-                                color: 'red',
-                                title: 'EXPIRED',
-                                message: `${data.name || 'Item'} has expired! Remove from shelves.`,
-                                time: new Date().toISOString(),
-                                priority: 'critical'
-                            });
-                        }
-                    }
-                });
+                if (!config.notifyExpiry) return;
+                const exp = this._getEarliestExpiry(product);
+                if (!exp) return;
+                exp.setHours(0, 0, 0, 0);
+                const daysLeft = Math.ceil((exp - today) / (1000 * 60 * 60 * 24));
+                if (exp < today) {
+                    alerts.push({
+                        id: 'expired-' + product.id,
+                        type: 'expiry-alert',
+                        icon: 'fas fa-skull-crossbones',
+                        color: 'red',
+                        title: 'Expired Stock',
+                        message: `${name} has expired. Remove from shelves.`,
+                        time: new Date().toISOString(),
+                        priority: 'critical'
+                    });
+                    expiryPopupItems.push({ id: product.id, name: name, daysLeft: daysLeft, expiryDate: exp, status: 'expired' });
+                } else if (exp <= warningDate) {
+                    alerts.push({
+                        id: 'exp-' + product.id,
+                        type: 'expiry-alert',
+                        icon: 'fas fa-calendar-xmark',
+                        color: daysLeft <= 7 ? 'red' : 'orange',
+                        title: 'Expiring Soon',
+                        message: `${name} expires in ${daysLeft} day${daysLeft !== 1 ? 's' : ''}.`,
+                        time: new Date().toISOString(),
+                        priority: daysLeft <= 7 ? 'high' : 'medium'
+                    });
+                    expiryPopupItems.push({ id: product.id, name: name, daysLeft: daysLeft, expiryDate: exp, status: 'soon' });
+                }
+            });
 
-                // Store system-generated alerts for rendering alongside Firestore notifications
-                this._systemAlerts = alerts;
-                this._renderCombinedNotifications();
-            }, err => console.error('Inventory alerts listener error:', err));
-            this._notifListeners.push(unsub);
+            return { alerts: alerts, expiryPopupItems: expiryPopupItems };
+        },
+
+        _showDashboardExpiryPopups: function (items) {
+            if (!items || !items.length || !PharmaFlow.alert) return;
+            if (!PharmaFlow.Router || PharmaFlow.Router.currentModuleId !== 'dashboard') return;
+            const businessId = this._inventoryAlertBusinessId || (PharmaFlow.Auth && PharmaFlow.Auth.getBusinessId ? PharmaFlow.Auth.getBusinessId() : 'default');
+            const todayKey = new Date().toISOString().slice(0, 10);
+            const due = [];
+
+            items.forEach(item => {
+                const stages = item.status === 'expired' ? ['expired'] : [30, 20, 10].filter(stage => item.daysLeft <= stage);
+                const expiryKey = item.expiryDate.toISOString().slice(0, 10);
+                const keyBase = `pf_expiry_popup_${businessId}_${item.id}_${expiryKey}`;
+                let state = {};
+                try { state = JSON.parse(localStorage.getItem(keyBase) || '{}') || {}; } catch (e) { state = {}; }
+                const nextStage = stages.find(stage => !state[String(stage)]);
+                if (!nextStage) return;
+                if (state.lastShownDate === todayKey) return;
+                state[String(nextStage)] = todayKey;
+                state.lastShownDate = todayKey;
+                try { localStorage.setItem(keyBase, JSON.stringify(state)); } catch (e) { /* ignore */ }
+                due.push(item);
+            });
+
+            if (!due.length) return;
+            const visible = due.slice(0, 6);
+            const rows = visible.map(item => {
+                const date = PharmaFlow.Settings && PharmaFlow.Settings.formatDate ? PharmaFlow.Settings.formatDate(item.expiryDate) : item.expiryDate.toLocaleDateString();
+                const detail = item.status === 'expired' ? 'Expired' : `Expires in ${item.daysLeft} day${item.daysLeft !== 1 ? 's' : ''}`;
+                return `<li><strong>${this._escapeHtml(item.name)}</strong><span>${this._escapeHtml(detail)} - ${this._escapeHtml(date)}</span></li>`;
+            }).join('');
+            const extra = due.length > visible.length ? `<p class="pf-expiry-popup-more">+${due.length - visible.length} more item(s) in notification tab.</p>` : '';
+            PharmaFlow.alert(
+                `<div class="pf-expiry-popup-list"><p>Review these medicines before they reach expiry:</p><ul>${rows}</ul>${extra}</div>`,
+                { title: 'Expiry Warning', variant: 'danger' }
+            );
         },
 
         _firestoreNotifSnap: null,
@@ -606,6 +779,7 @@
                     const data = doc.data();
                     items.push({
                         id: doc.id,
+                        alertId: data.alertId || '',
                         type: data.type || 'general',
                         icon: data.icon || 'fas fa-bell',
                         color: data.color || 'blue',
@@ -632,8 +806,9 @@
             // Add franchise alerts
             if (this._franchiseAlerts && this._franchiseAlerts.length > 0) {
                 const existingIds = new Set(items.map(i => i.id));
+                const existingAlertIds = new Set(items.map(i => i.alertId).filter(Boolean));
                 this._franchiseAlerts.forEach(alert => {
-                    if (!existingIds.has(alert.id)) {
+                    if (!existingIds.has(alert.id) && !existingAlertIds.has(alert._alertId)) {
                         items.push(alert);
                     }
                 });
@@ -786,6 +961,7 @@
                     if (!data.recipientId || data.recipientId === uid || data.recipientId === 'all') {
                         items.push({
                             id: doc.id,
+                            alertId: data.alertId || '',
                             senderName: data.senderName || 'Admin',
                             senderAvatar: data.senderAvatar || '',
                             subject: data.subject || '',
@@ -809,10 +985,12 @@
                     security: 'Security Update', maintenance: 'Maintenance'
                 };
                 const existingIds = new Set(items.map(i => i.id));
+                const existingAlertIds = new Set(items.map(i => i.alertId).filter(Boolean));
                 this._franchiseAlerts.forEach(fa => {
-                    if (!existingIds.has(fa._alertId)) {
+                    if (!existingIds.has(fa._alertId) && !existingAlertIds.has(fa._alertId)) {
                         items.push({
                             id: fa._alertId,
+                            alertId: fa._alertId,
                             senderName: fa.createdBy || 'System Admin',
                             senderAvatar: '',
                             subject: typeLabels[fa.alertType] || 'Franchise Alert',
@@ -1192,6 +1370,7 @@
             var iconClass = 'pf-confirm-icon' + (danger ? ' pf-confirm-icon--danger' : ' pf-confirm-icon--info');
             var iconName = danger ? 'exclamation-triangle' : 'info-circle';
             var btnClass = danger ? 'pf-confirm-btn pf-confirm-btn--danger pf-confirm-btn--danger-alert-ok' : 'pf-confirm-btn pf-confirm-btn--primary';
+            var bodyTag = options.html === false ? 'p' : (/<[a-z][\s\S]*>/i.test(String(message || '')) ? 'div' : 'p');
 
             var overlay = document.createElement('div');
             overlay.id = 'pf-confirm-overlay';
@@ -1204,7 +1383,7 @@
                         '</div>' +
                         '<h3 class="' + (danger ? 'pf-confirm-title--danger' : '') + '">' + title + '</h3>' +
                     '</div>' +
-                    '<div class="pf-confirm-body"><p class="' + (danger ? 'pf-confirm-text--danger' : '') + '">' + message + '</p></div>' +
+                    '<div class="pf-confirm-body"><' + bodyTag + ' class="' + (danger ? 'pf-confirm-text--danger' : '') + '">' + message + '</' + bodyTag + '></div>' +
                     '<div class="pf-confirm-actions' + (danger ? ' pf-confirm-actions--danger' : '') + '">' +
                         '<button class="' + btnClass + '" id="pf-confirm-ok">OK</button>' +
                     '</div>' +

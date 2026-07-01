@@ -14,7 +14,10 @@
     PharmaFlow.computeInventoryStats = function (products) {
         var list = products || [];
         var now = new Date();
-        var thirtyDays = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+        var settings = window.PharmaFlow && window.PharmaFlow.Settings ? window.PharmaFlow.Settings.business : null;
+        var expiryWarningDays = parseInt(settings && settings.expiryWarningDays, 10);
+        if (!isFinite(expiryWarningDays) || expiryWarningDays < 30) expiryWarningDays = 30;
+        var warningDate = new Date(now.getTime() + expiryWarningDays * 24 * 60 * 60 * 1000);
 
         var totalValue = 0;
         var outOfStock = 0;
@@ -57,11 +60,11 @@
             var hasExpiringBatch = batches.some(function (batch) {
                 if (!batch.expiryDate) return false;
                 var exp = batch.expiryDate.toDate ? batch.expiryDate.toDate() : new Date(batch.expiryDate);
-                return exp <= thirtyDays && exp > now;
+                return exp <= warningDate && exp > now;
             });
             if (!engine && p.expiryDate) {
                 var exp = p.expiryDate.toDate ? p.expiryDate.toDate() : new Date(p.expiryDate);
-                hasExpiringBatch = exp <= thirtyDays && exp > now;
+                hasExpiringBatch = exp <= warningDate && exp > now;
             }
             if (hasExpiringBatch) expiringSoon++;
         });

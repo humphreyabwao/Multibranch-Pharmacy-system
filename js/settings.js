@@ -94,10 +94,16 @@
         { value: 'UTC', label: 'UTC' }
     ];
 
+    function normalizeExpiryWarningDays(value) {
+        var days = parseInt(value, 10);
+        if (!isFinite(days) || days < 30) return 30;
+        return Math.min(days, 365);
+    }
 
     const Settings = {
         business: { ...DEFAULT_SETTINGS },
         _initialized: false,
+        _latestRelease: null,
 
         // ─── INITIALIZATION ──────────────────────────────
 
@@ -145,7 +151,7 @@
                             notifyExpiry: d.notifyExpiry !== false,
                             notifyNewOrders: d.notifyNewOrders !== false,
                             lowStockThreshold: d.lowStockThreshold || 10,
-                            expiryWarningDays: d.expiryWarningDays || 30,
+                            expiryWarningDays: normalizeExpiryWarningDays(d.expiryWarningDays),
                             dateFormat: d.dateFormat || DEFAULT_SETTINGS.dateFormat,
                             timezone: d.timezone || DEFAULT_SETTINGS.timezone,
                             emailJsServiceId: d.emailJsServiceId || '',
@@ -157,6 +163,7 @@
                         Settings.applyBranding();
                         Settings.applyRegionalSettings();
                         Settings.syncRegionalSettingsForm();
+                        Settings.syncNotificationSettingsForm();
                         Settings.persistBrandToLocal();
                         Settings.broadcastSettingsUpdate();
                     }
@@ -219,6 +226,31 @@
             }
         },
 
+        syncNotificationSettingsForm: function () {
+            var map = {
+                'st-notif-low-stock': !!this.business.notifyLowStock,
+                'st-notif-expiry': !!this.business.notifyExpiry,
+                'st-notif-orders': !!this.business.notifyNewOrders
+            };
+            Object.keys(map).forEach(function (id) {
+                var el = document.getElementById(id);
+                if (el && el.checked !== map[id]) el.checked = map[id];
+            });
+            var low = document.getElementById('st-low-stock-threshold');
+            if (low && low.value !== String(this.business.lowStockThreshold || 10)) {
+                low.value = this.business.lowStockThreshold || 10;
+            }
+            var expiry = document.getElementById('st-expiry-warning');
+            var expiryDays = normalizeExpiryWarningDays(this.business.expiryWarningDays);
+            if (expiry && expiry.value !== String(expiryDays)) expiry.value = expiryDays;
+
+            var badge = document.getElementById('st-notif-live-badge');
+            if (badge) {
+                badge.textContent = 'Live sync active';
+                badge.classList.add('is-synced');
+            }
+        },
+
         broadcastSettingsUpdate: function () {
             try {
                 window.dispatchEvent(new CustomEvent('regional-settings-updated', {
@@ -226,7 +258,11 @@
                         currency: this.business.currency,
                         locale: this.business.locale,
                         dateFormat: this.business.dateFormat,
-                        timezone: this.business.timezone
+                        timezone: this.business.timezone,
+                        notifyLowStock: this.business.notifyLowStock,
+                        notifyExpiry: this.business.notifyExpiry,
+                        lowStockThreshold: this.business.lowStockThreshold,
+                        expiryWarningDays: this.business.expiryWarningDays
                     }
                 }));
             } catch (e) { /* ignore */ }
@@ -1453,17 +1489,32 @@
         renderReleaseNotes: function (data) {
             var current = document.getElementById('st-release-current');
             var history = document.getElementById('st-release-history');
-            if (!current || !history) return;
             var latest = data.latest || null;
             var releases = Array.isArray(data.releases) ? data.releases.slice() : [];
             releases.sort(function (a, b) {
                 return new Date(b.publishedAt || b.releaseDate || 0) - new Date(a.publishedAt || a.releaseDate || 0);
             });
             if (!latest && releases.length) latest = releases[0];
-            current.innerHTML = latest ? this.releaseCardHtml(latest, true) : '<div class="st-release-empty"><i class="fas fa-code-branch"></i> No release has been published yet.</div>';
-            history.innerHTML = releases.length ? releases.map(function (release) {
-                return Settings.releaseCardHtml(release, false);
-            }).join('') : '<div class="st-release-empty"><i class="fas fa-folder-open"></i> No release history yet.</div>';
+            this._latestRelease = latest || null;
+            if (current) current.innerHTML = latest ? this.releaseCardHtml(latest, true) : '<div class="st-release-empty"><i class="fas fa-code-branch"></i> No release has been published yet.</div>';
+            if (history) {
+                history.innerHTML = releases.length ? releases.map(function (release) {
+                    return Settings.releaseCardHtml(release, false);
+                }).join('') : '<div class="st-release-empty"><i class="fas fa-folder-open"></i> No release history yet.</div>';
+            }
+            this.syncSystemVersionInfo();
+        },
+
+        syncSystemVersionInfo: function () {
+            var release = this._latestRelease || {};
+            var versionEl = document.getElementById('st-system-version-value');
+            var typeEl = document.getElementById('st-system-version-type');
+            var dateEl = document.getElementById('st-system-version-date');
+            var titleEl = document.getElementById('st-system-version-title');
+            if (versionEl) versionEl.textContent = release.version ? 'v' + release.version : 'Not published';
+            if (typeEl) typeEl.textContent = release.releaseType || 'Release';
+            if (dateEl) dateEl.textContent = release.version ? this._formatReleaseDate(release.releaseDate || release.publishedAt) : 'Not dated';
+            if (titleEl) titleEl.textContent = release.title || 'No release published yet';
         },
 
         releaseCardHtml: function (release, featured) {
@@ -1643,10 +1694,10 @@
                 (isAdmin ?
                     '    <div class="st-messaging-summary">' +
                     '      <div>' +
-                    '        <strong>Messaging provider setup</strong>' +
-                    '        <p>Open the setup modal to configure Africa\'s Talking, EmailJS, and WhatsApp credentials.</p>' +
+                    '        <strong>Messaging delivery</strong>' +
+                    '        <p>In-app alerts and saved staff messages are always active. External SMS, email, and WhatsApp channels are optional.</p>' +
                     '      </div>' +
-                    '      <button type="button" class="btn btn-outline" id="st-open-messaging-modal"><i class="fas fa-comments"></i> Messaging Setup</button>' +
+                    '      <button type="button" class="btn btn-outline st-messaging-setup-btn" id="st-open-messaging-modal"><i class="fas fa-sliders"></i> Configure Channels</button>' +
                     '    </div>' : '') +
 
                 (isAdmin ?
@@ -1660,8 +1711,8 @@
                     '      </div>' +
                     '      <div class="form-group">' +
                     '        <label for="st-expiry-warning">Expiry Warning (Days)</label>' +
-                    '        <input type="number" id="st-expiry-warning" value="' + (b.expiryWarningDays || 30) + '" min="1" max="365">' +
-                    '        <small class="st-help-text">Alert this many days before expiry</small>' +
+                    '        <input type="number" id="st-expiry-warning" value="' + normalizeExpiryWarningDays(b.expiryWarningDays) + '" min="30" max="365">' +
+                    '        <small class="st-help-text">Minimum 30 days. Products start showing as soon-to-expire from this window.</small>' +
                     '      </div>' +
                     '    </div>' +
                     '    <div class="st-form-actions">' +
@@ -1673,73 +1724,94 @@
                 '</div>';
 
             if (isAdmin) {
+                var existingMessagingModal = document.getElementById('st-messaging-modal');
+                if (existingMessagingModal) existingMessagingModal.remove();
                 var modal = document.createElement('div');
                 modal.className = 'pc-modal-overlay st-messaging-modal hidden';
                 modal.id = 'st-messaging-modal';
                 modal.innerHTML =
-                    '<div class="pc-modal-card pc-message-modal-card st-messaging-modal-card">' +
-                    '  <div class="pc-modal-header">' +
-                    '    <h3><i class="fas fa-comments"></i> Messaging Setup</h3>' +
+                    '<div class="pc-modal-card st-messaging-modal-card">' +
+                    '  <div class="pc-modal-header st-messaging-modal-header">' +
+                    '    <div>' +
+                    '      <h3><i class="fas fa-comments"></i> Messaging Setup</h3>' +
+                    '      <p>Optional external delivery. Internal alerts, notifications, and saved messages work automatically.</p>' +
+                    '    </div>' +
                     '    <button class="slide-panel-close" id="st-messaging-close"><i class="fas fa-times"></i></button>' +
                     '  </div>' +
-                    '  <div class="pc-modal-meta">' +
-                    '    <span><strong>Provider:</strong> Africa\'s Talking for SMS, EmailJS for email, CallMeBot for WhatsApp</span>' +
+                    '  <div class="st-messaging-status-row">' +
+                    '    <span class="st-optional-pill"><i class="fas fa-check-circle"></i> Built-in system messaging active</span>' +
+                    '    <span class="st-optional-pill st-optional-pill--muted"><i class="fas fa-plug"></i> External channels optional</span>' +
                     '  </div>' +
                     '  <div class="pc-modal-body">' +
-                    '    <div class="st-form-row">' +
+                    '    <div class="st-messaging-channel-card">' +
+                    '      <div class="st-messaging-channel-head"><i class="fas fa-sliders"></i><strong>Delivery mode</strong></div>' +
+                    '      <div class="st-form-row">' +
                     '      <div class="form-group">' +
-                    '        <label for="st-msg-provider">Messaging Mode</label>' +
+                    '        <label for="st-msg-provider">External Messaging Mode</label>' +
                     '        <select id="st-msg-provider">' +
-                    '          <option value="mixed"' + (messaging.provider === 'mixed' ? ' selected' : '') + '>Mixed (recommended)</option>' +
+                    '          <option value="mixed"' + (messaging.provider === 'mixed' ? ' selected' : '') + '>Mixed external channels</option>' +
                     '          <option value="africastalking"' + (messaging.provider === 'africastalking' ? ' selected' : '') + '>Africa\'s Talking SMS</option>' +
                     '        </select>' +
-                    '        <small class="st-help-text">Use Mixed for SMS + email + WhatsApp, or Africa\'s Talking for SMS-only.</small>' +
+                    '        <small class="st-help-text">Leave fields empty if you only want in-app alerts and saved internal messages.</small>' +
                     '      </div>' +
                     '      <div class="form-group">' +
                     '        <label for="st-at-sender">Africa\'s Talking Sender ID</label>' +
-                    '        <input type="text" id="st-at-sender" value="' + self._escapeHtml(messaging.africaTalkingSenderId || '') + '" placeholder="Your sender ID">' +
+                    '        <input type="text" id="st-at-sender" value="' + self._escapeHtml(messaging.africaTalkingSenderId || '') + '" placeholder="Optional sender ID">' +
+                    '      </div>' +
                     '      </div>' +
                     '    </div>' +
-                    '    <div class="st-form-row">' +
+                    '    <div class="st-messaging-channel-card">' +
+                    '      <div class="st-messaging-channel-head"><i class="fas fa-sms"></i><strong>SMS</strong><span>Optional</span></div>' +
+                    '      <div class="st-form-row">' +
                     '      <div class="form-group">' +
                     '        <label for="st-at-user">Africa\'s Talking Username</label>' +
-                    '        <input type="text" id="st-at-user" value="' + self._escapeHtml(messaging.africaTalkingUsername || '') + '" placeholder="sandbox or live username">' +
+                    '        <input type="text" id="st-at-user" value="' + self._escapeHtml(messaging.africaTalkingUsername || '') + '" placeholder="Optional username">' +
                     '      </div>' +
                     '      <div class="form-group">' +
                     '        <label for="st-at-key">Africa\'s Talking API Key</label>' +
-                    '        <input type="password" id="st-at-key" value="' + self._escapeHtml(messaging.africaTalkingApiKey || '') + '" placeholder="API key">' +
+                    '        <div class="st-secret-input">' +
+                    '          <i class="fas fa-key"></i>' +
+                    '          <input type="password" id="st-at-key" value="' + self._escapeHtml(messaging.africaTalkingApiKey || '') + '" placeholder="Paste API key if SMS is enabled">' +
+                    '        </div>' +
+                    '        <small class="st-help-text">Stored only for optional SMS delivery. In-app alerts work without it.</small>' +
+                    '      </div>' +
                     '      </div>' +
                     '    </div>' +
-                    '    <hr class="st-divider">' +
-                    '    <p class="st-section-desc">Email and WhatsApp still use separate free services. Fill only what you need.</p>' +
-                    '    <div class="st-form-row">' +
+                    '    <div class="st-messaging-channel-card">' +
+                    '      <div class="st-messaging-channel-head"><i class="fas fa-envelope"></i><strong>Email</strong><span>Optional</span></div>' +
+                    '      <div class="st-form-row">' +
                     '      <div class="form-group">' +
                     '        <label for="st-emailjs-service-modal">EmailJS Service ID</label>' +
-                    '        <input type="text" id="st-emailjs-service-modal" value="' + self._escapeHtml(messaging.emailJsServiceId || '') + '" placeholder="service_xxxxx">' +
+                    '        <input type="text" id="st-emailjs-service-modal" value="' + self._escapeHtml(messaging.emailJsServiceId || '') + '" placeholder="Optional service_xxxxx">' +
                     '      </div>' +
                     '      <div class="form-group">' +
                     '        <label for="st-emailjs-template-modal">EmailJS Template ID</label>' +
-                    '        <input type="text" id="st-emailjs-template-modal" value="' + self._escapeHtml(messaging.emailJsTemplateId || '') + '" placeholder="template_xxxxx">' +
+                    '        <input type="text" id="st-emailjs-template-modal" value="' + self._escapeHtml(messaging.emailJsTemplateId || '') + '" placeholder="Optional template_xxxxx">' +
                     '      </div>' +
-                    '    </div>' +
-                    '    <div class="st-form-row">' +
                     '      <div class="form-group">' +
                     '        <label for="st-emailjs-key-modal">EmailJS Public Key</label>' +
-                    '        <input type="text" id="st-emailjs-key-modal" value="' + self._escapeHtml(messaging.emailJsPublicKey || '') + '" placeholder="public key">' +
+                    '        <input type="text" id="st-emailjs-key-modal" value="' + self._escapeHtml(messaging.emailJsPublicKey || '') + '" placeholder="Optional public key">' +
                     '      </div>' +
+                    '      </div>' +
+                    '    </div>' +
+                    '    <div class="st-messaging-channel-card">' +
+                    '      <div class="st-messaging-channel-head"><i class="fab fa-whatsapp"></i><strong>WhatsApp</strong><span>Optional</span></div>' +
+                    '      <div class="st-form-row">' +
                     '      <div class="form-group">' +
                     '        <label for="st-wa-phone-modal">WhatsApp Phone</label>' +
-                    '        <input type="text" id="st-wa-phone-modal" value="' + self._escapeHtml(messaging.whatsappCallMeBotPhone || '') + '" placeholder="2547xxxxxxxx">' +
+                    '        <input type="text" id="st-wa-phone-modal" value="' + self._escapeHtml(messaging.whatsappCallMeBotPhone || '') + '" placeholder="Optional 2547xxxxxxxx">' +
                     '      </div>' +
-                    '    </div>' +
-                    '    <div class="st-form-row">' +
                     '      <div class="form-group">' +
                     '        <label for="st-wa-key-modal">WhatsApp API Key</label>' +
-                    '        <input type="text" id="st-wa-key-modal" value="' + self._escapeHtml(messaging.whatsappCallMeBotApiKey || '') + '" placeholder="WhatsApp API key">' +
+                    '        <input type="text" id="st-wa-key-modal" value="' + self._escapeHtml(messaging.whatsappCallMeBotApiKey || '') + '" placeholder="Optional WhatsApp API key">' +
                     '      </div>' +
-                    '      <div class="form-group"></div>' +
+                    '      </div>' +
                     '    </div>' +
-                    '    <div class="pc-msg-actions">' +
+                    '    <div class="st-messaging-modal-note">' +
+                    '      <i class="fas fa-circle-info"></i>' +
+                    '      <span>Leaving every external field empty is valid. Alerts will still appear on the dashboard, notification panel, and internal messages.</span>' +
+                    '    </div>' +
+                    '    <div class="pc-msg-actions st-messaging-actions">' +
                     '      <button class="btn btn-outline" id="st-messaging-cancel" type="button"><i class="fas fa-times"></i> Cancel</button>' +
                     '      <button class="btn btn-primary" id="st-messaging-save" type="button"><i class="fas fa-save"></i> Save Messaging</button>' +
                     '    </div>' +
@@ -1750,7 +1822,20 @@
 
             self._bindBreadcrumb(container);
             self._bindNotifForm(container);
+            self._bindNotificationTogglePolish(container);
             if (isAdmin) self._bindMessagingModal(container);
+        },
+
+        _bindNotificationTogglePolish: function (container) {
+            container.querySelectorAll('.st-toggle-item .st-switch input').forEach(function (input) {
+                var item = input.closest('.st-toggle-item');
+                var sync = function () {
+                    if (!item) return;
+                    item.classList.toggle('st-toggle-item--active', input.checked);
+                };
+                sync();
+                input.addEventListener('change', sync);
+            });
         },
 
         _bindMessagingModal: function () {
@@ -1826,12 +1911,15 @@
                     var businessId = PharmaFlow.Auth && PharmaFlow.Auth.getBusinessId ? PharmaFlow.Auth.getBusinessId() : null;
                     if (!businessId) throw new Error('No business ID');
 
+                    var expiryWarningDays = normalizeExpiryWarningDays(document.getElementById('st-expiry-warning').value);
+                    document.getElementById('st-expiry-warning').value = expiryWarningDays;
+
                     await window.db.collection('businesses').doc(businessId).update({
                         notifyLowStock: document.getElementById('st-notif-low-stock').checked,
                         notifyExpiry: document.getElementById('st-notif-expiry').checked,
                         notifyNewOrders: document.getElementById('st-notif-orders').checked,
                         lowStockThreshold: parseInt(document.getElementById('st-low-stock-threshold').value) || 10,
-                        expiryWarningDays: parseInt(document.getElementById('st-expiry-warning').value) || 30,
+                        expiryWarningDays: expiryWarningDays,
                         updatedAt: new Date().toISOString()
                     });
 
@@ -1917,7 +2005,19 @@
                 '    </div>' +
                 '    <div class="st-info-item">' +
                 '      <span class="st-info-label">Version</span>' +
-                '      <span class="st-info-value">1.0.0</span>' +
+                '      <span class="st-info-value" id="st-system-version-value">' + self._escapeHtml(self._latestRelease && self._latestRelease.version ? 'v' + self._latestRelease.version : 'Loading...') + '</span>' +
+                '    </div>' +
+                '    <div class="st-info-item">' +
+                '      <span class="st-info-label">Release Type</span>' +
+                '      <span class="st-info-value" id="st-system-version-type">' + self._escapeHtml((self._latestRelease && self._latestRelease.releaseType) || 'Release') + '</span>' +
+                '    </div>' +
+                '    <div class="st-info-item">' +
+                '      <span class="st-info-label">Release Date</span>' +
+                '      <span class="st-info-value" id="st-system-version-date">' + self._escapeHtml(self._latestRelease ? self._formatReleaseDate(self._latestRelease.releaseDate || self._latestRelease.publishedAt) : 'Loading...') + '</span>' +
+                '    </div>' +
+                '    <div class="st-info-item">' +
+                '      <span class="st-info-label">Release Title</span>' +
+                '      <span class="st-info-value" id="st-system-version-title">' + self._escapeHtml((self._latestRelease && self._latestRelease.title) || 'Loading...') + '</span>' +
                 '    </div>' +
                 '    <div class="st-info-item">' +
                 '      <span class="st-info-label">Platform</span>' +
@@ -1932,6 +2032,8 @@
 
             self._bindBreadcrumb(container);
             self._bindSystemForm(container);
+            self.listenReleaseNotes();
+            self.syncSystemVersionInfo();
         },
 
         _bindSystemForm: function (container) {

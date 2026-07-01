@@ -39,6 +39,8 @@
     let ticketCurrentPage = 1;
     let ticketPageSize = 10;
     const PAGE_SIZE = 20;
+    const ALERT_DELIVERY_WRITES_PER_BRANCH = 3;
+    const FIRESTORE_BATCH_WRITE_LIMIT = 450;
 
     /**
      * Build a flat list of all module + sub-module permission keys from NAV_CONFIG.
@@ -144,6 +146,51 @@
             document.body.appendChild(t);
             setTimeout(() => t.classList.add('show'), 10);
             setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 300); }, 3000);
+        },
+
+        _todayKey: function () {
+            return new Date().toISOString().split('T')[0];
+        },
+
+        _normalizeReminderConfig: function (cfg) {
+            cfg = cfg || {};
+            var reminderDay = parseInt(cfg.reminderDay, 10);
+            if (!isFinite(reminderDay) || reminderDay < 1) reminderDay = 5;
+            reminderDay = Math.min(reminderDay, 31);
+            var reminderType = cfg.reminderType || 'payment_due';
+            var message = String(cfg.message || 'Scheduled reminder from administration.').trim() || 'Scheduled reminder from administration.';
+            var amount = Math.max(0, parseFloat(cfg.amount || 0) || 0);
+            var isPayment = reminderType === 'payment_due';
+            return {
+                enabled: cfg.enabled === true,
+                reminderDay: reminderDay,
+                reminderType: reminderType,
+                message: message,
+                amount: isPayment ? amount : 0,
+                dueDate: cfg.dueDate || '',
+                showPayButton: isPayment,
+                allowUserDismiss: cfg.allowUserDismiss !== false,
+                createdBy: cfg.createdBy || 'Auto Reminder'
+            };
+        },
+
+        _safeDocKey: function (value) {
+            return String(value || '')
+                .replace(/[^a-zA-Z0-9_-]/g, '_')
+                .substring(0, 140) || 'item';
+        },
+
+        _commitInChunks: async function (items, writer, maxWritesPerBatch) {
+            const maxItems = Math.max(1, Math.floor((maxWritesPerBatch || FIRESTORE_BATCH_WRITE_LIMIT) / ALERT_DELIVERY_WRITES_PER_BRANCH));
+            let sent = 0;
+            for (let i = 0; i < items.length; i += maxItems) {
+                const chunk = items.slice(i, i + maxItems);
+                const batch = window.db.batch();
+                chunk.forEach(item => writer(batch, item));
+                await batch.commit();
+                sent += chunk.length;
+            }
+            return sent;
         },
 
         cleanup: function () {
@@ -3604,6 +3651,104 @@
             document.getElementById('fal-alert-modal').style.display = 'flex';
         },
 
+        _alertTypeMeta: function (type) {
+            const meta = {
+                payment_due: { label: 'Payment Due', icon: 'fas fa-money-bill-wave', color: 'red', priority: 'high' },
+                warning: { label: 'Warning', icon: 'fas fa-exclamation-triangle', color: 'orange', priority: 'high' },
+                general: { label: 'Notice', icon: 'fas fa-bell', color: 'blue', priority: 'normal' },
+                info: { label: 'Information', icon: 'fas fa-info-circle', color: 'teal', priority: 'normal' },
+                downtime: { label: 'Scheduled Downtime', icon: 'fas fa-power-off', color: 'purple', priority: 'high' },
+                security: { label: 'Security Update', icon: 'fas fa-shield-halved', color: 'red', priority: 'high' },
+                maintenance: { label: 'Maintenance', icon: 'fas fa-wrench', color: 'teal', priority: 'normal' }
+            };
+            return meta[type] || meta.general;
+        },
+
+        _queueFranchiseAlertDelivery: function (batch, alertRef, alert) {
+            const meta = this._alertTypeMeta(alert.type);
+            const createdAt = firebase.firestore.FieldValue.serverTimestamp();
+            const createdBy = alert.createdBy || (PharmaFlow.Auth.userProfile ? (PharmaFlow.Auth.userProfile.displayName || PharmaFlow.Auth.userProfile.email) : 'System');
+            const alertPayload = {
+                businessId: alert.businessId,
+                businessName: alert.businessName,
+                type: alert.type,
+                message: alert.message,
+                amount: alert.amount || 0,
+                dueDate: alert.dueDate || '',
+                showPayButton: !!alert.showPayButton,
+                allowUserDismiss: alert.allowUserDismiss !== false,
+                status: 'active',
+                source: alert.source || 'manual',
+                createdAt: createdAt,
+                createdBy: createdBy,
+                internalMessageSaved: true,
+                externalMessagingOptional: true
+            };
+            batch.set(alertRef, alertPayload);
+
+            const messageDocId = alert.deliveryKey ? 'alert_' + this._safeDocKey(alert.deliveryKey) : null;
+            const msgRef = messageDocId
+                ? window.db.collection('businesses').doc(alert.businessId).collection('messages').doc(messageDocId)
+                : window.db.collection('businesses').doc(alert.businessId).collection('messages').doc();
+            batch.set(msgRef, {
+                subject: meta.label,
+                message: alert.message,
+                senderName: createdBy,
+                senderId: 'superadmin',
+                recipientId: 'all',
+                type: 'franchise-alert',
+                alertType: alert.type,
+                alertId: alertRef.id,
+                priority: meta.priority,
+                read: false,
+                readBy: [],
+                createdAt: createdAt
+            });
+
+            const notificationDocId = alert.deliveryKey ? 'alert_' + this._safeDocKey(alert.deliveryKey) : null;
+            const notifRef = notificationDocId
+                ? window.db.collection('businesses').doc(alert.businessId).collection('notifications').doc(notificationDocId)
+                : window.db.collection('businesses').doc(alert.businessId).collection('notifications').doc();
+            batch.set(notifRef, {
+                title: meta.label,
+                message: alert.message,
+                type: 'franchise-alert',
+                alertType: alert.type,
+                alertId: alertRef.id,
+                icon: meta.icon,
+                color: meta.color,
+                priority: meta.priority,
+                read: false,
+                createdAt: createdAt
+            });
+        },
+
+        _sendAlertToBusinesses: async function (businessDocs, alert) {
+            const activeBiz = (businessDocs || []).filter(d => d && d.data && d.data().isActive !== false);
+            if (!activeBiz.length) return 0;
+            return this._commitInChunks(activeBiz, (batch, biz) => {
+                const deliveryKey = alert.deliveryDateKey
+                    ? [alert.source || 'auto', alert.deliveryDateKey, biz.id, alert.type].map(part => this._safeDocKey(part)).join('_')
+                    : '';
+                const ref = deliveryKey
+                    ? window.db.collection('franchise_alerts').doc('alert_' + deliveryKey)
+                    : window.db.collection('franchise_alerts').doc();
+                this._queueFranchiseAlertDelivery(batch, ref, {
+                    businessId: biz.id,
+                    businessName: biz.data().name || biz.id,
+                    type: alert.type,
+                    message: alert.message,
+                    amount: alert.amount || 0,
+                    dueDate: alert.dueDate || '',
+                    showPayButton: !!alert.showPayButton,
+                    allowUserDismiss: alert.allowUserDismiss !== false,
+                    source: alert.source || 'manual',
+                    createdBy: alert.createdBy || 'System',
+                    deliveryKey: deliveryKey
+                });
+            });
+        },
+
         sendAlert: async function () {
             const targetBiz = document.getElementById('fal-target-biz')?.value;
             const type = document.getElementById('fal-alert-type')?.value;
@@ -3630,34 +3775,26 @@
                 } else if (targetBiz === '__all__') {
                     // Send to all active franchises
                     const bizSnap = await window.db.collection('businesses').get();
-                    const activeBiz = bizSnap.docs.filter(d => d.data().isActive !== false);
-                    const batch = window.db.batch();
-                    activeBiz.forEach(biz => {
-                        const ref = window.db.collection('franchise_alerts').doc();
-                        batch.set(ref, {
-                            businessId: biz.id,
-                            businessName: biz.data().name || biz.id,
-                            type, message, amount, dueDate, showPayButton, allowUserDismiss,
-                            status: 'active',
-                            source: 'manual',
-                            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-                            createdBy: PharmaFlow.Auth.userProfile ? (PharmaFlow.Auth.userProfile.displayName || PharmaFlow.Auth.userProfile.email) : 'System'
-                        });
+                    const createdBy = PharmaFlow.Auth.userProfile ? (PharmaFlow.Auth.userProfile.displayName || PharmaFlow.Auth.userProfile.email) : 'System';
+                    const sent = await this._sendAlertToBusinesses(bizSnap.docs, {
+                        type, message, amount, dueDate, showPayButton, allowUserDismiss,
+                        source: 'manual',
+                        createdBy: createdBy
                     });
-                    await batch.commit();
-                    this.showToast('Alert sent to ' + activeBiz.length + ' franchise(s)!');
+                    this.showToast('Alert sent to ' + sent + ' franchise(s)!');
                 } else {
                     // Send to single franchise
                     const bizDoc = await window.db.collection('businesses').doc(targetBiz).get();
-                    await window.db.collection('franchise_alerts').add({
+                    const batch = window.db.batch();
+                    const ref = window.db.collection('franchise_alerts').doc();
+                    this._queueFranchiseAlertDelivery(batch, ref, {
                         businessId: targetBiz,
                         businessName: bizDoc.exists ? (bizDoc.data().name || targetBiz) : targetBiz,
                         type, message, amount, dueDate, showPayButton, allowUserDismiss,
-                        status: 'active',
                         source: 'manual',
-                        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
                         createdBy: PharmaFlow.Auth.userProfile ? (PharmaFlow.Auth.userProfile.displayName || PharmaFlow.Auth.userProfile.email) : 'System'
                     });
+                    await batch.commit();
                     this.showToast('Alert sent!');
                 }
                 document.getElementById('fal-alert-modal').style.display = 'none';
@@ -4187,16 +4324,23 @@
         },
 
         saveAutoReminderConfig: async function () {
-            const enabled = document.getElementById('fal-auto-enabled')?.checked || false;
-            const reminderDay = parseInt(document.getElementById('fal-auto-day')?.value) || 5;
-            const reminderType = document.getElementById('fal-auto-type')?.value || 'payment_due';
-            const message = document.getElementById('fal-auto-message')?.value?.trim() || 'Scheduled reminder from administration.';
-            const amount = parseFloat(document.getElementById('fal-auto-amount')?.value) || 0;
-            const allowUserDismiss = document.getElementById('fal-auto-user-dismiss')?.checked !== false;
+            const cfg = this._normalizeReminderConfig({
+                enabled: document.getElementById('fal-auto-enabled')?.checked || false,
+                reminderDay: document.getElementById('fal-auto-day')?.value,
+                reminderType: document.getElementById('fal-auto-type')?.value || 'payment_due',
+                message: document.getElementById('fal-auto-message')?.value?.trim() || 'Scheduled reminder from administration.',
+                amount: parseFloat(document.getElementById('fal-auto-amount')?.value) || 0,
+                allowUserDismiss: document.getElementById('fal-auto-user-dismiss')?.checked !== false
+            });
 
             try {
                 await window.db.collection('system_config').doc('auto_reminders').set({
-                    enabled, reminderDay, reminderType, message, amount, allowUserDismiss,
+                    enabled: cfg.enabled,
+                    reminderDay: cfg.reminderDay,
+                    reminderType: cfg.reminderType,
+                    message: cfg.message,
+                    amount: cfg.amount,
+                    allowUserDismiss: cfg.allowUserDismiss,
                     updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
                     updatedBy: PharmaFlow.Auth.userProfile ? (PharmaFlow.Auth.userProfile.displayName || PharmaFlow.Auth.userProfile.email) : 'System'
                 }, { merge: true });
@@ -4209,35 +4353,33 @@
 
         triggerAutoRemindersNow: async function () {
             if (!(await PharmaFlow.confirm('Send this reminder to all active franchises right now?', { title: 'Send Reminders', confirmText: 'Send Now' }))) return;
-            const reminderType = document.getElementById('fal-auto-type')?.value || 'payment_due';
-            const message = document.getElementById('fal-auto-message')?.value?.trim() || 'Scheduled reminder from administration.';
-            const amount = parseFloat(document.getElementById('fal-auto-amount')?.value) || 0;
-            const allowUserDismiss = document.getElementById('fal-auto-user-dismiss')?.checked !== false;
-            const isPayment = reminderType === 'payment_due';
+            const cfg = this._normalizeReminderConfig({
+                reminderType: document.getElementById('fal-auto-type')?.value || 'payment_due',
+                message: document.getElementById('fal-auto-message')?.value?.trim() || 'Scheduled reminder from administration.',
+                amount: parseFloat(document.getElementById('fal-auto-amount')?.value) || 0,
+                allowUserDismiss: document.getElementById('fal-auto-user-dismiss')?.checked !== false,
+                createdBy: 'Manual Automation Run'
+            });
 
             try {
                 const bizSnap = await window.db.collection('businesses').get();
-                const activeBiz = bizSnap.docs.filter(d => d.data().isActive !== false);
-                const batch = window.db.batch();
-                activeBiz.forEach(biz => {
-                    const ref = window.db.collection('franchise_alerts').doc();
-                    batch.set(ref, {
-                        businessId: biz.id,
-                        businessName: biz.data().name || biz.id,
-                        type: reminderType,
-                        message: message,
-                        amount: isPayment ? amount : 0,
-                        dueDate: '',
-                        showPayButton: isPayment,
-                        allowUserDismiss: allowUserDismiss,
-                        status: 'active',
-                        source: 'auto',
-                        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-                        createdBy: 'Auto Reminder'
-                    });
+                const sent = await this._sendAlertToBusinesses(bizSnap.docs, {
+                    type: cfg.reminderType,
+                    message: cfg.message,
+                    amount: cfg.amount,
+                    dueDate: '',
+                    showPayButton: cfg.showPayButton,
+                    allowUserDismiss: cfg.allowUserDismiss,
+                    source: 'auto-manual',
+                    createdBy: cfg.createdBy,
+                    deliveryDateKey: 'manual_' + this._todayKey() + '_' + Date.now()
                 });
-                await batch.commit();
-                this.showToast('Reminders sent to ' + activeBiz.length + ' franchise(s)!');
+                await window.db.collection('system_config').doc('auto_reminders').set({
+                    lastManualRunAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    lastManualRunCount: sent,
+                    lastManualRunBy: PharmaFlow.Auth.userProfile ? (PharmaFlow.Auth.userProfile.displayName || PharmaFlow.Auth.userProfile.email) : 'System'
+                }, { merge: true });
+                this.showToast('Reminders sent to ' + sent + ' franchise(s)!');
             } catch (err) {
                 this.showToast('Failed: ' + err.message, 'error');
             }
@@ -4246,53 +4388,104 @@
         // Called on app init to check if auto reminders should fire today
         checkAutoReminders: async function () {
             try {
-                const doc = await window.db.collection('system_config').doc('auto_reminders').get();
-                if (!doc.exists || !doc.data().enabled) return;
+                if (!window.db || !this.isSuperAdmin()) return;
+                const ref = window.db.collection('system_config').doc('auto_reminders');
+                const todayStr = this._todayKey();
+                const lockId = 'run-' + todayStr + '-' + Date.now();
+                const shouldRun = await window.db.runTransaction(async tx => {
+                    const doc = await tx.get(ref);
+                    if (!doc.exists) return false;
+                    const cfg = this._normalizeReminderConfig(doc.data());
+                    if (!cfg.enabled) return false;
+                    const dayOfMonth = new Date().getDate();
+                    if (dayOfMonth !== cfg.reminderDay) return false;
+                    const status = doc.data().autoRunStatus || '';
+                    if (doc.data().lastAutoSent === todayStr) return false;
+                    if (doc.data().autoRunLockDate === todayStr && status === 'running') return false;
+                    tx.set(ref, {
+                        autoRunLockDate: todayStr,
+                        autoRunLockId: lockId,
+                        autoRunStatus: 'running',
+                        autoRunStartedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    }, { merge: true });
+                    return true;
+                });
+                if (!shouldRun) return;
 
-                const cfg = doc.data();
-                const today = new Date();
-                const dayOfMonth = today.getDate();
-
-                if (dayOfMonth !== (cfg.reminderDay || 5)) return;
-
-                // Check if today's reminder was already sent
-                const todayStr = today.toISOString().split('T')[0];
-                if (cfg.lastAutoSent === todayStr) return;
-
-                // Send reminders
-                const rType = cfg.reminderType || 'payment_due';
-                const isPayment = rType === 'payment_due';
-                const allowUserDismiss = cfg.allowUserDismiss !== false;
+                const doc = await ref.get();
+                const cfg = this._normalizeReminderConfig(doc.data());
                 const bizSnap = await window.db.collection('businesses').get();
-                const activeBiz = bizSnap.docs.filter(d => d.data().isActive !== false);
-                const batch = window.db.batch();
-                activeBiz.forEach(biz => {
-                    const ref = window.db.collection('franchise_alerts').doc();
-                    batch.set(ref, {
-                        businessId: biz.id,
-                        businessName: biz.data().name || biz.id,
-                        type: rType,
-                        message: cfg.message || 'Scheduled reminder from administration.',
-                        amount: isPayment ? (cfg.amount || 0) : 0,
-                        dueDate: '',
-                        showPayButton: isPayment,
-                        allowUserDismiss: allowUserDismiss,
-                        status: 'active',
-                        source: 'auto',
-                        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-                        createdBy: 'Auto Reminder'
-                    });
-                });
-                await batch.commit();
-
-                // Mark as sent today
-                await window.db.collection('system_config').doc('auto_reminders').update({
-                    lastAutoSent: todayStr
+                const sent = await this._sendAlertToBusinesses(bizSnap.docs, {
+                    type: cfg.reminderType,
+                    message: cfg.message,
+                    amount: cfg.amount,
+                    dueDate: '',
+                    showPayButton: cfg.showPayButton,
+                    allowUserDismiss: cfg.allowUserDismiss,
+                    source: 'auto',
+                    createdBy: 'Auto Reminder',
+                    deliveryDateKey: todayStr
                 });
 
-                console.log('Auto-reminders sent to', activeBiz.length, 'franchises');
+                await ref.set({
+                    lastAutoSent: todayStr,
+                    lastAutoSentAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    lastAutoSentCount: sent,
+                    autoRunStatus: 'sent',
+                    autoRunCompletedAt: firebase.firestore.FieldValue.serverTimestamp()
+                }, { merge: true });
+
+                console.log('Auto-reminders sent to', sent, 'franchises');
             } catch (err) {
                 console.error('Auto-reminder check error:', err);
+                try {
+                    await window.db.collection('system_config').doc('auto_reminders').set({
+                        autoRunStatus: 'failed',
+                        autoRunError: err && err.message ? err.message : String(err),
+                        autoRunFailedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    }, { merge: true });
+                } catch (writeErr) {
+                    console.error('Auto-reminder failure status update failed:', writeErr);
+                }
+            }
+        },
+
+        startAutoReminderMonitor: function () {
+            if (!this.isSuperAdmin()) return;
+            if (this._autoReminderTimer) clearInterval(this._autoReminderTimer);
+            this.checkAutoReminders();
+            this._autoReminderTimer = setInterval(() => {
+                this.checkAutoReminders();
+            }, 30 * 60 * 1000);
+        },
+
+        stopAutoReminderMonitor: function () {
+            if (this._autoReminderTimer) {
+                clearInterval(this._autoReminderTimer);
+                this._autoReminderTimer = null;
+            }
+        },
+
+        ensureAutoReminderDefaults: async function () {
+            if (!window.db || !this.isSuperAdmin()) return;
+            const ref = window.db.collection('system_config').doc('auto_reminders');
+            try {
+                await window.db.runTransaction(async tx => {
+                    const doc = await tx.get(ref);
+                    if (doc.exists) return;
+                    tx.set(ref, {
+                        enabled: false,
+                        reminderDay: 5,
+                        reminderType: 'payment_due',
+                        message: 'Scheduled reminder from administration.',
+                        amount: 0,
+                        allowUserDismiss: true,
+                        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+                        createdBy: 'System'
+                    });
+                });
+            } catch (err) {
+                console.error('Ensure auto-reminder defaults error:', err);
             }
         },
 
