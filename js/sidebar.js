@@ -158,6 +158,19 @@
             ]
         },
         {
+            id: 'human-resource',
+            label: 'Human Resource',
+            icon: 'fas fa-people-group',
+            roles: ['superadmin', 'admin'],
+            children: [
+                { id: 'hr-overview', label: 'Overview', icon: 'fas fa-chart-pie' },
+                { id: 'hr-staff', label: 'Staff', icon: 'fas fa-users-gear' },
+                { id: 'hr-payroll', label: 'Payroll', icon: 'fas fa-money-check-dollar' },
+                { id: 'hr-payslips', label: 'Payslips', icon: 'fas fa-file-invoice-dollar' },
+                { id: 'hr-reports', label: 'HR Reports', icon: 'fas fa-chart-column' }
+            ]
+        },
+        {
             id: 'accounts',
             label: 'Accounts',
             icon: 'fas fa-calculator',

@@ -96,6 +96,16 @@
             return d.toISOString().split('T')[0];
         },
 
+        formatDisplayDate: function (value, includeTime) {
+            if (!value) return '—';
+            const d = value.toDate ? value.toDate() : new Date(value);
+            if (Number.isNaN(d.getTime())) return '—';
+            const date = d.toLocaleDateString('en-KE', { year: 'numeric', month: 'short', day: 'numeric' });
+            if (!includeTime) return date;
+            const time = d.toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' });
+            return date + (time ? '<br><small style="color:#94a3b8">' + time + '</small>' : '');
+        },
+
         getLoanStatusFromValues: function (paymentStatus, loanDueDate, outstandingAmount) {
             const outstanding = parseFloat(outstandingAmount) || 0;
             if (paymentStatus === 'paid' || outstanding <= 0) {
@@ -1883,6 +1893,7 @@
                         batchNumber: batchRecord.batchNumber,
                         expiryDate: item.expiryDate,
                         addedBy: addedBy,
+                        addedAt: now,
                         createdAt: now
                     });
                 });
@@ -2498,7 +2509,8 @@
                             <thead>
                                 <tr>
                                     <th>#</th>
-                                    <th>Date</th>
+                                    <th>Added Date</th>
+                                    <th>Expiry Date</th>
                                     <th>Product</th>
                                     <th>SKU</th>
                                     <th>Order</th>
@@ -2511,7 +2523,7 @@
                                 </tr>
                             </thead>
                             <tbody id="sh-tbody">
-                                <tr><td colspan="11" class="dda-loading"><i class="fas fa-spinner fa-spin"></i> Loading stock history...</td></tr>
+                                <tr><td colspan="12" class="dda-loading"><i class="fas fa-spinner fa-spin"></i> Loading stock history...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -2546,7 +2558,9 @@
                 .then(function (snap) {
                     self._shAllData = snap.docs.map(function (d) { return Object.assign({ id: d.id }, d.data()); });
                     self._shAllData.sort(function (a, b) {
-                        return (b.createdAt || '').localeCompare(a.createdAt || '');
+                        var ad = a.createdAt && a.createdAt.toDate ? a.createdAt.toDate() : new Date(a.createdAt || 0);
+                        var bd = b.createdAt && b.createdAt.toDate ? b.createdAt.toDate() : new Date(b.createdAt || 0);
+                        return bd.getTime() - ad.getTime();
                     });
                     self._updateStockHistoryStats();
                     self._filterStockHistory('');
@@ -2554,7 +2568,7 @@
                 .catch(function (err) {
                     console.error('Stock history load error:', err);
                     var tbody = document.getElementById('sh-tbody');
-                    if (tbody) tbody.innerHTML = '<tr><td colspan="11" class="dda-loading"><i class="fas fa-exclamation-circle"></i> Failed to load stock history</td></tr>';
+                    if (tbody) tbody.innerHTML = '<tr><td colspan="12" class="dda-loading"><i class="fas fa-exclamation-circle"></i> Failed to load stock history</td></tr>';
                 });
         },
 
@@ -2571,7 +2585,7 @@
         _filterStockHistory: function (query) {
             if (query) {
                 this._shFilteredData = this._shAllData.filter(function (d) {
-                    var h = ((d.productName || '') + ' ' + (d.sku || '') + ' ' + (d.orderId || '') + ' ' + (d.supplierName || '') + ' ' + (d.addedBy || '')).toLowerCase();
+                    var h = ((d.productName || '') + ' ' + (d.sku || '') + ' ' + (d.orderId || '') + ' ' + (d.supplierName || '') + ' ' + (d.addedBy || '') + ' ' + (d.expiryDate || '')).toLowerCase();
                     return h.indexOf(query) !== -1;
                 });
             } else {
@@ -2589,7 +2603,7 @@
             var page = data.slice(start, start + SH_PAGE_SIZE);
 
             if (page.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="11" class="dda-loading"><i class="fas fa-inbox"></i> No stock history found</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="12" class="dda-loading"><i class="fas fa-inbox"></i> No stock history found</td></tr>';
                 this._renderShPagination();
                 return;
             }
@@ -2598,9 +2612,12 @@
                 var dt = d.createdAt ? new Date(d.createdAt) : null;
                 var dateStr = dt ? dt.toLocaleDateString('en-KE', { year: 'numeric', month: 'short', day: 'numeric' }) : '—';
                 var timeStr = dt ? dt.toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' }) : '';
+                var addedDate = self.formatDisplayDate(d.createdAt || d.addedAt, true);
+                var expiryDate = self.formatDisplayDate(d.expiryDate, false);
                 return '<tr>' +
                     '<td>' + (start + i + 1) + '</td>' +
-                    '<td>' + dateStr + (timeStr ? '<br><small style="color:#94a3b8">' + timeStr + '</small>' : '') + '</td>' +
+                    '<td>' + addedDate + '</td>' +
+                    '<td>' + expiryDate + '</td>' +
                     '<td><strong>' + self.escapeHtml(d.productName) + '</strong></td>' +
                     '<td><code>' + self.escapeHtml(d.sku || '') + '</code></td>' +
                     '<td><code class="sales-receipt-code">' + self.escapeHtml(d.orderId || '') + '</code></td>' +

@@ -11,16 +11,18 @@
     /* ─── State ─── */
     let rptUnsubs = [];
     let rptSales = [], rptExpenses = [], rptInventory = [], rptPatients = [];
-    let rptBills = [], rptWholesale = [], rptOrders = [];
-    let rptDataReady = { sales: false, expenses: false, inventory: false, patients: false, bills: false, wholesale: false, orders: false };
+    let rptBills = [], rptWholesale = [], rptOrders = [], rptHrStaff = [], rptHrProfiles = [], rptHrPayroll = [];
+    let rptDataReady = { sales: false, expenses: false, inventory: false, patients: false, bills: false, wholesale: false, orders: false, hrStaff: false, hrProfiles: false, hrPayroll: false };
     let rptCurrentTab = 'reports-overview';
     let rptDateRange = 'month'; // today | week | month | year | custom
     let rptCustomFrom = '', rptCustomTo = '';
     let rptContainer = null;
+    let rptSalesStaffFilter = 'all';
     /** Matches listeners to Auth franchise / branch */
     let rptListenerBusinessId = null;
     let rptRefreshRaf = null;
-    let rptStatCharts = [];
+    let rptStatCharts = {};
+    let rptStatisticsShellKey = '';
 
     const Reports = {
         /* ─── Helpers ─── */
@@ -30,6 +32,14 @@
                 : 'KSH ' + new Intl.NumberFormat('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount || 0);
         },
         _esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; },
+        _attr(s) {
+            return String(s == null ? '' : s)
+                .replace(/&/g, '&amp;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+        },
         _bid() {
             return PharmaFlow.Auth && PharmaFlow.Auth.getBusinessId ? PharmaFlow.Auth.getBusinessId() : null;
         },
@@ -79,6 +89,82 @@
             return (s.paymentMethod || '').toUpperCase();
         },
 
+        _currentUserKey() {
+            const auth = PharmaFlow.Auth || {};
+            const user = auth.currentUser || {};
+            const profile = auth.userProfile || {};
+            return user.uid || profile.id || profile.uid || '';
+        },
+
+        _currentUserLabel() {
+            const auth = PharmaFlow.Auth || {};
+            const profile = auth.userProfile || {};
+            const user = auth.currentUser || {};
+            return profile.displayName || profile.name || user.displayName || profile.email || user.email || 'Current user';
+        },
+
+        _saleStaffKey(sale) {
+            return sale.soldByUid || sale.createdByUid || sale.userId || sale.cashierUid || sale.soldBy || sale.createdBy || 'Unknown';
+        },
+
+        _saleStaffLabel(sale) {
+            return sale.soldBy || sale.createdBy || sale.cashierName || sale.userName || sale.staffName || 'Unknown';
+        },
+
+        _salesStaffOptions(sales) {
+            const map = new Map();
+            sales.forEach(s => {
+                const key = this._saleStaffKey(s);
+                const label = this._saleStaffLabel(s);
+                if (!map.has(key)) map.set(key, { key, label, count: 0, revenue: 0 });
+                const row = map.get(key);
+                row.count += 1;
+                row.revenue += (s.total || 0);
+                if (row.label === 'Unknown' && label !== 'Unknown') row.label = label;
+            });
+            return Array.from(map.values()).sort((a, b) => b.revenue - a.revenue || a.label.localeCompare(b.label));
+        },
+
+        _filterSalesByStaff(sales, staffKey) {
+            if (!staffKey || staffKey === 'all') return sales;
+            if (staffKey === 'current') {
+                const uid = this._currentUserKey();
+                const label = this._currentUserLabel();
+                return sales.filter(s => {
+                    const saleKey = this._saleStaffKey(s);
+                    return (uid && saleKey === uid) || this._saleStaffLabel(s) === label;
+                });
+            }
+            return sales.filter(s => this._saleStaffKey(s) === staffKey);
+        },
+
+        _staffLabelForFilter(staffKey, sales) {
+            if (!staffKey || staffKey === 'all') return 'All staff';
+            if (staffKey === 'current') return this._currentUserLabel();
+            const hit = this._salesStaffOptions(sales || rptSales).find(st => st.key === staffKey);
+            return hit ? hit.label : 'Selected Staff';
+        },
+
+        _staffSalesSummary(sales) {
+            const map = new Map();
+            sales.forEach(s => {
+                const key = this._saleStaffKey(s);
+                const label = this._saleStaffLabel(s);
+                if (!map.has(key)) {
+                    map.set(key, { key, label, transactions: 0, items: 0, revenue: 0, profit: 0, lastSale: null });
+                }
+                const row = map.get(key);
+                row.transactions += 1;
+                row.items += (s.itemCount || 0);
+                row.revenue += (s.total || 0);
+                row.profit += (s.totalProfit || 0);
+                const d = this._dateObj(s.createdAt || s.saleDate);
+                if (d && (!row.lastSale || d > row.lastSale)) row.lastSale = d;
+                if (row.label === 'Unknown' && label !== 'Unknown') row.label = label;
+            });
+            return Array.from(map.values()).sort((a, b) => b.revenue - a.revenue || a.label.localeCompare(b.label));
+        },
+
         _saleReportHeaders() {
             return PharmaFlow.SALE_REPORT_HEADERS || [
                 'Receipt #', 'Date', 'Status', 'Items', 'Subtotal', 'Discount',
@@ -118,7 +204,12 @@
         },
 
         _isSaleReportMoneyColumn(header) {
-            return ['Subtotal', 'Discount', 'Total', 'Profit'].includes(header);
+            return [
+                'Subtotal', 'Discount', 'Total', 'Profit', 'Amount', 'Revenue',
+                'Avg Sale', 'Cost Value', 'Retail Value', 'Grand Total', 'Paid',
+                'Balance', 'Buy Price', 'Sell Price', 'Base Pay', 'Basic Pay',
+                'Allowances', 'Gross Pay', 'Deductions', 'Net Pay'
+            ].includes(header);
         },
 
         _formatReportPreviewCell(header, value) {
@@ -131,7 +222,7 @@
                 return String(value);
             }
             if (typeof value === 'number') {
-                if (header === 'Items' || header === 'Qty' || header === 'Visits') return String(value);
+                if (['Items', 'Qty', 'Qty Sold', 'Visits', 'Transactions', 'Items Sold', 'Sales Count'].includes(header)) return String(value);
                 if (this._isSaleReportMoneyColumn(header)) return this._fc(value);
             }
             return value == null ? '' : String(value);
@@ -171,12 +262,13 @@
                 rptRefreshRaf = null;
             }
             this._destroyStatisticsCharts();
+            rptStatisticsShellKey = '';
             rptUnsubs.forEach(fn => fn());
             rptUnsubs = [];
             rptListenerBusinessId = null;
             rptSales = []; rptExpenses = []; rptInventory = []; rptPatients = [];
-            rptBills = []; rptWholesale = []; rptOrders = [];
-            rptDataReady = { sales: false, expenses: false, inventory: false, patients: false, bills: false, wholesale: false, orders: false };
+            rptBills = []; rptWholesale = []; rptOrders = []; rptHrStaff = []; rptHrProfiles = []; rptHrPayroll = [];
+            rptDataReady = { sales: false, expenses: false, inventory: false, patients: false, bills: false, wholesale: false, orders: false, hrStaff: false, hrProfiles: false, hrPayroll: false };
             rptContainer = null;
         },
 
@@ -189,7 +281,10 @@
                 { name: 'patients', arr: 'rptPatients', key: 'patients' },
                 { name: 'patient_bills', arr: 'rptBills', key: 'bills' },
                 { name: 'wholesale_orders', arr: 'rptWholesale', key: 'wholesale' },
-                { name: 'orders', arr: 'rptOrders', key: 'orders' }
+                { name: 'orders', arr: 'rptOrders', key: 'orders' },
+                { name: 'hr_staff', arr: 'rptHrStaff', key: 'hrStaff' },
+                { name: 'hr_staff_profiles', arr: 'rptHrProfiles', key: 'hrProfiles' },
+                { name: 'hr_payroll', arr: 'rptHrPayroll', key: 'hrPayroll' }
             ];
             const refs = {
                 rptSales: v => { rptSales = v; },
@@ -198,7 +293,10 @@
                 rptPatients: v => { rptPatients = v; },
                 rptBills: v => { rptBills = v; },
                 rptWholesale: v => { rptWholesale = v; },
-                rptOrders: v => { rptOrders = v; }
+                rptOrders: v => { rptOrders = v; },
+                rptHrStaff: v => { rptHrStaff = v; },
+                rptHrProfiles: v => { rptHrProfiles = v; },
+                rptHrPayroll: v => { rptHrPayroll = v; }
             };
             colls.forEach(c => {
                 const ref = getBusinessCollection(businessId, c.name);
@@ -241,8 +339,11 @@
         },
 
         _destroyStatisticsCharts() {
-            rptStatCharts.forEach(ch => { try { ch.destroy(); } catch (e) { /* noop */ } });
-            rptStatCharts = [];
+            Object.keys(rptStatCharts).forEach(id => {
+                try { rptStatCharts[id].destroy(); } catch (e) { /* noop */ }
+            });
+            rptStatCharts = {};
+            rptStatisticsShellKey = '';
         },
 
         _statisticsTheme() {
@@ -256,6 +357,61 @@
 
         _statColors() {
             return ['#2563eb', '#16a34a', '#ea580c', '#9333ea', '#dc2626', '#0891b2', '#ca8a04', '#db2777', '#4f46e5', '#059669'];
+        },
+
+        _statisticsDataReady() {
+            return ['sales', 'expenses', 'inventory', 'patients', 'bills', 'wholesale', 'orders']
+                .every(key => rptDataReady[key]);
+        },
+
+        _statisticsShellKey(from, to, chartUnavailable) {
+            return [from, to, chartUnavailable ? 'no-chart' : 'chart'].join('|');
+        },
+
+        _setText(selector, value) {
+            const el = rptContainer && rptContainer.querySelector(selector);
+            if (el) el.textContent = value;
+        },
+
+        _updateStatisticsKpis(kpis) {
+            this._setText('[data-rpt-stat="salesRevenue"]', this._fc(kpis.totalRev));
+            this._setText('[data-rpt-stat="patientBilling"]', this._fc(kpis.totalBilling));
+            this._setText('[data-rpt-stat="expenses"]', this._fc(kpis.totalExp));
+            this._setText('[data-rpt-stat="profit"]', this._fc(kpis.profit));
+            this._setText('[data-rpt-stat="inventoryValue"]', this._fc(kpis.inventoryValue));
+            this._setText('[data-rpt-stat="patients"]', kpis.patients);
+            this._setText('[data-rpt-stat="orders"]', kpis.orders);
+            this._setText('[data-rpt-stat="wholesale"]', kpis.wholesale);
+        },
+
+        _updateChartData(id, labels, datasets) {
+            const chart = rptStatCharts[id];
+            if (!chart) return false;
+            chart.data.labels = labels;
+            datasets.forEach((data, idx) => {
+                if (chart.data.datasets[idx]) chart.data.datasets[idx].data = data;
+            });
+            chart.update('none');
+            return true;
+        },
+
+        _updateStatisticsCharts(payload) {
+            return [
+                this._updateChartData('rpt-stat-chart-revenue', payload.revenue.labels, [payload.revenue.data]),
+                this._updateChartData('rpt-stat-chart-expenses', payload.expenses.labels, [payload.expenses.data]),
+                this._updateChartData('rpt-stat-chart-sales-line', payload.salesLine.labels, [payload.salesLine.data]),
+                this._updateChartData('rpt-stat-chart-payments-bar', payload.payments.labels, [payload.payments.amounts]),
+                this._updateChartData('rpt-stat-chart-payments-count', payload.payments.labels, [payload.payments.saleCounts]),
+                this._updateChartData('rpt-stat-chart-inventory', payload.inventory.labels, [payload.inventory.data]),
+                this._updateChartData('rpt-stat-chart-orders', payload.orders.labels, [payload.orders.data]),
+                this._updateChartData('rpt-stat-chart-wholesale', payload.wholesale.labels, [payload.wholesale.data]),
+                this._updateChartData('rpt-stat-chart-patients', payload.patients.labels, [payload.patients.data]),
+                this._updateChartData('rpt-stat-chart-sales-count', payload.salesCount.labels, [payload.salesCount.data]),
+                this._updateChartData('rpt-stat-chart-staff', payload.staff.labels, [payload.staff.data]),
+                this._updateChartData('rpt-stat-chart-products', payload.products.labels, [payload.products.data]),
+                this._updateChartData('rpt-stat-chart-stock-alerts', payload.stockAlerts.labels, [payload.stockAlerts.data]),
+                this._updateChartData('rpt-stat-chart-billing', payload.billing.labels, [payload.billing.data])
+            ].every(Boolean);
         },
 
         _dailySalesSeries(sales) {
@@ -280,6 +436,75 @@
                 cursor.setDate(cursor.getDate() + 1);
             }
             return { labels, data };
+        },
+
+        _dailySalesCountSeries(sales) {
+            const map = {};
+            sales.forEach(s => {
+                const d = this._dateObj(s.createdAt || s.saleDate);
+                if (!d || isNaN(d.getTime())) return;
+                const key = d.toISOString().slice(0, 10);
+                map[key] = (map[key] || 0) + 1;
+            });
+            const { from, to } = this._getRange();
+            const labels = [];
+            const data = [];
+            const cursor = new Date(from + 'T12:00:00');
+            const end = new Date(to + 'T12:00:00');
+            if (isNaN(cursor.getTime()) || isNaN(end.getTime())) return { labels, data };
+            let guard = 0;
+            while (cursor <= end && guard++ < 400) {
+                const key = cursor.toISOString().slice(0, 10);
+                labels.push(cursor.toLocaleDateString('en-KE', { month: 'short', day: 'numeric' }));
+                data.push(map[key] || 0);
+                cursor.setDate(cursor.getDate() + 1);
+            }
+            return { labels, data };
+        },
+
+        _topStaffSeries(sales) {
+            const staff = this._staffSalesSummary(sales).slice(0, 10);
+            return {
+                labels: staff.length ? staff.map(s => s.label) : ['No staff sales'],
+                data: staff.length ? staff.map(s => s.revenue) : [0]
+            };
+        },
+
+        _topProductSeries(sales) {
+            const products = {};
+            sales.forEach(s => {
+                (s.items || []).forEach(it => {
+                    const name = it.name || 'Unknown product';
+                    products[name] = (products[name] || 0) + (it.lineTotal || 0);
+                });
+            });
+            const rows = Object.entries(products).sort((a, b) => b[1] - a[1]).slice(0, 10);
+            return {
+                labels: rows.length ? rows.map(r => r[0]) : ['No product sales'],
+                data: rows.length ? rows.map(r => r[1]) : [0]
+            };
+        },
+
+        _stockAlertSeries(inventory) {
+            const out = inventory.filter(i => this._sellableQty(i) <= 0).length;
+            const low = inventory.filter(i => {
+                const qty = this._sellableQty(i);
+                return qty > 0 && qty <= (i.reorderLevel || 10);
+            }).length;
+            const expiring = inventory.filter(i => this._invIsExpiringSoon(i)).length;
+            const expired = inventory.filter(i => this._invIsExpired(i)).length;
+            return { labels: ['Out', 'Low', 'Expiring', 'Expired'], data: [out, low, expiring, expired] };
+        },
+
+        _billingSeries(bills) {
+            const billed = bills.reduce((sum, b) => sum + (b.totalAmount || b.grandTotal || 0), 0);
+            const paid = bills.reduce((sum, b) => sum + (b.totalPaid || b.amountPaid || b.paidAmount || 0), 0);
+            const balance = bills.reduce((sum, b) => {
+                const total = b.totalAmount || b.grandTotal || 0;
+                const got = b.totalPaid || b.amountPaid || b.paidAmount || 0;
+                return sum + Math.max(0, (b.balanceDue != null ? b.balanceDue : total - got));
+            }, 0);
+            return { labels: ['Billed', 'Paid', 'Balance'], data: [billed, paid, balance] };
         },
 
         _summarizeForPie(entries, maxSlices) {
@@ -603,11 +828,17 @@
          * TAB 2: SALES REPORTS
          * ================================ */
         _renderSalesTab(body) {
-            const sales = this._fSales();
+            const allSales = this._fSales();
+            const staffOptions = this._salesStaffOptions(allSales);
+            if (rptSalesStaffFilter !== 'all' && rptSalesStaffFilter !== 'current' && !staffOptions.some(s => s.key === rptSalesStaffFilter)) {
+                rptSalesStaffFilter = 'all';
+            }
+            const sales = this._filterSalesByStaff(allSales, rptSalesStaffFilter);
             const totalRev = sales.reduce((s, d) => s + (d.total || 0), 0);
             const totalProfit = sales.reduce((s, d) => s + (d.totalProfit || 0), 0);
             const totalItems = sales.reduce((s, d) => s + (d.itemCount || 0), 0);
             const avgSale = sales.length ? totalRev / sales.length : 0;
+            const activeStaff = this._staffSalesSummary(sales).length;
 
             // Daily aggregation
             const dailyMap = {};
@@ -638,12 +869,28 @@
             const topProducts = Object.entries(prodMap).sort((a, b) => b[1].revenue - a[1].revenue).slice(0, 15);
 
             // Sales by staff
-            const staffMap = {};
-            sales.forEach(s => { const n = s.soldBy || 'Unknown'; staffMap[n] = (staffMap[n] || 0) + (s.total || 0); });
-            const staffArr = Object.entries(staffMap).sort((a, b) => b[1] - a[1]);
-            const maxStaff = staffArr.length ? staffArr[0][1] : 1;
+            const staffArr = this._staffSalesSummary(allSales);
+            const visibleStaffArr = this._staffSalesSummary(sales);
+            const maxStaff = staffArr.length ? staffArr[0].revenue : 1;
 
             body.innerHTML = `
+            <div class="card rpt-sales-filter-card">
+                <div class="rpt-sales-filter-grid">
+                    <div>
+                        <label for="rpt-sales-staff-filter">Staff / User</label>
+                        <select id="rpt-sales-staff-filter" class="form-control">
+                            <option value="all" ${rptSalesStaffFilter === 'all' ? 'selected' : ''}>All staff</option>
+                            <option value="current" ${rptSalesStaffFilter === 'current' ? 'selected' : ''}>Logged-in staff (${this._esc(this._currentUserLabel())})</option>
+                            ${staffOptions.map(st => `<option value="${this._attr(st.key)}" ${rptSalesStaffFilter === st.key ? 'selected' : ''}>${this._esc(st.label)} (${st.count})</option>`).join('')}
+                        </select>
+                    </div>
+                    <div class="rpt-sales-filter-summary">
+                        <span>${sales.length} of ${allSales.length} transactions</span>
+                        <strong>${this._fc(totalRev)}</strong>
+                    </div>
+                </div>
+            </div>
+
             <div class="rpt-kpi-grid rpt-kpi-grid-4">
                 <div class="rpt-kpi-card rpt-kpi-blue"><div class="rpt-kpi-icon"><i class="fas fa-coins"></i></div>
                     <div class="rpt-kpi-info"><span class="rpt-kpi-value">${this._fc(totalRev)}</span><span class="rpt-kpi-label">Total Revenue</span></div></div>
@@ -668,11 +915,29 @@
                 <div class="card">
                     <div class="rpt-section-header"><h3><i class="fas fa-user-tie"></i> Sales by Staff</h3></div>
                     <div class="rpt-bar-chart">
-                        ${staffArr.map(([name, v]) => {
-                            const pct = Math.round(v / maxStaff * 100);
-                            return `<div class="rpt-bar-row"><span class="rpt-bar-label">${this._esc(name)}</span><div class="rpt-bar-track"><div class="rpt-bar-fill rpt-bar-purple" style="width:${pct}%"></div></div><span class="rpt-bar-val">${this._fc(v)}</span></div>`;
+                        ${staffArr.map(st => {
+                            const pct = Math.round(st.revenue / maxStaff * 100);
+                            return `<div class="rpt-bar-row"><span class="rpt-bar-label">${this._esc(st.label)}</span><div class="rpt-bar-track"><div class="rpt-bar-fill rpt-bar-purple" style="width:${pct}%"></div></div><span class="rpt-bar-val">${this._fc(st.revenue)} (${st.transactions})</span></div>`;
                         }).join('') || '<p class="rpt-empty">No staff data</p>'}
                     </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="rpt-section-header">
+                    <h3><i class="fas fa-users-gear"></i> Staff Sales Report</h3>
+                    <span class="rpt-section-hint">${activeStaff} staff in current view</span>
+                </div>
+                <div class="table-responsive">
+                    <table class="data-table rpt-staff-sales-table">
+                        <thead><tr><th>Staff</th><th>Transactions</th><th>Items</th><th>Revenue</th><th>Profit</th><th>Avg Sale</th><th>Last Sale</th></tr></thead>
+                        <tbody>
+                            ${visibleStaffArr.map(st => {
+                                const avg = st.transactions ? st.revenue / st.transactions : 0;
+                                return `<tr><td><strong>${this._esc(st.label)}</strong></td><td>${st.transactions}</td><td>${st.items}</td><td>${this._fc(st.revenue)}</td><td>${this._fc(st.profit)}</td><td>${this._fc(avg)}</td><td>${st.lastSale ? st.lastSale.toLocaleString('en-KE') : '-'}</td></tr>`;
+                            }).join('') || '<tr><td colspan="7" class="rpt-empty">No staff sales for this period</td></tr>'}
+                        </tbody>
+                    </table>
                 </div>
             </div>
 
@@ -710,6 +975,11 @@
 
             const expBtn = body.querySelector('#rpt-export-sales');
             if (expBtn) expBtn.addEventListener('click', () => this._exportSalesReport(sales, topProducts, dailyArr));
+            const staffSel = body.querySelector('#rpt-sales-staff-filter');
+            if (staffSel) staffSel.addEventListener('change', () => {
+                rptSalesStaffFilter = staffSel.value || 'all';
+                this._scheduleTabRefresh();
+            });
         },
 
         /* ================================
@@ -934,6 +1204,7 @@
          * TAB 5: GENERATE REPORT
          * ================================ */
         _renderGenerateTab(body) {
+            const staffOptions = this._salesStaffOptions(rptSales.filter(s => s.status !== 'voided' && s.status !== 'cancelled'));
             body.innerHTML = `
             <div class="card">
                 <div class="rpt-section-header"><h3><i class="fas fa-file-export"></i> Generate & Export Report</h3></div>
@@ -942,12 +1213,31 @@
                         <div class="form-group">
                             <label>Report Type</label>
                             <select id="rpt-gen-type" class="form-control">
-                                <option value="sales">Sales Report</option>
-                                <option value="inventory">Inventory Report</option>
-                                <option value="expenses">Expenses Report</option>
-                                <option value="patients">Patients Report</option>
-                                <option value="wholesale">Wholesale Report</option>
-                                <option value="financial">Financial Summary</option>
+                                <optgroup label="Sales">
+                                    <option value="sales">Detailed Sales Report</option>
+                                    <option value="staff-sales">Staff Sales Performance</option>
+                                    <option value="product-sales">Product Sales Performance</option>
+                                    <option value="daily-sales">Daily Sales Summary</option>
+                                    <option value="payment-summary">Payment Method Summary</option>
+                                </optgroup>
+                                <optgroup label="Inventory">
+                                    <option value="inventory">Inventory Valuation</option>
+                                    <option value="stock-alerts">Stock Alerts & Expiry</option>
+                                </optgroup>
+                                <optgroup label="Finance & Patients">
+                                    <option value="expenses">Expenses Report</option>
+                                    <option value="financial">Financial Summary</option>
+                                    <option value="patients">Patients Report</option>
+                                    <option value="patient-billing">Patient Billing Report</option>
+                                </optgroup>
+                                <optgroup label="Human Resource">
+                                    <option value="hr-staff">HR Staff Register</option>
+                                    <option value="hr-payroll">Staff Payroll Report</option>
+                                </optgroup>
+                                <optgroup label="Orders">
+                                    <option value="wholesale">Wholesale Orders Report</option>
+                                    <option value="supplier-orders">Supplier Orders Report</option>
+                                </optgroup>
                             </select>
                         </div>
                         <div class="form-group">
@@ -959,6 +1249,16 @@
                             </select>
                         </div>
                         ${PharmaFlow.vatFormatSelectHtml ? PharmaFlow.vatFormatSelectHtml('rpt-vat-format', 'VAT display') : ''}
+                    </div>
+                    <div class="form-row" id="rpt-gen-staff-row">
+                        <div class="form-group">
+                            <label>Staff / User</label>
+                            <select id="rpt-gen-staff" class="form-control">
+                                <option value="all">All staff</option>
+                                <option value="current">Logged-in staff (${this._esc(this._currentUserLabel())})</option>
+                                ${staffOptions.map(st => `<option value="${this._attr(st.key)}">${this._esc(st.label)} (${st.count})</option>`).join('')}
+                            </select>
+                        </div>
                     </div>
                     <div class="form-row">
                         <div class="form-group">
@@ -985,6 +1285,13 @@
                     if (preview && preview.style.display !== 'none') self._generateReport();
                 });
             }
+            const typeSel = body.querySelector('#rpt-gen-type');
+            const staffRow = body.querySelector('#rpt-gen-staff-row');
+            const syncStaffVisibility = () => {
+                if (staffRow && typeSel) staffRow.style.display = ['sales', 'staff-sales', 'product-sales', 'daily-sales', 'payment-summary'].includes(typeSel.value) ? 'grid' : 'none';
+            };
+            if (typeSel) typeSel.addEventListener('change', syncStaffVisibility);
+            syncStaffVisibility();
             body.querySelector('#rpt-gen-btn').addEventListener('click', () => this._generateReport());
         },
 
@@ -993,6 +1300,7 @@
             const format = rptContainer.querySelector('#rpt-gen-format').value;
             const from = rptContainer.querySelector('#rpt-gen-from').value;
             const to = rptContainer.querySelector('#rpt-gen-to').value;
+            const staffFilter = (rptContainer.querySelector('#rpt-gen-staff') || {}).value || 'all';
 
             // Filter data by the generate form dates
             const inR = (doc) => {
@@ -1007,9 +1315,14 @@
             switch (type) {
                 case 'sales': {
                     title = 'Sales Report';
-                    const data = rptSales.filter(s =>
+                    let data = rptSales.filter(s =>
                         s.status !== 'voided' && s.status !== 'cancelled' && inR(s)
                     );
+                    data = this._filterSalesByStaff(data, staffFilter);
+                    if (staffFilter !== 'all') {
+                        const staffLabel = this._staffLabelForFilter(staffFilter, rptSales);
+                        title = 'Sales Report - ' + staffLabel;
+                    }
                     headers = this._saleReportHeaders();
                     rows = data.map(s => this._saleReportRow(s));
                     break;
@@ -1028,6 +1341,129 @@
                     });
                     break;
                 }
+                case 'staff-sales': {
+                    let data = rptSales.filter(s => s.status !== 'voided' && s.status !== 'cancelled' && inR(s));
+                    data = this._filterSalesByStaff(data, staffFilter);
+                    const staffRows = this._staffSalesSummary(data);
+                    title = staffFilter === 'all' ? 'Staff Sales Performance' : 'Staff Sales Performance - ' + this._staffLabelForFilter(staffFilter, rptSales);
+                    headers = ['Staff', 'Transactions', 'Items Sold', 'Revenue', 'Profit', 'Avg Sale', 'Last Sale'];
+                    rows = staffRows.map(st => [
+                        st.label,
+                        st.transactions,
+                        st.items,
+                        st.revenue,
+                        st.profit,
+                        st.transactions ? st.revenue / st.transactions : 0,
+                        st.lastSale ? st.lastSale.toLocaleString('en-KE') : '-'
+                    ]);
+                    break;
+                }
+                case 'product-sales': {
+                    let data = rptSales.filter(s => s.status !== 'voided' && s.status !== 'cancelled' && inR(s));
+                    data = this._filterSalesByStaff(data, staffFilter);
+                    const prodMap = {};
+                    data.forEach(s => {
+                        (s.items || []).forEach(it => {
+                            const name = it.name || 'Unknown product';
+                            if (!prodMap[name]) prodMap[name] = { sku: it.sku || '-', category: it.category || '-', qty: 0, revenue: 0, profit: 0 };
+                            prodMap[name].qty += (it.quantity || 0);
+                            prodMap[name].revenue += (it.lineTotal || 0);
+                            prodMap[name].profit += (it.profit || 0);
+                        });
+                    });
+                    title = staffFilter === 'all' ? 'Product Sales Performance' : 'Product Sales Performance - ' + this._staffLabelForFilter(staffFilter, rptSales);
+                    headers = ['Product', 'SKU', 'Category', 'Qty Sold', 'Revenue', 'Profit', 'Margin (%)'];
+                    rows = Object.entries(prodMap).sort((a, b) => b[1].revenue - a[1].revenue).map(([name, v]) => [
+                        name,
+                        v.sku,
+                        v.category,
+                        v.qty,
+                        v.revenue,
+                        v.profit,
+                        v.revenue ? ((v.profit / v.revenue) * 100).toFixed(1) + '%' : '0.0%'
+                    ]);
+                    break;
+                }
+                case 'daily-sales': {
+                    let data = rptSales.filter(s => s.status !== 'voided' && s.status !== 'cancelled' && inR(s));
+                    data = this._filterSalesByStaff(data, staffFilter);
+                    const dayMap = {};
+                    data.forEach(s => {
+                        const d = this._dateObj(s.createdAt || s.saleDate);
+                        if (!d) return;
+                        const key = d.toISOString().slice(0, 10);
+                        if (!dayMap[key]) dayMap[key] = { transactions: 0, items: 0, revenue: 0, profit: 0 };
+                        dayMap[key].transactions += 1;
+                        dayMap[key].items += (s.itemCount || 0);
+                        dayMap[key].revenue += (s.total || 0);
+                        dayMap[key].profit += (s.totalProfit || 0);
+                    });
+                    title = staffFilter === 'all' ? 'Daily Sales Summary' : 'Daily Sales Summary - ' + this._staffLabelForFilter(staffFilter, rptSales);
+                    headers = ['Date', 'Transactions', 'Items Sold', 'Revenue', 'Profit', 'Avg Sale'];
+                    rows = Object.entries(dayMap).sort((a, b) => b[0].localeCompare(a[0])).map(([day, v]) => [
+                        day,
+                        v.transactions,
+                        v.items,
+                        v.revenue,
+                        v.profit,
+                        v.transactions ? v.revenue / v.transactions : 0
+                    ]);
+                    break;
+                }
+                case 'payment-summary': {
+                    let data = rptSales.filter(s => s.status !== 'voided' && s.status !== 'cancelled' && inR(s));
+                    data = this._filterSalesByStaff(data, staffFilter);
+                    const methodMap = {};
+                    const touches = {};
+                    data.forEach(s => {
+                        const used = new Set();
+                        if (typeof PharmaFlow.forEachSalePaymentPart === 'function') {
+                            PharmaFlow.forEachSalePaymentPart(s, (m, amt) => {
+                                if ((amt || 0) > 0) used.add(this._formatPaymentStatLabel(m));
+                            });
+                        } else {
+                            used.add(this._formatPaymentStatLabel(s.paymentMethod || 'other'));
+                        }
+                        used.forEach(method => { touches[method] = (touches[method] || 0) + 1; });
+                    });
+                    data.forEach(s => {
+                        if (typeof PharmaFlow.forEachSalePaymentPart === 'function') {
+                            PharmaFlow.forEachSalePaymentPart(s, (m, amt) => {
+                                const key = this._formatPaymentStatLabel(m);
+                                methodMap[key] = (methodMap[key] || 0) + (amt || 0);
+                            });
+                        } else {
+                            const key = this._formatPaymentStatLabel(s.paymentMethod || 'other');
+                            methodMap[key] = (methodMap[key] || 0) + (s.total || 0);
+                        }
+                    });
+                    title = staffFilter === 'all' ? 'Payment Method Summary' : 'Payment Method Summary - ' + this._staffLabelForFilter(staffFilter, rptSales);
+                    headers = ['Payment Method', 'Sales Count', 'Amount'];
+                    rows = Object.entries(methodMap).sort((a, b) => b[1] - a[1]).map(([method, amount]) => [
+                        method,
+                        touches[method] || 0,
+                        amount
+                    ]);
+                    break;
+                }
+                case 'stock-alerts': {
+                    title = 'Stock Alerts & Expiry';
+                    const now = new Date();
+                    headers = ['Name', 'SKU', 'Category', 'Qty', 'Reorder Level', 'Expiry', 'Alert'];
+                    rows = rptInventory.map(i => {
+                        const qty = this._sellableQty(i);
+                        const expRaw = i.expiryDate;
+                        const expD = this._dateObj(expRaw);
+                        const expCell = expD && !isNaN(expD.getTime()) ? expD.toLocaleDateString('en-KE') : (expRaw ? String(expRaw) : '-');
+                        let alert = 'OK';
+                        if (qty <= 0) alert = 'Out of stock';
+                        else if (qty <= (i.reorderLevel || 10)) alert = 'Low stock';
+                        if (expD && expD <= now) alert = alert === 'OK' ? 'Expired' : alert + ' / Expired';
+                        else if (this._invIsExpiringSoon(i)) alert = alert === 'OK' ? 'Expiring soon' : alert + ' / Expiring soon';
+                        return [i.name || '-', i.sku || '-', i.category || '-', qty, i.reorderLevel || 10, expCell, alert];
+                    }).filter(r => r[6] !== 'OK');
+                    break;
+                }
                 case 'expenses': {
                     title = 'Expenses Report';
                     const data = rptExpenses.filter(inR);
@@ -1044,11 +1480,113 @@
                     rows = rptPatients.map(p => [p.patientId || '-', p.fullName || `${p.firstName || ''} ${p.lastName || ''}`, p.phone || '-', p.gender || '-', p.insurance || 'None', p.totalBilled || 0, p.totalPaid || 0, p.visitCount || 0, p.status || '-']);
                     break;
                 }
+                case 'patient-billing': {
+                    title = 'Patient Billing Report';
+                    const data = rptBills.filter(b => {
+                        const d = this._dateObj(b.createdAt || b.billDate || b.updatedAt);
+                        if (!d) return false;
+                        const ds = d.toISOString().slice(0, 10);
+                        return ds >= from && ds <= to;
+                    });
+                    headers = ['Date', 'Bill ID', 'Patient', 'Total', 'Paid', 'Balance', 'Payment Method', 'Status', 'Created By'];
+                    rows = data.map(b => {
+                        const d = this._dateObj(b.createdAt || b.billDate || b.updatedAt);
+                        const total = b.totalAmount || b.grandTotal || 0;
+                        const paid = b.totalPaid || b.amountPaid || b.paidAmount || 0;
+                        const balance = b.balanceDue != null ? b.balanceDue : Math.max(0, total - paid);
+                        return [
+                            d ? d.toLocaleDateString('en-KE') : '-',
+                            b.billId || b.id || '-',
+                            (b.patient && (b.patient.name || b.patient.fullName)) || b.patientName || '-',
+                            total,
+                            paid,
+                            balance,
+                            b.paymentMethod || '-',
+                            b.status || '-',
+                            b.createdBy || '-'
+                        ];
+                    });
+                    break;
+                }
+                case 'hr-staff': {
+                    title = 'HR Staff Register';
+                    headers = ['Staff', 'Type', 'Role', 'Job Title', 'Phone', 'Email', 'Base Pay', 'Pay Cycle', 'Status'];
+                    const systemRows = rptHrProfiles.map(s => [
+                        s.name || s.email || '-',
+                        'System',
+                        s.hrRole || s.sourceRole || '-',
+                        s.jobTitle || '-',
+                        s.phone || '-',
+                        s.email || '-',
+                        s.basePay || 0,
+                        s.payCycle || '-',
+                        s.isActive === false ? 'Inactive' : 'Active'
+                    ]);
+                    const casualRows = rptHrStaff.map(s => [
+                        s.name || '-',
+                        'Casual',
+                        s.hrRole || s.jobTitle || '-',
+                        s.jobTitle || '-',
+                        s.phone || '-',
+                        '',
+                        s.basePay || 0,
+                        s.payCycle || '-',
+                        s.isActive === false ? 'Inactive' : 'Active'
+                    ]);
+                    rows = systemRows.concat(casualRows).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+                    break;
+                }
+                case 'hr-payroll': {
+                    title = 'Staff Payroll Report';
+                    const data = rptHrPayroll.filter(p => {
+                        const period = p.period || '';
+                        if (period && from && to) return period >= from.slice(0, 7) && period <= to.slice(0, 7);
+                        return inR(p);
+                    });
+                    headers = ['Period', 'Staff', 'Type', 'Role', 'Basic Pay', 'Allowances', 'Gross Pay', 'Deductions', 'Net Pay', 'Payment Method', 'Status'];
+                    rows = data.map(p => [
+                        p.period || '-',
+                        p.staffName || '-',
+                        p.staffType || '-',
+                        p.hrRole || p.jobTitle || '-',
+                        p.basicPay || 0,
+                        p.allowances || 0,
+                        p.grossPay || 0,
+                        p.totalDeductions || 0,
+                        p.netPay || 0,
+                        p.paymentMethod || '-',
+                        p.status || '-'
+                    ]);
+                    break;
+                }
                 case 'wholesale': {
                     title = 'Wholesale Orders Report';
                     const data = rptWholesale.filter(inR);
                     headers = ['Order ID', 'Invoice', 'Customer', 'Items', 'Grand Total', 'Paid', 'Balance', 'Status'];
                     rows = data.map(w => [w.orderId || '-', w.invoiceNo || '-', (w.customer && w.customer.name) || '-', w.itemCount || 0, w.grandTotal || 0, w.amountPaid || 0, w.balanceDue || 0, w.status || '-']);
+                    break;
+                }
+                case 'supplier-orders': {
+                    title = 'Supplier Orders Report';
+                    const data = rptOrders.filter(o => {
+                        const d = this._dateObj(o.createdAt || o.orderTimestamp || o.orderDate || o.updatedAt);
+                        if (!d) return false;
+                        const ds = d.toISOString().slice(0, 10);
+                        return ds >= from && ds <= to;
+                    });
+                    headers = ['Date', 'Order ID', 'Supplier', 'Items', 'Grand Total', 'Status', 'Created By'];
+                    rows = data.map(o => {
+                        const d = this._dateObj(o.createdAt || o.orderTimestamp || o.orderDate || o.updatedAt);
+                        return [
+                            d ? d.toLocaleDateString('en-KE') : '-',
+                            o.orderId || o.id || '-',
+                            o.supplierName || (o.supplier && o.supplier.name) || '-',
+                            o.itemCount || (Array.isArray(o.items) ? o.items.length : 0),
+                            o.grandTotal || o.total || 0,
+                            o.status || '-',
+                            o.createdBy || '-'
+                        ];
+                    });
                     break;
                 }
                 case 'financial': {
@@ -1093,7 +1631,18 @@
          * TAB: LIVE STATISTICS (charts)
          * ================================ */
         _renderStatisticsTab(body) {
-            this._destroyStatisticsCharts();
+            if (!this._statisticsDataReady()) {
+                if (!body.querySelector('.rpt-stat-skeleton')) {
+                    this._destroyStatisticsCharts();
+                    body.innerHTML = `
+                    <div class="rpt-stat-skeleton">
+                        <div class="rpt-stat-skel-banner"></div>
+                        <div class="rpt-stat-skel-kpis">${Array.from({ length: 8 }).map(() => '<span></span>').join('')}</div>
+                        <div class="rpt-stat-skel-grid">${Array.from({ length: 6 }).map(() => '<span></span>').join('')}</div>
+                    </div>`;
+                }
+                return;
+            }
 
             const sales = this._fSales();
             const expenses = this._fExpenses();
@@ -1179,9 +1728,58 @@
             const patOther = Math.max(0, rptPatients.length - patActive);
 
             const lineSeries = this._dailySalesSeries(sales);
+            const salesCountSeries = this._dailySalesCountSeries(sales);
+            const staffSeries = this._topStaffSeries(sales);
+            const productSeries = this._topProductSeries(sales);
+            const stockAlertSeries = this._stockAlertSeries(rptInventory);
+            const billingSeries = this._billingSeries(bills);
             const self = this;
 
             const chartUnavailable = typeof Chart === 'undefined';
+            const shellKey = this._statisticsShellKey(from, to, chartUnavailable);
+            const kpis = {
+                totalRev,
+                totalBilling,
+                totalExp,
+                profit,
+                inventoryValue: invStats.totalValue,
+                patients: rptPatients.length,
+                orders: orders.length,
+                wholesale: wholesale.length
+            };
+            const payload = {
+                revenue: { labels: ['Retail sales', 'Wholesale sales', 'Patient billing'], data: [retailRev, wholesaleRev, totalBilling] },
+                expenses: { labels: expPie.labels.map(l => String(l)), data: expPie.data },
+                payments: {
+                    labels: payLabels,
+                    amounts: payAmounts,
+                    saleCounts: paySaleCounts
+                },
+                salesLine: lineSeries,
+                inventory: { labels: invPie.labels.map(l => String(l)), data: invPie.data },
+                orders: { labels: ordLabels.map(l => String(l)), data: ordCounts },
+                wholesale: { labels: wsLabels.map(l => String(l)), data: wsCounts },
+                patients: { labels: ['Active', 'Other'], data: [patActive, patOther] },
+                salesCount: salesCountSeries,
+                staff: staffSeries,
+                products: productSeries,
+                stockAlerts: stockAlertSeries,
+                billing: billingSeries
+            };
+
+            if (rptStatisticsShellKey === shellKey && body.querySelector('.rpt-stat-kpis')) {
+                this._updateStatisticsKpis(kpis);
+                if (!chartUnavailable && !this._updateStatisticsCharts(payload)) {
+                    requestAnimationFrame(() => {
+                        if (rptCurrentTab !== 'reports-statistics' || !rptContainer || !body.isConnected) return;
+                        self._mountStatisticsCharts(payload);
+                    });
+                }
+                return;
+            }
+
+            this._destroyStatisticsCharts();
+            rptStatisticsShellKey = shellKey;
 
             body.innerHTML = `
             <div class="rpt-stat-banner">
@@ -1193,14 +1791,14 @@
             </div>
 
             <div class="rpt-stat-kpis">
-                <div class="rpt-stat-kpi"><span class="rpt-stat-kpi-val">${this._fc(totalRev)}</span><span class="rpt-stat-kpi-lbl">Sales revenue</span></div>
-                <div class="rpt-stat-kpi"><span class="rpt-stat-kpi-val">${this._fc(totalBilling)}</span><span class="rpt-stat-kpi-lbl">Patient billing</span></div>
-                <div class="rpt-stat-kpi"><span class="rpt-stat-kpi-val">${this._fc(totalExp)}</span><span class="rpt-stat-kpi-lbl">Expenses</span></div>
-                <div class="rpt-stat-kpi"><span class="rpt-stat-kpi-val">${this._fc(profit)}</span><span class="rpt-stat-kpi-lbl">Sale gross profit</span></div>
-                <div class="rpt-stat-kpi"><span class="rpt-stat-kpi-val">${this._fc(invStats.totalValue)}</span><span class="rpt-stat-kpi-lbl">Inventory value</span></div>
-                <div class="rpt-stat-kpi"><span class="rpt-stat-kpi-val">${rptPatients.length}</span><span class="rpt-stat-kpi-lbl">Patients</span></div>
-                <div class="rpt-stat-kpi"><span class="rpt-stat-kpi-val">${orders.length}</span><span class="rpt-stat-kpi-lbl">Supplier orders</span></div>
-                <div class="rpt-stat-kpi"><span class="rpt-stat-kpi-val">${wholesale.length}</span><span class="rpt-stat-kpi-lbl">Wholesale orders</span></div>
+                <div class="rpt-stat-kpi"><span class="rpt-stat-kpi-val" data-rpt-stat="salesRevenue">${this._fc(totalRev)}</span><span class="rpt-stat-kpi-lbl">Sales revenue</span></div>
+                <div class="rpt-stat-kpi"><span class="rpt-stat-kpi-val" data-rpt-stat="patientBilling">${this._fc(totalBilling)}</span><span class="rpt-stat-kpi-lbl">Patient billing</span></div>
+                <div class="rpt-stat-kpi"><span class="rpt-stat-kpi-val" data-rpt-stat="expenses">${this._fc(totalExp)}</span><span class="rpt-stat-kpi-lbl">Expenses</span></div>
+                <div class="rpt-stat-kpi"><span class="rpt-stat-kpi-val" data-rpt-stat="profit">${this._fc(profit)}</span><span class="rpt-stat-kpi-lbl">Sale gross profit</span></div>
+                <div class="rpt-stat-kpi"><span class="rpt-stat-kpi-val" data-rpt-stat="inventoryValue">${this._fc(invStats.totalValue)}</span><span class="rpt-stat-kpi-lbl">Inventory value</span></div>
+                <div class="rpt-stat-kpi"><span class="rpt-stat-kpi-val" data-rpt-stat="patients">${rptPatients.length}</span><span class="rpt-stat-kpi-lbl">Patients</span></div>
+                <div class="rpt-stat-kpi"><span class="rpt-stat-kpi-val" data-rpt-stat="orders">${orders.length}</span><span class="rpt-stat-kpi-lbl">Supplier orders</span></div>
+                <div class="rpt-stat-kpi"><span class="rpt-stat-kpi-val" data-rpt-stat="wholesale">${wholesale.length}</span><span class="rpt-stat-kpi-lbl">Wholesale orders</span></div>
             </div>
 
             ${chartUnavailable ? `
@@ -1219,6 +1817,18 @@
                     <div class="rpt-stat-canvas-wrap rpt-stat-canvas-wrap--line"><canvas id="rpt-stat-chart-sales-line"></canvas></div>
                 </div>
                 <div class="card rpt-stat-card">
+                    <div class="rpt-section-header"><h3><i class="fas fa-receipt"></i> Daily transactions</h3><span class="rpt-section-hint">Realtime sale count</span></div>
+                    <div class="rpt-stat-canvas-wrap"><canvas id="rpt-stat-chart-sales-count"></canvas></div>
+                </div>
+                <div class="card rpt-stat-card">
+                    <div class="rpt-section-header"><h3><i class="fas fa-user-tie"></i> Staff revenue</h3><span class="rpt-section-hint">Top performers</span></div>
+                    <div class="rpt-stat-canvas-wrap rpt-stat-canvas-wrap--pay-h"><canvas id="rpt-stat-chart-staff"></canvas></div>
+                </div>
+                <div class="card rpt-stat-card rpt-stat-card--wide">
+                    <div class="rpt-section-header"><h3><i class="fas fa-capsules"></i> Top products</h3><span class="rpt-section-hint">Sales revenue by item</span></div>
+                    <div class="rpt-stat-canvas-wrap rpt-stat-canvas-wrap--line"><canvas id="rpt-stat-chart-products"></canvas></div>
+                </div>
+                <div class="card rpt-stat-card">
                     <div class="rpt-section-header"><h3><i class="fas fa-mobile-screen"></i> Payment revenue (M-Pesa, cash, split…)</h3><span class="rpt-section-hint">Split sales allocate amounts per leg</span></div>
                     <div class="rpt-stat-canvas-wrap rpt-stat-canvas-wrap--pay-bar"><canvas id="rpt-stat-chart-payments-bar"></canvas></div>
                 </div>
@@ -1229,6 +1839,14 @@
                 <div class="card rpt-stat-card">
                     <div class="rpt-section-header"><h3><i class="fas fa-boxes-stacked"></i> Inventory by category</h3><span class="rpt-section-hint">Retail stock value</span></div>
                     <div class="rpt-stat-canvas-wrap"><canvas id="rpt-stat-chart-inventory"></canvas></div>
+                </div>
+                <div class="card rpt-stat-card">
+                    <div class="rpt-section-header"><h3><i class="fas fa-triangle-exclamation"></i> Stock alerts</h3><span class="rpt-section-hint">Inventory risk</span></div>
+                    <div class="rpt-stat-canvas-wrap"><canvas id="rpt-stat-chart-stock-alerts"></canvas></div>
+                </div>
+                <div class="card rpt-stat-card">
+                    <div class="rpt-section-header"><h3><i class="fas fa-file-invoice-dollar"></i> Patient billing</h3><span class="rpt-section-hint">Billed vs paid</span></div>
+                    <div class="rpt-stat-canvas-wrap"><canvas id="rpt-stat-chart-billing"></canvas></div>
                 </div>
                 <div class="card rpt-stat-card">
                     <div class="rpt-section-header"><h3><i class="fas fa-truck-field"></i> Supplier orders</h3></div>
@@ -1246,21 +1864,6 @@
 
             if (chartUnavailable) return;
 
-            const payload = {
-                revenue: { labels: ['Retail sales', 'Wholesale sales', 'Patient billing'], data: [retailRev, wholesaleRev, totalBilling] },
-                expenses: { labels: expPie.labels.map(l => this._esc(String(l))), data: expPie.data },
-                payments: {
-                    labels: payLabels,
-                    amounts: payAmounts,
-                    saleCounts: paySaleCounts
-                },
-                salesLine: lineSeries,
-                inventory: { labels: invPie.labels.map(l => this._esc(String(l))), data: invPie.data },
-                orders: { labels: ordLabels.map(l => this._esc(String(l))), data: ordCounts },
-                wholesale: { labels: wsLabels.map(l => this._esc(String(l))), data: wsCounts },
-                patients: { labels: ['Active', 'Other'], data: [patActive, patOther] }
-            };
-
             requestAnimationFrame(() => {
                 if (rptCurrentTab !== 'reports-statistics' || !rptContainer || !body.isConnected) return;
                 self._mountStatisticsCharts(payload);
@@ -1268,7 +1871,10 @@
         },
 
         _mountStatisticsCharts(payload) {
-            this._destroyStatisticsCharts();
+            Object.keys(rptStatCharts).forEach(id => {
+                try { rptStatCharts[id].destroy(); } catch (e) { /* noop */ }
+            });
+            rptStatCharts = {};
             if (typeof Chart === 'undefined') return;
 
             const th = this._statisticsTheme();
@@ -1320,7 +1926,7 @@
                 const el = document.getElementById(id);
                 if (!el) return;
                 try {
-                    rptStatCharts.push(new Chart(el, cfg));
+                    rptStatCharts[id] = new Chart(el, cfg);
                 } catch (e) {
                     console.error('Statistics chart error:', id, e);
                 }
@@ -1391,6 +1997,73 @@
                     scales: {
                         x: { ticks: { color: th.text, maxRotation: 45 }, grid: { color: th.grid } },
                         y: { ticks: { color: th.text }, grid: { color: th.grid } }
+                    },
+                    plugins: { legend: { display: false }, tooltip: tooltipMoney }
+                }
+            });
+
+            mk('rpt-stat-chart-sales-count', {
+                type: 'bar',
+                data: {
+                    labels: payload.salesCount.labels,
+                    datasets: [{
+                        label: 'Transactions',
+                        data: payload.salesCount.data,
+                        backgroundColor: cols[5],
+                        borderRadius: 7
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { ticks: { color: th.text, maxRotation: 35 }, grid: { display: false } },
+                        y: { ticks: { color: th.text, stepSize: 1 }, grid: { color: th.grid }, beginAtZero: true }
+                    },
+                    plugins: { legend: { display: false }, tooltip: tooltipCount }
+                }
+            });
+
+            mk('rpt-stat-chart-staff', {
+                type: 'bar',
+                data: {
+                    labels: payload.staff.labels,
+                    datasets: [{
+                        label: 'Revenue',
+                        data: payload.staff.data,
+                        backgroundColor: payload.staff.labels.map((_, i) => cols[(i + 3) % cols.length]),
+                        borderRadius: 7
+                    }]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { ticks: { color: th.text }, grid: { color: th.grid }, beginAtZero: true },
+                        y: { ticks: { color: th.text }, grid: { display: false } }
+                    },
+                    plugins: { legend: { display: false }, tooltip: tooltipMoney }
+                }
+            });
+
+            mk('rpt-stat-chart-products', {
+                type: 'bar',
+                data: {
+                    labels: payload.products.labels,
+                    datasets: [{
+                        label: 'Revenue',
+                        data: payload.products.data,
+                        backgroundColor: payload.products.labels.map((_, i) => cols[(i + 1) % cols.length]),
+                        borderRadius: 7
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { ticks: { color: th.text, maxRotation: 35 }, grid: { display: false } },
+                        y: { ticks: { color: th.text }, grid: { color: th.grid }, beginAtZero: true }
                     },
                     plugins: { legend: { display: false }, tooltip: tooltipMoney }
                 }
@@ -1476,6 +2149,50 @@
                         tooltip: tooltipMoney,
                         title: { display: true, text: 'Stock value by category', color: th.text, font: { size: 12, weight: '600' } }
                     }
+                }
+            });
+
+            mk('rpt-stat-chart-stock-alerts', {
+                type: 'bar',
+                data: {
+                    labels: payload.stockAlerts.labels,
+                    datasets: [{
+                        label: 'Products',
+                        data: payload.stockAlerts.data,
+                        backgroundColor: [cols[4], cols[2], cols[6], '#991b1b'],
+                        borderRadius: 7
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { ticks: { color: th.text }, grid: { display: false } },
+                        y: { ticks: { color: th.text, stepSize: 1 }, grid: { color: th.grid }, beginAtZero: true }
+                    },
+                    plugins: { legend: { display: false }, tooltip: tooltipCount }
+                }
+            });
+
+            mk('rpt-stat-chart-billing', {
+                type: 'bar',
+                data: {
+                    labels: payload.billing.labels,
+                    datasets: [{
+                        label: 'Amount',
+                        data: payload.billing.data,
+                        backgroundColor: [cols[0], cols[1], cols[4]],
+                        borderRadius: 7
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { ticks: { color: th.text }, grid: { display: false } },
+                        y: { ticks: { color: th.text }, grid: { color: th.grid }, beginAtZero: true }
+                    },
+                    plugins: { legend: { display: false }, tooltip: tooltipMoney }
                 }
             });
 
@@ -1607,7 +2324,8 @@
             const { from, to } = this._getRange();
             const headers = this._saleReportHeaders();
             const rows = sales.map(s => this._saleReportRow(s));
-            this._exportPDF('Sales Report', headers, rows, from, to);
+            const staffLabel = this._staffLabelForFilter(rptSalesStaffFilter, sales);
+            this._exportPDF(rptSalesStaffFilter === 'all' ? 'Sales Report' : 'Sales Report - ' + staffLabel, headers, rows, from, to);
         },
 
         _exportInventoryReport(items, label) {

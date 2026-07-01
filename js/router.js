@@ -47,6 +47,7 @@
                 case 'wholesale': if (PharmaFlow.Wholesale) PharmaFlow.Wholesale.cleanup(); break;
                 case 'patients': if (PharmaFlow.Patients) PharmaFlow.Patients.cleanup(); break;
                 case 'reports': if (PharmaFlow.Reports) PharmaFlow.Reports.cleanup(); break;
+                case 'human-resource': if (PharmaFlow.HumanResource) PharmaFlow.HumanResource.cleanup(); break;
                 case 'accounts': if (PharmaFlow.Accounts) PharmaFlow.Accounts.cleanup(); break;
                 case 'activity-log': if (PharmaFlow.ActivityLog) PharmaFlow.ActivityLog.cleanup(); break;
                 case 'support-tickets': if (PharmaFlow.SupportTickets) PharmaFlow.SupportTickets.cleanup(); break;
@@ -362,6 +363,18 @@
                 if (subId === 'inventory-reports') { PharmaFlow.Reports.renderInventory(contentBody); return; }
                 if (subId === 'financial-reports') { PharmaFlow.Reports.renderFinancial(contentBody); return; }
                 if (subId === 'generate-report') { PharmaFlow.Reports.renderGenerate(contentBody); return; }
+            }
+
+            // Accounts module
+            if (moduleConfig.id === 'human-resource' && PharmaFlow.HumanResource) {
+                const subId = subModule ? subModule.id : 'hr-overview';
+                PharmaFlow.HumanResource.cleanup();
+
+                if (subId === 'hr-overview') { PharmaFlow.HumanResource.renderOverview(contentBody); return; }
+                if (subId === 'hr-staff') { PharmaFlow.HumanResource.renderStaff(contentBody); return; }
+                if (subId === 'hr-payroll') { PharmaFlow.HumanResource.renderPayroll(contentBody); return; }
+                if (subId === 'hr-payslips') { PharmaFlow.HumanResource.renderPayslips(contentBody); return; }
+                if (subId === 'hr-reports') { PharmaFlow.HumanResource.renderReports(contentBody); return; }
             }
 
             // Accounts module
